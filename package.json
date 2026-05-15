@@ -1,0 +1,14 @@
+{
+  "name": "my-computer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-hosted control center for a local AI assistant with terminal-first workflows.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
