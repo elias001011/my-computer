@@ -16,6 +16,7 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 
 - Providers: Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI, Ollama e OpenAI compatível custom.
 - Provider/modelo padrão configurado no setup e nas configurações gerais.
+- Nível técnico do usuário configurado no setup e nas configurações gerais, com toggle para remover essa instrução do prompt.
 - Chat novo usa provider/modelo padrão.
 - Provider/modelo salvo por chat e editável durante a conversa.
 - Múltiplas API keys por provider, com rotação em falhas recuperáveis.
@@ -29,3 +30,4 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 - Tools podem ser ligadas/desligadas nas configurações gerais e exigem aprovação por padrão.
 - Compactação automática do app é configurável por limite estimado de contexto.
 - Modo rede local exige senha e restart.
+- Atualizador via clone Git local: `git fetch`, aviso, confirmação, `git pull --ff-only && npm install` e restart.

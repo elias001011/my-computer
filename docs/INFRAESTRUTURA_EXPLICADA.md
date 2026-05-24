@@ -3153,6 +3153,22 @@ Esta seção registra o estado atual do app depois das mudanças mais recentes, 
 - Se `Abrir painel para a rede` estiver ligado com senha, no próximo restart o server usa `0.0.0.0` e Basic Auth com senha única.
 - Ainda não há HTTPS, usuários múltiplos, permissões por usuário ou exposição segura fora da rede local.
 
+### Nível técnico do usuário
+
+- `technicalLevel` fica em `config.json` e pode ser `beginner`, `careful`, `balanced`, `advanced` ou `expert`.
+- `technicalGuidanceEnabled` controla se essa instrução extra entra no system prompt.
+- O padrão é `balanced`: pergunta quando o pedido é confuso, mas executa comandos claros.
+- Níveis baixos orientam a IA a explicar mais termos, planejar antes de ações que mudam o sistema e confirmar mais coisas incertas. Isso pode gastar mais tokens.
+- Níveis altos orientam a IA a confiar mais em comandos claros e reduzir explicações básicas.
+
+### Atualizador
+
+- `GET /api/update/status` roda `git fetch --prune`, detecta branch/upstream e calcula ahead/behind.
+- A UI mostra commits disponíveis e bloqueia update se houver mudanças locais sem commit.
+- `POST /api/update/apply` exige confirmação e executa `git pull --ff-only && npm install`.
+- Se aplicou update, o server cria um novo processo na mesma porta e encerra o processo antigo.
+- O caminho atual é direto pelo código fonte do repo local. Releases empacotadas ficam como opção futura.
+
 ---
 
 ## Conclusão

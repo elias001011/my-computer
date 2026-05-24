@@ -31,13 +31,19 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.context.autoCompactEnabled, false);
   assert.equal(config.context.autoCompactChars, 24000);
   assert.equal(config.server.networkEnabled, false);
+  assert.equal(config.technicalLevel, 'balanced');
+  assert.equal(config.technicalGuidanceEnabled, true);
 
   await store.saveConfig({
+    technicalLevel: 'beginner',
+    technicalGuidanceEnabled: false,
     tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchTerminal: true },
     context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
     server: { networkEnabled: true, authPassword: 'local-pass' },
   });
   const securityConfig = await store.loadConfig();
+  assert.equal(securityConfig.technicalLevel, 'beginner');
+  assert.equal(securityConfig.technicalGuidanceEnabled, false);
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
   assert.equal(securityConfig.tools.searchTerminal, true);

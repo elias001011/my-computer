@@ -10,12 +10,14 @@
 - Chat persistente.
 - Provider/modelo por chat.
 - Configurações técnicas de modelo por chat.
+- Nível técnico do usuário com instrução opcional no prompt.
 - Anexos por chat com extração de texto, preview de vídeo e suporte multimodal controlado por modelo.
 - Tool de terminal com aprovação por UI e modo isolado leve.
 - Tool de pesquisa web por terminal.
 - Tool de memória de chat.
 - Compactacao manual, snapshot, editor de contexto e compactação automática.
 - Modo rede local com autenticação básica.
+- Atualizador por Git local com confirmação e restart.
 - Export/import de dados locais.
 - Install/uninstall simples.
 
@@ -29,6 +31,7 @@
 - Testes de API e smoke test do painel.
 - Parsers dedicados para PDF/DOCX e OCR local.
 - Descoberta dinâmica de modelos quando o provider expuser API confiável.
+- Releases empacotadas/versionadas para o updater, se a distribuição por clone Git deixar de ser suficiente.
 
 ## Phase 2 - Extensibility
 

@@ -6,6 +6,7 @@ import { compactChat, continueToolApproval, editContextSummary, saveContextWindo
 import { getProviderModels, getProvidersForClient } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
+import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
 import {
   appendEvent,
   createChat,
@@ -38,6 +39,8 @@ const CONTENT_TYPES = {
   '.ico': 'image/x-icon',
 };
 
+let currentLaunch = { port: null, requestedHost: null };
+
 export async function startServer({ port = Number(process.env.PORT || 8787), host = null } = {}) {
   await ensureRuntime();
   const config = await loadConfig();
@@ -55,6 +58,7 @@ export async function startServer({ port = Number(process.env.PORT || 8787), hos
     handleRequest(request, response).catch((error) => sendError(response, error));
   };
   const { server, actualPort } = await listen(handler, actualHost, port);
+  currentLaunch = { port: actualPort, requestedHost: host };
   const url = `http://${actualHost === '0.0.0.0' ? '127.0.0.1' : actualHost}:${actualPort}`;
   return { server, url, runtimeHome };
 }
@@ -107,12 +111,18 @@ async function handleApi(request, response, url) {
 
   if (method === 'PUT' && parts[1] === 'config') {
     const body = await readBody(request);
+    if (body.server?.networkEnabled === true && !String(body.server?.authPassword || '').trim()) {
+      sendJson(response, 400, { error: 'Defina uma senha para abrir o painel na rede local.' });
+      return;
+    }
     const config = await saveConfig({
       provider: body.provider,
       apiKey: body.apiKey,
       model: body.model,
       language: body.language || 'auto',
       userNickname: body.userNickname || '',
+      technicalLevel: body.technicalLevel,
+      technicalGuidanceEnabled: body.technicalGuidanceEnabled,
       systemPromptExtra: body.systemPromptExtra || '',
       tools: body.tools,
       context: body.context,
@@ -175,6 +185,34 @@ async function handleApi(request, response, url) {
 
   if (parts[1] === 'ollama') {
     await handleOllamaApi(request, response, parts);
+    return;
+  }
+
+  if (method === 'GET' && parts[1] === 'update' && parts[2] === 'status') {
+    sendJson(response, 200, { update: await getUpdateStatus({ fetch: true }) });
+    return;
+  }
+
+  if (method === 'POST' && parts[1] === 'update' && parts[2] === 'apply') {
+    const body = await readBody(request);
+    if (body.confirm !== true) {
+      sendJson(response, 400, { error: 'Confirmação obrigatória para atualizar.' });
+      return;
+    }
+    const result = await applySourceUpdate();
+    sendJson(response, 200, {
+      ...result,
+      restarting: Boolean(result.updated),
+      message: result.updated
+        ? 'Atualização aplicada. O servidor será reiniciado.'
+        : 'Nenhuma atualização nova para aplicar.',
+    });
+    if (result.updated) {
+      setTimeout(() => {
+        restartProcess({ port: currentLaunch.port, host: currentLaunch.requestedHost });
+        process.exit(0);
+      }, 500).unref();
+    }
     return;
   }
 

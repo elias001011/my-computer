@@ -12,6 +12,16 @@ O MVP roda em Node local, usa HTML/CSS/JS puro no painel e salva tudo em uma pas
 
 Esse é o único entrypoint de instalação para uso normal. Ele chama o script interno `scripts/bootstrap.sh`, instala dependências com `npm install`, cria o runtime em `~/.my-computer` e abre o navegador com o painel local. O servidor fica em primeiro plano no terminal; use `Ctrl+C` para parar.
 
+Opções úteis:
+
+```bash
+./install.sh --fresh          # move ~/.my-computer para backup e mostra setup inicial
+./install.sh --no-open        # inicia sem abrir navegador
+./install.sh --no-start       # instala/prepara runtime sem iniciar servidor
+./install.sh --port 8788      # inicia em outra porta
+./install.sh --host 0.0.0.0   # força bind de rede; prefira configurar rede pela UI
+```
+
 Para ver o setup inicial sem apagar seus dados, movendo o runtime atual para backup:
 
 ```bash
@@ -22,7 +32,10 @@ Também dá para iniciar manualmente:
 
 ```bash
 npm run start:open
+npm run start -- --port 8787
 ```
+
+Depois de instalado, iniciar novamente é só rodar `./install.sh`, `npm run start:open` ou `npm run start` nesta pasta.
 
 ## Desinstalar
 
@@ -37,6 +50,30 @@ Para remover chats, memória, config, anexos e logs também:
 ```bash
 ./uninstall.sh --remove-data
 ```
+
+Use `./uninstall.sh --help` para ver as opções. Se o servidor estiver rodando, encerre pelo botão das configurações ou use `Ctrl+C` no terminal antes de remover dependências.
+
+## Configurar integrações externas
+
+- API keys ficam em Configurações gerais > Providers e APIs. Cada provider aceita várias keys e o backend tenta a próxima quando uma falha recuperável acontece.
+- OpenAI compatível custom usa qualquer endpoint com `/v1/chat/completions`; configure `Endpoint/base URL`, modelo e keys no painel.
+- Ollama pode ser instalado, verificado, ter modelos baixados/removidos e ser desinstalado pelo painel. Se `sudo` pedir senha, rode o comando exibido no terminal.
+- Rede local fica em Configurações gerais > Rede local. Quando ligada com senha, o próximo restart escuta em `0.0.0.0` e usa autenticação básica.
+- Search via terminal exige a tool `Pesquisa web` e o toggle `Pesquisa via terminal`.
+
+## Atualizar
+
+O botão de atualização fica em Configurações gerais > Atualizações.
+
+Ele usa o clone Git local:
+
+1. roda `git fetch --prune`
+2. compara `HEAD` com o upstream da branch
+3. se houver commits novos e o código local estiver limpo, mostra confirmação
+4. ao confirmar, roda `git pull --ff-only && npm install`
+5. reinicia o servidor na mesma porta
+
+Se houver alterações locais sem commit, o painel bloqueia a atualização para não sobrescrever trabalho.
 
 ## Providers
 
@@ -95,6 +132,7 @@ Metodologia atual:
 ## O que existe no MVP
 
 - Setup inicial com provider, modelo padrão, idioma, apelido e system prompt geral.
+- Nível técnico do usuário no setup e nas configurações gerais, com toggle para remover essa instrução extra do prompt.
 - Múltiplas API keys já no setup inicial.
 - Chat novo usa provider/modelo padrão das configurações gerais.
 - Provider/modelo do chat editável durante a conversa.
@@ -112,6 +150,7 @@ Metodologia atual:
 - Compactação automática configurável por limite estimado de contexto e mínimo de mensagens.
 - Editor manual de `context.md` pelo botão de caneta ao lado de compactar contexto.
 - Abertura opcional para rede local com autenticação básica e senha única, aplicada no próximo restart.
+- Checagem e aplicação de update pelo repositório Git local.
 - Eventos filtrados por chat no painel lateral.
 - Botão de copiar respostas da IA e retry para requests com erro.
 - Export/import de configurações, chats, memórias, contexto e anexos.

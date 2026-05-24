@@ -18,6 +18,7 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - `fetch` nativo para providers OpenAI-compatible e Anthropic.
 - `child_process.spawn` para a tool de terminal.
 - Busca web via terminal usa Python padrão do sistema para consultar DuckDuckGo HTML quando habilitada.
+- Atualizador usa Git local: `git fetch`, `git pull --ff-only` e `npm install`.
 - Arquivos JSON, Markdown e JSONL para persistência local.
 - Extração de anexos feita com APIs nativas: texto/HTML/código sem dependências externas.
 
@@ -61,3 +62,5 @@ Dados do usuário ficam em `~/.my-computer` por padrão.
 `./uninstall.sh --remove-data` remove também o runtime.
 
 `./install.sh` e `./uninstall.sh` são wrappers públicos. A implementação fica em `scripts/bootstrap.sh` e `scripts/remove.sh` para evitar múltiplos `install.sh` concorrendo dentro do projeto.
+
+`./install.sh` sempre roda `npm install` antes de iniciar, a menos que o usuário só esteja consultando `--help`. Use `--no-start` para instalar/preparar sem subir o servidor.

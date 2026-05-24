@@ -20,6 +20,8 @@ Não exponha o painel na internet.
 - Anexos ficam dentro da pasta do chat e são servidos apenas por endpoints locais com ids validados.
 - Imagens só são enviadas ao modelo quando o modelo está marcado como compatível.
 - Limites de anexos e de imagem conhecidos são validados na UI e no backend.
+- Atualizador bloqueia aplicação quando o worktree Git tem mudanças locais.
+- Nível técnico baixo instrui a IA a confirmar mais ações, mas isso é uma camada de prompt, não uma garantia de segurança.
 
 ## Current risks
 
@@ -36,6 +38,8 @@ Não exponha o painel na internet.
 - A instalação/desinstalação de Ollama pelo painel pode falhar quando `sudo` pedir senha; o comando exibido deve ser tratado como comando administrativo.
 - Ajustes técnicos de modelo, como max tokens alto, podem elevar custo ou causar erro de rate limit no provider.
 - A search tool via terminal usa rede pública e pode revelar queries ao motor de busca usado.
+- O atualizador executa `git pull --ff-only && npm install`. Use apenas com remotes confiáveis.
+- Um pacote novo trazido por update pode executar scripts de instalação do npm, como em qualquer projeto Node.
 
 ## Near-term hardening
 

@@ -14,6 +14,8 @@ Campos:
 - Modelo padrão em um seletor, com opção de modelo personalizado.
 - Idioma da IA, com `Automático` como padrão.
 - Apelido do usuário.
+- Nível técnico do usuário, com padrão `Equilibrado`.
+- Toggle para ativar/desativar adaptação da resposta ao nível técnico.
 - System prompt geral.
 - Segurança inicial: aprovar tools por padrão, abrir para rede local e senha.
 
@@ -90,6 +92,7 @@ Inclui:
 - Provider padrão.
 - Modelo padrão.
 - Idioma.
+- Nível técnico e toggle de adaptação ao nível técnico.
 - System prompt geral.
 - Menu de providers e APIs, com endpoint/base URL por provider.
 - Múltiplas API keys por provider, usadas em rotação quando uma chamada falha por autenticação, rate limit ou erro temporário.
@@ -102,6 +105,7 @@ Inclui:
 - Pesquisa web e pesquisa via terminal.
 - Compactação automática com limite estimado e intervalo mínimo.
 - Rede local com senha única e aviso de restart.
+- Atualizações pelo repositório Git local, com checagem, resumo de commits, bloqueio quando há mudanças locais e confirmação antes de aplicar.
 - Export/import de configurações, chats, memórias e contexto.
 - Botão para encerrar o servidor local, com instrução de como iniciar novamente.
 

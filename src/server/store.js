@@ -10,6 +10,8 @@ export const defaultConfig = Object.freeze({
   model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   language: 'auto',
   userNickname: '',
+  technicalLevel: 'balanced',
+  technicalGuidanceEnabled: true,
   systemPromptExtra: '',
   tools: {
     terminal: true,
@@ -81,6 +83,11 @@ export async function saveConfig(patch) {
     model: String(patch.model || current.model || getDefaultModelForProvider(provider)).trim(),
     language: String(patch.language || current.language || 'auto').trim(),
     userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
+    technicalLevel: normalizeTechnicalLevel(patch.technicalLevel ?? current.technicalLevel),
+    technicalGuidanceEnabled:
+      patch.technicalGuidanceEnabled === undefined
+        ? current.technicalGuidanceEnabled !== false
+        : patch.technicalGuidanceEnabled !== false,
     systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
     tools: normalizeTools(patch.tools || current.tools),
     context: normalizeContextSettings({
@@ -118,6 +125,8 @@ export function sanitizeConfig(config) {
     model: config.model,
     language: config.language,
     userNickname: config.userNickname,
+    technicalLevel: normalizeTechnicalLevel(config.technicalLevel),
+    technicalGuidanceEnabled: config.technicalGuidanceEnabled !== false,
     systemPromptExtra: config.systemPromptExtra,
     tools: normalizeTools(config.tools),
     context: normalizeContextSettings(config.context),
@@ -690,7 +699,7 @@ function normalizeTools(tools = {}) {
     autoCompact: tools.autoCompact !== false,
     chatTitle: tools.chatTitle !== false,
     webSearch: tools.webSearch !== false,
-    searchTerminal: tools.searchTerminal === true,
+    searchTerminal: tools.webSearch !== false && tools.searchTerminal === true,
     alwaysAllow: tools.alwaysAllow === true,
     terminalMode: tools.terminalMode === 'isolated' ? 'isolated' : 'standard',
   };
@@ -712,6 +721,11 @@ function normalizeServerSettings(server = {}) {
   };
 }
 
+function normalizeTechnicalLevel(value) {
+  const level = String(value || 'balanced').trim();
+  return ['beginner', 'careful', 'balanced', 'advanced', 'expert'].includes(level) ? level : 'balanced';
+}
+
 function normalizeConfig(config = {}) {
   const provider = normalizeProviderId(config.provider || defaultConfig.provider);
   const providerSettings = normalizeProviderSettings(config.providerSettings || {});
@@ -729,6 +743,8 @@ function normalizeConfig(config = {}) {
     model,
     language: String(config.language || defaultConfig.language).trim(),
     userNickname: String(config.userNickname || '').trim(),
+    technicalLevel: normalizeTechnicalLevel(config.technicalLevel),
+    technicalGuidanceEnabled: config.technicalGuidanceEnabled !== false,
     systemPromptExtra: String(config.systemPromptExtra || '').trim(),
     tools: normalizeTools(config.tools || defaultConfig.tools),
     context: normalizeContextSettings(config.context || defaultConfig.context),

@@ -24,6 +24,7 @@ O servidor escuta em `127.0.0.1` por padrão e tenta portas livres a partir de `
 - `src/server/provider-client.js` - chamadas para providers, rotação de API keys e Ollama.
 - `src/server/models.js` - catálogo de providers e modelos sugeridos.
 - `src/server/tools.js` - definições e execução das tools.
+- `src/server/updater.js` - checagem/aplicação de update via Git e restart do processo.
 - `src/cli/mc.js` - comando local para iniciar o painel.
 - `install.sh` e `uninstall.sh` - entrypoints públicos.
 - `scripts/bootstrap.sh` e `scripts/remove.sh` - implementação interna de install/uninstall.
@@ -69,6 +70,7 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
    - memória do chat
    - contexto compactado
    - histórico recente
+   - instrução opcional baseada no nível técnico do usuário
 7. O provider selecionado pode responder direto ou chamar tools.
 8. Se `alwaysAllow` estiver desligado, a resposta da IA fica pendente e a UI pede aprovação antes de executar tools.
 9. Cada tool solicitada/executada é salva no histórico do chat e no event log.
@@ -142,6 +144,15 @@ Existem três caminhos de contexto:
 
 O botão de caneta no cabeçalho abre um editor manual de `context.md`.
 
+## Technical level
+
+`config.json` guarda:
+
+- `technicalLevel`: `beginner`, `careful`, `balanced`, `advanced` ou `expert`.
+- `technicalGuidanceEnabled`: quando `false`, o app não injeta instruções extras de nível técnico no system prompt.
+
+O padrão é `balanced`. Níveis baixos instruem a IA a explicar mais, pedir mais confirmação em solicitações confusas ou arriscadas e ser mais explícita sobre comandos. Níveis altos instruem a IA a confiar mais em comandos claros e reduzir explicações básicas.
+
 ## Providers
 
 O app suporta providers OpenAI-compatible por uma camada comum de `baseUrl + /chat/completions`, incluindo:
@@ -181,6 +192,20 @@ O frontend mostra apenas parâmetros que o provider provavelmente aceita. O back
 ## Import/export
 
 `/api/export` gera um JSON com configurações, chats, mensagens, memórias, contexto salvo e anexos. `/api/import` importa esse JSON e pode sobrescrever chats com o mesmo id.
+
+## Updates
+
+O atualizador assume que o app está rodando a partir de um clone Git com upstream configurado.
+
+Fluxo:
+
+1. `GET /api/update/status` roda `git fetch --prune`, descobre branch/upstream e compara `HEAD` com o remote.
+2. Se houver commits novos, a UI mostra resumo, ahead/behind, remote e estado do worktree.
+3. Se o worktree estiver sujo, a UI bloqueia update automático.
+4. `POST /api/update/apply` com confirmação roda `git pull --ff-only && npm install`.
+5. Se o update for aplicado, o servidor inicia um novo processo na mesma porta e encerra o processo antigo.
+
+Por enquanto, o caminho escolhido é atualizar direto do código fonte. Releases empacotadas ficam para uma fase posterior, caso o projeto precise distribuir binários ou instaladores versionados.
 
 ## Attachments
 

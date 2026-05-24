@@ -18,6 +18,7 @@ const state = {
   settingsProvider: '',
   pendingAttachments: [],
   ollamaStatus: null,
+  updateStatus: null,
   apiKeyVisible: false,
   setupApiKeyVisible: false,
   lastFailedAction: null,
@@ -124,6 +125,21 @@ function renderSetup() {
               ${renderLanguageOptions(state.config?.language || 'auto')}
             </select>
           </label>
+          <div class="setup-grid">
+            <label id="setup-technical-level-row" class="${state.config?.technicalGuidanceEnabled === false ? 'hidden' : ''}">
+              Nível técnico
+              <select name="technicalLevel" id="setup-technical-level" ${state.config?.technicalGuidanceEnabled === false ? 'disabled' : ''}>
+                ${renderTechnicalLevelOptions(state.config?.technicalLevel || 'balanced')}
+              </select>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" name="technicalGuidanceEnabled" id="setup-technical-guidance" ${state.config?.technicalGuidanceEnabled !== false ? 'checked' : ''} />
+              <span>
+                <strong>Adaptar resposta ao nível</strong>
+                <small>Níveis mais baixos explicam mais e confirmam mais coisas; isso pode gastar mais tokens.</small>
+              </span>
+            </label>
+          </div>
           <label>
             System prompt geral
             <textarea name="systemPromptExtra" rows="5" placeholder="Preferências gerais de tom, formato, limites e jeito de trabalhar."></textarea>
@@ -138,15 +154,16 @@ function renderSetup() {
               </span>
             </label>
             <label class="toggle-row">
-              <input type="checkbox" name="networkEnabled" />
+              <input type="checkbox" name="networkEnabled" id="setup-network-enabled" ${state.config?.server?.networkEnabled ? 'checked' : ''} />
               <span>
                 <strong>Abrir painel para a rede local</strong>
                 <small>Exige senha abaixo e só vale depois de reiniciar o servidor. Use apenas em rede confiável.</small>
               </span>
             </label>
-            <label>
+            <label id="setup-network-password-row" class="${state.config?.server?.networkEnabled ? '' : 'hidden'}">
               Senha da rede local
-              <input name="authPassword" type="password" autocomplete="new-password" placeholder="Obrigatória para abrir na rede" />
+              <input name="authPassword" type="password" autocomplete="new-password" value="${escapeAttr(state.config?.server?.authPassword || '')}" placeholder="Obrigatória para abrir na rede" ${state.config?.server?.networkEnabled ? '' : 'disabled'} />
+              <small class="field-note">Sem senha, o app não permite abrir o painel para a rede.</small>
             </label>
           </section>
           <div class="button-row">
@@ -166,6 +183,8 @@ function renderSetup() {
     renderSetup();
   });
   document.querySelector('#setup-model').addEventListener('change', toggleSetupCustomModel);
+  document.querySelector('#setup-technical-guidance')?.addEventListener('change', () => toggleTechnicalLevelField('setup'));
+  document.querySelector('#setup-network-enabled')?.addEventListener('change', () => toggleNetworkPasswordField('setup'));
   document.querySelector('#setup-add-api-key')?.addEventListener('click', addSetupApiKeyRow);
   document.querySelector('#setup-toggle-api-key')?.addEventListener('click', toggleSetupApiKeyVisibility);
   document.querySelectorAll('.setup-remove-api-key').forEach((button) => {
@@ -365,6 +384,22 @@ function renderSettingsModal() {
                   <small>Ative somente se o endpoint aceitar imagens. O app bloqueia imagem quando isso estiver desligado.</small>
                 </span>
               </label>
+              <div class="setup-grid">
+                <label id="settings-technical-level-row" class="${state.config.technicalGuidanceEnabled === false ? 'hidden' : ''}">
+                  Nível técnico
+                  <select name="technicalLevel" id="settings-technical-level" ${state.config.technicalGuidanceEnabled === false ? 'disabled' : ''}>
+                    ${renderTechnicalLevelOptions(state.config.technicalLevel || 'balanced')}
+                  </select>
+                </label>
+                <label class="toggle-row">
+                  <input type="checkbox" name="technicalGuidanceEnabled" id="settings-technical-guidance" ${state.config.technicalGuidanceEnabled !== false ? 'checked' : ''} />
+                  <span>
+                    <strong>Adaptar resposta ao nível</strong>
+                    <small>Desligue para remover essa instrução do prompt e deixar o modelo responder pelo comportamento padrão.</small>
+                  </span>
+                </label>
+              </div>
+              <p class="help-text">Níveis mais baixos fazem a IA explicar termos, montar planos e pedir mais confirmação antes de ações incertas ou arriscadas. Isso melhora segurança, mas pode usar mais tokens.</p>
               <label>
                 System prompt geral
                 <textarea name="systemPromptExtra" rows="5">${escapeHtml(state.config.systemPromptExtra || '')}</textarea>
@@ -425,7 +460,7 @@ function renderSettingsModal() {
                 ${renderToolToggle('searchTerminal', 'Pesquisa via terminal', 'Executa a busca por uma chamada local de terminal. Necessário para Ollama e providers sem busca nativa neste MVP.')}
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
-                ${renderToolToggle('autoCompact', 'Compactação automática', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
+                ${renderToolToggle('autoCompact', 'Tool de compactar contexto', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
                 ${renderToolToggle('alwaysAllow', 'Sempre permitir qualquer tool', 'Quando ligado, tools executam sem aprovação. Quando desligado, a UI pede Permitir ou Negar antes de executar.')}
               </div>
@@ -472,16 +507,27 @@ function renderSettingsModal() {
               <h3>Rede local</h3>
               <p class="help-text">Por padrão o My Computer escuta só em 127.0.0.1. Abrir para a rede usa 0.0.0.0 no próximo restart e exige autenticação básica com senha única.</p>
               <label class="toggle-row">
-                <input type="checkbox" name="networkEnabled" ${state.config.server?.networkEnabled ? 'checked' : ''} />
+                <input type="checkbox" name="networkEnabled" id="settings-network-enabled" ${state.config.server?.networkEnabled ? 'checked' : ''} />
                 <span>
                   <strong>Abrir painel para a rede</strong>
                   <small>Permite acessar pelo IP local da máquina. Para acesso fora da rede, precisaremos projetar HTTPS, usuários e permissões com mais calma.</small>
                 </span>
               </label>
-              <label>
+              <label id="settings-network-password-row" class="${state.config.server?.networkEnabled ? '' : 'hidden'}">
                 Senha de acesso
-                <input name="authPassword" type="password" autocomplete="new-password" value="${escapeAttr(state.config.server?.authPassword || '')}" placeholder="Obrigatória para rede local" />
+                <input name="authPassword" type="password" autocomplete="new-password" value="${escapeAttr(state.config.server?.authPassword || '')}" placeholder="Obrigatória para rede local" ${state.config.server?.networkEnabled ? '' : 'disabled'} />
+                <small class="field-note">Obrigatória para habilitar rede local. A mudança vale no próximo restart.</small>
               </label>
+            </section>
+
+            <section class="modal-section">
+              <h3>Atualizações</h3>
+              <p class="help-text">Atualiza direto do repositório Git configurado nesta pasta: faz <code>git fetch</code>, compara com o upstream e, se você confirmar, roda <code>git pull --ff-only && npm install</code>. O servidor reinicia depois da atualização.</p>
+              <div class="button-row">
+                <button type="button" id="check-update">Verificar atualização</button>
+                ${state.updateStatus?.canApply ? '<button type="button" id="apply-update" class="primary">Atualizar e reiniciar</button>' : ''}
+              </div>
+              ${renderUpdateStatus()}
             </section>
 
             <section class="modal-section">
@@ -504,6 +550,7 @@ function renderSettingsModal() {
           </div>
 
           <footer class="modal-footer">
+            ${state.error ? `<p class="error modal-error">${escapeHtml(state.error)}</p>` : ''}
             <button type="button" id="cancel-settings">Cancelar</button>
             <button class="primary" type="submit">Salvar configurações</button>
           </footer>
@@ -776,9 +823,11 @@ function renderOllamaSetup(model) {
 
 function renderToolToggle(name, title, description) {
   const checked = state.config.tools?.[name] !== false ? 'checked' : '';
+  const hidden = name === 'searchTerminal' && state.config.tools?.webSearch === false;
+  const disabled = hidden ? 'disabled' : '';
   return `
-    <label class="toggle-row">
-      <input type="checkbox" name="tool_${escapeAttr(name)}" ${checked} />
+    <label class="toggle-row ${hidden ? 'hidden' : ''}" id="tool-${escapeAttr(name)}-row">
+      <input type="checkbox" id="tool-${escapeAttr(name)}" name="tool_${escapeAttr(name)}" ${checked} ${disabled} />
       <span>
         <strong>${escapeHtml(title)}</strong>
         <small>${escapeHtml(description)}</small>
@@ -982,6 +1031,31 @@ function renderEvent(event) {
   `;
 }
 
+function renderUpdateStatus() {
+  const update = state.updateStatus;
+  if (!update) {
+    return '<p class="help-text">Nenhuma checagem feita nesta sessão.</p>';
+  }
+
+  const commits = update.commits?.length
+    ? `<div><div class="message-label">Commits disponíveis</div><pre>${escapeHtml(update.commits.join('\n'))}</pre></div>`
+    : '';
+  const changedFiles = update.changedFiles?.length
+    ? `<div><div class="message-label">Mudanças locais que bloqueiam update</div><pre>${escapeHtml(update.changedFiles.join('\n'))}</pre></div>`
+    : '';
+
+  return `
+    <div class="update-status ${update.updateAvailable ? 'warn' : 'ok'}">
+      <strong>${escapeHtml(update.reason || 'Status de atualização')}</strong>
+      <span>Branch: ${escapeHtml(update.branch || 'n/a')} · Upstream: ${escapeHtml(update.upstream || 'n/a')}</span>
+      <span>Atrás: ${escapeHtml(String(update.behind || 0))} · À frente: ${escapeHtml(String(update.ahead || 0))} · Local sujo: ${update.dirty ? 'sim' : 'não'}</span>
+      <span>Remote: ${escapeHtml(update.remoteUrl || 'não configurado')}</span>
+      ${commits}
+      ${changedFiles}
+    </div>
+  `;
+}
+
 function formatEventDetails(details = {}) {
   if (!details || typeof details !== 'object') return '';
   return Object.entries(details)
@@ -1044,6 +1118,22 @@ function renderLanguageOptions(selectedLanguage = 'auto') {
   return languages
     .map(([value, label]) => {
       const selected = selectedLanguage === value ? 'selected' : '';
+      return `<option value="${escapeAttr(value)}" ${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join('');
+}
+
+function renderTechnicalLevelOptions(selectedLevel = 'balanced') {
+  const levels = [
+    ['beginner', 'Iniciante: explica e confirma mais'],
+    ['careful', 'Cuidadoso: transparente e cauteloso'],
+    ['balanced', 'Equilibrado: padrão recomendado'],
+    ['advanced', 'Avançado: direto e confiante'],
+    ['expert', 'Especialista: mínimo de explicação'],
+  ];
+  return levels
+    .map(([value, label]) => {
+      const selected = selectedLevel === value ? 'selected' : '';
       return `<option value="${escapeAttr(value)}" ${selected}>${escapeHtml(label)}</option>`;
     })
     .join('');
@@ -1301,6 +1391,9 @@ function bindAppEvents() {
     document.querySelector('#cancel-settings').addEventListener('click', closeSettings);
     document.querySelector('#default-provider-input').addEventListener('change', changeDefaultProviderDraft);
     document.querySelector('#default-model-input').addEventListener('change', toggleDefaultCustomModel);
+    document.querySelector('#settings-technical-guidance')?.addEventListener('change', () => toggleTechnicalLevelField('settings'));
+    document.querySelector('#settings-network-enabled')?.addEventListener('change', () => toggleNetworkPasswordField('settings'));
+    document.querySelector('#tool-webSearch')?.addEventListener('change', toggleSearchTerminalField);
     document.querySelector('#api-provider-input').addEventListener('change', changeApiProviderDraft);
     document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
     document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
@@ -1309,6 +1402,8 @@ function bindAppEvents() {
     });
     document.querySelector('#export-data').addEventListener('click', exportData);
     document.querySelector('#import-data').addEventListener('change', importData);
+    document.querySelector('#check-update').addEventListener('click', checkUpdate);
+    document.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
     document.querySelector('#shutdown-app').addEventListener('click', shutdownApp);
     document.querySelector('#check-ollama')?.addEventListener('click', checkOllamaStatus);
     document.querySelector('#install-ollama')?.addEventListener('click', installOllama);
@@ -1365,6 +1460,11 @@ async function saveSetup(event) {
     model,
     form.get('customModelImages') === 'on',
   );
+  if (form.get('networkEnabled') === 'on' && !String(form.get('authPassword') || '').trim()) {
+    state.error = 'Defina uma senha para abrir o painel na rede local.';
+    render();
+    return;
+  }
   const providerSettings = structuredClone(state.config.providerSettings || {});
   const providerInfo = getProvider(provider);
   providerSettings[provider] = {
@@ -1391,6 +1491,8 @@ async function saveSetup(event) {
         modelCapabilities,
         language: form.get('language'),
         userNickname: form.get('userNickname'),
+        technicalLevel: form.get('technicalLevel'),
+        technicalGuidanceEnabled: form.get('technicalGuidanceEnabled') === 'on',
         systemPromptExtra: form.get('systemPromptExtra'),
         tools: {
           ...(state.config.tools || {}),
@@ -1586,6 +1688,39 @@ function toggleDefaultCustomModel() {
   if (!select || !row) return;
   row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
   imagesRow?.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
+}
+
+function toggleTechnicalLevelField(scope) {
+  const guidance = document.querySelector(`#${scope}-technical-guidance`);
+  const row = document.querySelector(`#${scope}-technical-level-row`);
+  const select = document.querySelector(`#${scope}-technical-level`);
+  const enabled = guidance?.checked !== false;
+  row?.classList.toggle('hidden', !enabled);
+  if (select) select.disabled = !enabled;
+}
+
+function toggleNetworkPasswordField(scope) {
+  const enabledInput = document.querySelector(`#${scope}-network-enabled`);
+  const row = document.querySelector(`#${scope}-network-password-row`);
+  const password = row?.querySelector('input');
+  const enabled = enabledInput?.checked === true;
+  row?.classList.toggle('hidden', !enabled);
+  if (password) {
+    password.disabled = !enabled;
+    password.required = enabled;
+  }
+}
+
+function toggleSearchTerminalField() {
+  const webSearch = document.querySelector('#tool-webSearch');
+  const row = document.querySelector('#tool-searchTerminal-row');
+  const input = document.querySelector('#tool-searchTerminal');
+  const enabled = webSearch?.checked !== false;
+  row?.classList.toggle('hidden', !enabled);
+  if (input) {
+    input.disabled = !enabled;
+    if (!enabled) input.checked = false;
+  }
 }
 
 function syncSetupApiDraft() {
@@ -2110,6 +2245,11 @@ async function saveGeneralSettings(event) {
     model,
     form.get('customModelImages') === 'on',
   );
+  if (form.get('networkEnabled') === 'on' && !String(form.get('authPassword') || '').trim()) {
+    state.error = 'Defina uma senha para abrir o painel na rede local.';
+    render();
+    return;
+  }
   await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
@@ -2132,6 +2272,8 @@ async function saveGeneralSettings(event) {
         model,
         language: form.get('language'),
         userNickname: form.get('userNickname'),
+        technicalLevel: form.get('technicalLevel'),
+        technicalGuidanceEnabled: form.get('technicalGuidanceEnabled') === 'on',
         systemPromptExtra: form.get('systemPromptExtra'),
         tools,
         context: {
@@ -2218,6 +2360,26 @@ async function importData(event) {
     state.activeChat = data.activeChat;
     state.activeChatEvents = data.activeChatEvents || [];
     state.persistentMemory = data.persistentMemory || '';
+  });
+}
+
+async function checkUpdate() {
+  await runAction('Verificando atualização...', async () => {
+    const data = await api('/api/update/status');
+    state.updateStatus = data.update;
+  });
+}
+
+async function applyUpdate() {
+  const confirmed = window.confirm('Atualizar o My Computer agora? O servidor vai rodar git pull, npm install e reiniciar.');
+  if (!confirmed) return;
+  await runAction('Atualizando My Computer...', async () => {
+    const data = await api('/api/update/apply', {
+      method: 'POST',
+      body: { confirm: true },
+    });
+    state.updateStatus = data.status || state.updateStatus;
+    state.status = data.message || 'Atualização aplicada.';
   });
 }
 

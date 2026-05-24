@@ -666,6 +666,27 @@ pre {
   line-height: 1.35;
 }
 
+.update-status {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.update-status strong {
+  color: var(--text);
+}
+
+.update-status.warn {
+  border-color: #e5c46a;
+  background: #fff9e8;
+}
+
 .search-result a {
   color: var(--accent-dark);
   font-weight: 600;
@@ -679,6 +700,18 @@ pre {
 
 .error {
   color: var(--danger);
+}
+
+.modal-error {
+  margin: 0 auto 0 0;
+  max-width: 520px;
+  font-size: 13px;
+}
+
+.field-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .secret-field {

@@ -15,6 +15,20 @@ for arg in "$@"; do
     --keep-data)
       REMOVE_DATA="no"
       ;;
+    --help|-h)
+      cat <<'HELP'
+Uso: ./uninstall.sh [--keep-data|--remove-data]
+
+--keep-data     remove dependências e preserva ~/.my-computer (padrão)
+--remove-data   remove dependências e apaga runtime, chats, config, anexos e memórias
+HELP
+      exit 0
+      ;;
+    *)
+      echo "Argumento desconhecido: $arg"
+      echo "Use ./uninstall.sh --help"
+      exit 1
+      ;;
   esac
 done
 

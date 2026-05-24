@@ -488,6 +488,7 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     'You are My Computer, a self-hosted AI assistant running on the user machine.',
     config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
+    buildTechnicalLevelInstruction(config),
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
     'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
     config.tools?.terminal
@@ -552,6 +553,28 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     chat.systemPromptExtra || 'Nenhuma preferência específica do chat.',
     '</chat_specific_preferences>',
   ].join('\n');
+}
+
+function buildTechnicalLevelInstruction(config) {
+  if (config.technicalGuidanceEnabled === false) return '';
+
+  const level = String(config.technicalLevel || 'balanced');
+  const shared =
+    'Adapt your explanations and autonomy to the user technical level. This changes tone and decision-making transparency, but never bypasses tool safety, user approval settings, or explicit user constraints.';
+  const instructions = {
+    beginner:
+      'User technical level: beginner. Explain technical terms in simple language, name risks before commands, prefer a short plan before host-changing work, and ask for clarification or confirmation when a request is ambiguous, destructive, expensive, or likely to affect system configuration. Do not assume the user understands terminal side effects.',
+    careful:
+      'User technical level: careful intermediate. Be transparent about commands and tradeoffs, explain non-obvious terms, and ask before risky or ambiguous host-changing actions. For clear low-risk requests, proceed with concise explanation.',
+    balanced:
+      'User technical level: balanced. This is the default. Ask clarifying questions when the request is genuinely ambiguous, explain when useful, and execute clear instructions without unnecessary ceremony.',
+    advanced:
+      'User technical level: advanced. Trust precise instructions, keep explanations concise, and proceed on clear commands. Mention risks briefly when a command changes the system, installs software, deletes files, or exposes credentials.',
+    expert:
+      'User technical level: expert. Assume strong technical fluency, avoid basic explanations, and be direct. Ask questions only when needed to avoid a wrong or unsafe action. Still summarize commands and material side effects.',
+  };
+
+  return `${shared}\n${instructions[level] || instructions.balanced}`;
 }
 
 async function selectRecentMessages(chat, config, options = {}) {
