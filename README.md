@@ -1,48 +1,58 @@
 # My Computer
 
-My Computer is a self-hosted control center for a local AI assistant with a terminal-first workflow.
+My Computer e um painel self-hosted para conversar com uma IA que pode usar tools locais.
+O MVP atual usa Groq como provider unico, roda em um servidor Node local e salva tudo em uma pasta central do usuario.
 
-This repository currently contains the product plan, stack definition, UI spec, architecture notes, and security model.
-It is intentionally the foundation for the first implementation pass.
+## Rodar
 
-## What exists now
+```bash
+./install.sh
+```
 
-- Product plan and MVP scope.
-- Exact technology stack proposal.
-- UI layout and interaction spec.
-- Architecture and security notes.
-- Installer stub and base project metadata.
+O script instala dependencias com `npm install`, cria o runtime em `~/.my-computer` e abre o navegador com o painel local.
+O servidor fica em primeiro plano no terminal; use `Ctrl+C` para parar.
 
-## Current status
+Tambem da para iniciar manualmente:
 
-The first runnable app scaffold will come next.
-The current repo state is aimed at documenting and locking the implementation plan before the UI and backend are built.
+```bash
+npm run start:open
+```
 
-## Safety defaults
+## Desinstalar
 
-- Shell execution is off by default.
-- The current server is meant for local use.
-- Remote exposure should be added only after auth, transport security, and permission boundaries are in place.
+```bash
+./uninstall.sh
+```
 
-## Project structure
+Por padrao, o uninstall remove `node_modules` e preserva os dados em `~/.my-computer`.
+Para remover chats, memoria, config e logs tambem:
 
-- `package.json` - project metadata and future scripts.
-- `install.sh` - bootstrap helper.
-- `data/` - persisted runtime state placeholder.
-- `ROADMAP.md` - product and delivery phases.
-- `ARCHITECTURE.md` - system layout and data flow.
-- `SECURITY.md` - security model and guardrails.
-- `TECH_STACK.md` - exact technology choices and OSS integrations.
-- `UI_SPEC.md` - dashboard layout and interaction model.
+```bash
+./uninstall.sh --remove-data
+```
 
-## Roadmap
+## O que existe no MVP
 
-See [ROADMAP.md](./ROADMAP.md).
+- Setup inicial com Groq API key, modelo padrao, idioma e system prompt extra.
+- Modelo selecionavel ao criar cada chat.
+- Modelo do chat editavel durante a conversa, com evento registrado.
+- Chat com historico persistente.
+- Tool `run_terminal_command` para a IA usar o terminal local.
+- Tool `memory_chat` para a IA ler, anexar ou reescrever a memoria Markdown do chat.
+- Memoria por chat em `memory.md`.
+- Contexto compactado em `context.md`.
+- Janela de contexto atual em `context-window.md`.
+- Snapshots manuais de contexto em `context-snapshots/`.
 
-## Architecture
+## Estrutura
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md).
+- `docs/` - documentacao alinhada ao MVP.
+- `src/panel/` - painel web em HTML, CSS e JS puro.
+- `src/server/` - servidor local, storage, Groq adapter e tools.
+- `src/cli/` - CLI minima para iniciar e diagnosticar.
+- `scripts/` - instalacao e desinstalacao.
+- `tests/` - testes do storage local.
 
-## Security
+## Docs
 
-See [SECURITY.md](./SECURITY.md).
+Comece por [docs/INDEX.md](./docs/INDEX.md).

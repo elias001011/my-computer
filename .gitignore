@@ -1,7 +1,6 @@
 .env
 .DS_Store
-data/state.json
-node_modules
+node_modules/
+.my-computer/
 *.log
 coverage
-

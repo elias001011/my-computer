@@ -6,9 +6,15 @@
   "description": "Self-hosted control center for a local AI assistant with terminal-first workflows.",
   "license": "MIT",
   "engines": {
-    "node": ">=24"
+    "node": ">=20"
+  },
+  "bin": {
+    "my-computer": "./src/cli/mc.js"
   },
   "scripts": {
-    "test": "node --test"
+    "start": "node src/cli/mc.js start",
+    "start:open": "node src/cli/mc.js start --open",
+    "doctor": "node src/cli/mc.js doctor",
+    "test": "node --test tests/*.test.js"
   }
 }
