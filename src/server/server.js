@@ -7,6 +7,7 @@ import { groqModels } from './models.js';
 import {
   appendEvent,
   createChat,
+  deleteChat,
   ensureRuntime,
   listChats,
   loadConfig,
@@ -67,8 +68,8 @@ async function handleApi(request, response, url) {
       models: groqModels,
       chats,
       activeChat,
+      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
       persistentMemory: await readPersistentMemory(),
-      events: await readEvents(),
       runtimeHome,
     });
     return;
@@ -94,6 +95,12 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     const persistentMemory = await writePersistentMemory(body.content || '');
     sendJson(response, 200, { persistentMemory });
+    return;
+  }
+
+  if (method === 'POST' && parts[1] === 'shutdown') {
+    sendJson(response, 200, { ok: true, message: 'My Computer está encerrando.' });
+    setTimeout(() => process.exit(0), 100).unref();
     return;
   }
 
@@ -133,34 +140,61 @@ async function handleChatsApi(request, response, parts) {
       chatId,
       details: { title: body.title, model: body.model },
     });
-    sendJson(response, 200, { chat: await readChat(chatId), chats: await listChats() });
+    sendJson(response, 200, {
+      chat: await readChat(chatId),
+      chats: await listChats(),
+      activeChatEvents: await readEvents({ chatId }),
+    });
+    return;
+  }
+
+  if (method === 'DELETE' && chatId && parts.length === 3) {
+    await deleteChat(chatId);
+    let chats = await listChats();
+    if (chats.length === 0) {
+      const config = await loadConfig();
+      await createChat('Novo chat', { model: config.model });
+      chats = await listChats();
+    }
+    const activeChat = chats[0] ? await readChat(chats[0].id) : null;
+    sendJson(response, 200, {
+      chats,
+      activeChat,
+      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
+    });
     return;
   }
 
   if (method === 'GET' && chatId && parts.length === 3) {
-    sendJson(response, 200, { chat: await readChat(chatId) });
+    sendJson(response, 200, { chat: await readChat(chatId), activeChatEvents: await readEvents({ chatId }) });
     return;
   }
 
   if (method === 'PUT' && chatId && parts[3] === 'memory') {
     const body = await readBody(request);
-    sendJson(response, 200, { chat: await writeMemory(chatId, body.content || '') });
+    sendJson(response, 200, {
+      chat: await writeMemory(chatId, body.content || ''),
+      activeChatEvents: await readEvents({ chatId }),
+    });
     return;
   }
 
   if (method === 'POST' && chatId && parts[3] === 'messages') {
     const body = await readBody(request);
-    sendJson(response, 200, await sendUserMessage(chatId, body.content || ''));
+    const result = await sendUserMessage(chatId, body.content || '');
+    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
     return;
   }
 
   if (method === 'POST' && chatId && parts[3] === 'compact') {
-    sendJson(response, 200, await compactChat(chatId));
+    const result = await compactChat(chatId);
+    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
     return;
   }
 
   if (method === 'POST' && chatId && parts[3] === 'save-context') {
-    sendJson(response, 200, await saveContextWindow(chatId));
+    const result = await saveContextWindow(chatId);
+    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
     return;
   }
 

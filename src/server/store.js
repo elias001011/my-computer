@@ -15,6 +15,7 @@ export const defaultConfig = Object.freeze({
     chatMemory: true,
     persistentMemory: true,
     autoCompact: true,
+    chatTitle: true,
   },
   apiKey: process.env.GROQ_API_KEY || '',
 });
@@ -82,6 +83,7 @@ export function sanitizeConfig(config) {
     systemPromptExtra: config.systemPromptExtra,
     tools: normalizeTools(config.tools),
     apiKeySet: Boolean(config.apiKey),
+    apiKey: config.apiKey,
   };
 }
 
@@ -177,6 +179,13 @@ export async function updateChatMetadata(id, patch) {
   return next;
 }
 
+export async function deleteChat(id) {
+  assertChatId(id);
+  const metadata = await readChatMetadata(id);
+  await fs.rm(getChatDir(id), { recursive: true, force: true });
+  await appendEvent({ type: 'chat.deleted', chatId: id, details: { title: metadata.title } });
+}
+
 export async function readMemory(id) {
   const chat = await readChat(id);
   return chat.memory;
@@ -232,7 +241,9 @@ export async function saveContextSnapshot(id, content) {
   return snapshotPath;
 }
 
-export async function readEvents(limit = 80) {
+export async function readEvents(options = {}) {
+  const limit = typeof options === 'number' ? options : Number(options.limit || 80);
+  const chatId = typeof options === 'object' ? options.chatId : null;
   await ensureRuntime();
   let raw = '';
   try {
@@ -244,7 +255,6 @@ export async function readEvents(limit = 80) {
   return raw
     .split('\n')
     .filter(Boolean)
-    .slice(-limit)
     .map((line) => {
       try {
         return JSON.parse(line);
@@ -252,6 +262,8 @@ export async function readEvents(limit = 80) {
         return { type: 'event.parse_error', createdAt: new Date().toISOString(), raw: line };
       }
     })
+    .filter((event) => !chatId || event.chatId === chatId)
+    .slice(-limit)
     .reverse();
 }
 
@@ -339,6 +351,7 @@ function normalizeTools(tools = {}) {
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
+    chatTitle: tools.chatTitle !== false,
   };
 }
 

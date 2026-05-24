@@ -20,6 +20,7 @@ import {
   compactContextToolDefinition,
   memoryChatToolDefinition,
   persistentMemoryToolDefinition,
+  renameChatToolDefinition,
   runTerminalCommand,
   terminalToolDefinition,
 } from './tools.js';
@@ -39,13 +40,7 @@ export async function sendUserMessage(chatId, content) {
 
   const chatBefore = await readChat(chatId);
   const userMessage = createMessage('user', trimmed);
-  await appendMessages(chatId, [userMessage]);
-
-  if (chatBefore.title === 'Novo chat') {
-    await updateChatMetadata(chatId, { title: trimmed });
-  }
-
-  const chat = await readChat(chatId);
+  const chat = { ...chatBefore, messages: [...chatBefore.messages, userMessage] };
   const persistentMemory = await readPersistentMemory();
   const effectiveConfig = { ...config, model: chat.model || config.model };
   const workingMessages = buildProviderMessages(chat, effectiveConfig, persistentMemory);
@@ -95,11 +90,15 @@ export async function sendUserMessage(chatId, content) {
     finalContent = assistantMessage.content || 'Terminei a execução das tools, mas não recebi texto final.';
   }
 
+  if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat')) {
+    await updateChatMetadata(chatId, { title: trimmed });
+  }
+
   const savedAssistantMessage = createMessage('assistant', finalContent, {
     modelUsed: effectiveConfig.model,
     toolUses,
   });
-  await appendMessages(chatId, [savedAssistantMessage]);
+  await appendMessages(chatId, [userMessage, savedAssistantMessage]);
 
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
@@ -215,8 +214,9 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
+    'Respond with a clear structure: short answer first, then concise sections or bullets when useful. Be explicit about commands run, files changed, and next steps.',
     config.tools?.terminal
-      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer.'
+      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
     config.tools?.chatMemory
       ? 'When stable user preferences, decisions, file paths, facts, or TODOs appear inside this chat, use memory_chat to read or update the current chat memory.'
@@ -227,6 +227,9 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     config.tools?.autoCompact
       ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
       : 'Automatic context compaction through tools is disabled by user settings.',
+    config.tools?.chatTitle
+      ? 'If the chat title is generic, call rename_chat after the first user message with a short descriptive title. You may rename it later if the topic changes.'
+      : 'Chat title editing through tools is disabled by user settings.',
     config.tools?.chatMemory
       ? 'For memory_chat write operations, send the full edited Markdown memory file, using the current memory below as the base.'
       : '',
@@ -235,6 +238,7 @@ function buildSystemPrompt(chat, config, persistentMemory) {
       : '',
     'For this MVP there is no extra confirmation step before terminal execution. Be careful, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
     `Runtime folder: ${runtimeHome}`,
+    `Current chat title: ${chat.title}`,
     `Chat memory file: ${chat.paths.memory}`,
     `Saved context file: ${chat.paths.context}`,
     `Current context window file: ${chat.paths.contextWindow}`,
@@ -301,6 +305,10 @@ async function executeToolCall(chatId, toolCall) {
     return executeCompactContextToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'rename_chat') {
+    return executeRenameChatToolCall(chatId, toolCall.id, input);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -311,12 +319,13 @@ async function executeToolCall(chatId, toolCall) {
     };
   }
 
-  const result = await runTerminalCommand(input.command);
+  const result = await runTerminalCommand(input.command, { timeoutSeconds: input.timeoutSeconds });
   await appendEvent({
     type: 'tool.run_terminal_command',
     chatId,
     details: {
       command: input.command,
+      timeoutSeconds: input.timeoutSeconds,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
@@ -328,6 +337,37 @@ async function executeToolCall(chatId, toolCall) {
     name,
     input: { command: input.command },
     result,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function executeRenameChatToolCall(chatId, toolCallId, input) {
+  const title = String(input.title || '').trim();
+  if (!title) {
+    return {
+      id: toolCallId,
+      name: 'rename_chat',
+      input,
+      result: { error: 'title is required' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const metadata = await updateChatMetadata(chatId, { title });
+  await appendEvent({
+    type: 'tool.rename_chat',
+    chatId,
+    details: { title: metadata.title, reason: input.reason },
+  });
+
+  return {
+    id: toolCallId,
+    name: 'rename_chat',
+    input,
+    result: {
+      action: 'rename',
+      title: metadata.title,
+    },
     createdAt: new Date().toISOString(),
   };
 }
@@ -357,6 +397,7 @@ function buildEnabledToolDefinitions(tools = {}) {
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
     tools.autoCompact !== false ? compactContextToolDefinition : null,
+    tools.chatTitle !== false ? renameChatToolDefinition : null,
   ].filter(Boolean);
 }
 
@@ -366,6 +407,7 @@ function describeEnabledTools(tools = {}) {
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
     tools.autoCompact !== false ? 'compact_context' : null,
+    tools.chatTitle !== false ? 'rename_chat' : null,
   ].filter(Boolean);
 }
 

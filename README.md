@@ -41,7 +41,10 @@ Para remover chats, memória, config e logs também:
 - Tool `memory_chat` para a IA ler, anexar ou reescrever a memória Markdown do chat.
 - Tool `persistent_memory` para memória global entre chats.
 - Tool `compact_context` para compactação automática quando habilitada.
+- Tool `rename_chat` para a IA nomear o chat.
 - Toggles globais para ligar/desligar tools.
+- Eventos filtrados por chat no painel lateral.
+- Botão de copiar respostas da IA e retry para requests com erro.
 - Memória por chat em `memory.md`.
 - Memória persistente em `persistent-memory.md`.
 - Contexto compactado em `context.md`.

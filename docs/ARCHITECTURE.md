@@ -22,10 +22,10 @@ O servidor escuta em `127.0.0.1` e tenta portas livres a partir de `8787`.
 - `src/server/store.js` - arquivos de config, chats, memória, contexto e eventos.
 - `src/server/assistant.js` - orquestração do chat, contexto, tools e compactação.
 - `src/server/groq.js` - chamada OpenAI-compatible para Groq.
-- `src/server/tools.js` - definicoes e execucao das tools.
+- `src/server/tools.js` - definições e execução das tools.
 - `src/cli/mc.js` - comando local para iniciar o painel.
 - `scripts/` - install/uninstall.
-- `docs/` - documentacao do produto e da arquitetura.
+- `docs/` - documentação do produto e da arquitetura.
 
 ## Runtime layout
 
@@ -67,11 +67,14 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
 9. A resposta final é salva em `messages.json`.
 10. A janela atual de contexto é atualizada em `context-window.md`.
 
+Eventos são gravados em um `events.jsonl` global, mas a UI mostra apenas os eventos do chat ativo.
+
 ## Tools
 
 ### `run_terminal_command`
 
 Executa um comando shell na máquina do usuário. A execução usa timeout e limite de output, mas no MVP não tem confirmação manual antes de rodar.
+O stdin é fechado automaticamente para evitar prompts interativos travados, e o processo é encerrado por timeout.
 
 ### `memory_chat`
 
@@ -95,6 +98,10 @@ Gerencia `persistent-memory.md`, memória global compartilhada por todos os chat
 
 Permite que a IA compacte o histórico do chat para `context.md` quando a conversa estiver longa ou quando decisões importantes precisarem virar contexto durável.
 
+### `rename_chat`
+
+Permite que a IA renomeie o chat atual com um título curto e descritivo, normalmente depois da primeira mensagem.
+
 ## Tool permissions
 
 As configurações gerais guardam toggles para:
@@ -103,14 +110,19 @@ As configurações gerais guardam toggles para:
 - memória do chat
 - memória persistente
 - compactação automática por tool
+- título do chat por tool
 
 Quando uma tool é desligada, ela não é enviada ao modelo.
+
+## Shutdown
+
+O painel tem uma ação de encerrar o servidor local. Para iniciar novamente, rode `./install.sh` ou `npm run start:open` na raiz do projeto.
 
 ## Extension points
 
 - Mais providers além de Groq.
 - Confirmação antes de comandos sensíveis.
-- Variaveis de ambiente pelo painel.
+- Variáveis de ambiente pelo painel.
 - Skills com permissões.
 - Navegação web e automação fora do terminal.
 - Storage em SQLite quando arquivos JSON/Markdown deixarem de ser suficientes.

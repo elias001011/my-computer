@@ -65,6 +65,15 @@ button.primary:hover {
   background: var(--accent-dark);
 }
 
+button.danger-button {
+  border-color: #e0b4aa;
+  color: var(--danger);
+}
+
+button.danger-button:hover {
+  background: #fff4f1;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -303,6 +312,25 @@ pre {
   padding: 1px 6px;
 }
 
+.copy-message {
+  min-height: 24px;
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.request-error {
+  width: min(820px, 100%);
+  border: 1px solid #e0b4aa;
+  border-radius: 8px;
+  background: #fff7f4;
+  color: var(--danger);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  line-height: 1.35;
+}
+
 .tool-box {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -393,6 +421,21 @@ pre {
 
 .error {
   color: var(--danger);
+}
+
+.secret-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.secret-field input {
+  min-width: 0;
+}
+
+.danger-zone {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
 }
 
 .modal-backdrop {
@@ -507,11 +550,19 @@ pre {
 @media (max-width: 1040px) {
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 300px;
+  }
+
+  .sidebar,
+  .chat-main {
+    height: calc(100vh - 300px);
   }
 
   .inspector {
-    display: none;
+    grid-column: 1 / -1;
+    height: 300px;
     border-left: 0;
+    border-top: 1px solid var(--line);
   }
 }
 
@@ -523,7 +574,7 @@ pre {
   }
 
   .app-shell {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: 128px minmax(0, 1fr) 220px;
   }
 
   .sidebar,
@@ -534,20 +585,61 @@ pre {
   }
 
   .sidebar {
-    max-height: 34vh;
+    max-height: none;
+    overflow: auto;
+    padding: 12px;
+  }
+
+  .sidebar .brand,
+  .runtime {
+    display: none;
+  }
+
+  .sidebar-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chat-list {
+    display: flex;
+    overflow-x: auto;
+    gap: 8px;
+  }
+
+  .chat-item {
+    min-width: 220px;
   }
 
   .chat-main {
     height: auto;
+    min-height: 0;
+  }
+
+  .inspector {
+    height: 220px;
+    overflow: auto;
   }
 
   .chat-header {
     align-items: flex-start;
-    flex-direction: column;
+    padding: 12px;
+    gap: 10px;
   }
 
   .messages {
-    padding: 16px;
+    padding: 12px;
+  }
+
+  .composer {
+    padding: 10px 12px;
+  }
+
+  .composer textarea {
+    min-height: 44px;
+  }
+
+  .secret-field,
+  .setup-grid {
+    grid-template-columns: 1fr;
   }
 
   .modal-backdrop {

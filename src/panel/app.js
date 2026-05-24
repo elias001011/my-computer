@@ -3,11 +3,13 @@ const state = {
   models: [],
   chats: [],
   activeChat: null,
+  activeChatEvents: [],
   persistentMemory: '',
-  events: [],
   runtimeHome: '',
   busy: false,
   settingsOpen: false,
+  apiKeyVisible: false,
+  lastFailedAction: null,
   status: '',
   error: '',
 };
@@ -118,6 +120,7 @@ function renderApp() {
           </div>
         </header>
         <section class="messages" id="messages">
+          ${state.error ? renderErrorBanner() : ''}
           ${chat?.messages?.length ? chat.messages.map(renderMessage).join('') : '<p class="empty">Comece uma conversa.</p>'}
           ${state.busy ? renderPending() : ''}
         </section>
@@ -132,6 +135,10 @@ function renderApp() {
           <h2>Configurações do chat</h2>
           <div class="settings-block">
             <label>
+              Nome do chat
+              <input id="chat-title-input" value="${escapeAttr(chat?.title || '')}" ${!chat ? 'disabled' : ''} />
+            </label>
+            <label>
               Modelo deste chat
               <select id="chat-model-input" ${!chat ? 'disabled' : ''}>
                 ${renderModelOptions(chat?.model || state.config.model)}
@@ -141,7 +148,10 @@ function renderApp() {
               System prompt do chat
               <textarea id="chat-prompt-input" rows="5" ${!chat ? 'disabled' : ''} placeholder="Preferências específicas deste chat.">${escapeHtml(chat?.systemPromptExtra || '')}</textarea>
             </label>
-            <button id="save-chat-settings" ${!chat ? 'disabled' : ''}>Salvar configurações do chat</button>
+            <div class="button-row">
+              <button id="save-chat-settings" ${!chat ? 'disabled' : ''}>Salvar configurações</button>
+              <button id="delete-chat" class="danger-button" ${!chat ? 'disabled' : ''}>Apagar chat</button>
+            </div>
           </div>
         </section>
 
@@ -154,11 +164,12 @@ function renderApp() {
         <section class="inspector-section">
           <h2>Status</h2>
           <div class="status ${state.error ? 'error' : ''}">${escapeHtml(state.error || state.status || 'Pronto')}</div>
+          ${state.error && state.lastFailedAction ? '<button id="retry-action">Tentar novamente</button>' : ''}
         </section>
 
         <section class="inspector-section events-section">
           <h2>Eventos</h2>
-          <div class="event-list">${state.events.map(renderEvent).join('')}</div>
+          <div class="event-list">${state.activeChatEvents.map(renderEvent).join('')}</div>
         </section>
       </aside>
     </div>
@@ -205,8 +216,11 @@ function renderSettingsModal() {
                   </select>
                 </label>
                 <label>
-                  Nova Groq API key
-                  <input name="apiKey" type="password" autocomplete="off" placeholder="${state.config.apiKeySet ? 'já configurada' : 'gsk_...'}" />
+                  Groq API key
+                  <span class="secret-field">
+                    <input name="apiKey" type="${state.apiKeyVisible ? 'text' : 'password'}" autocomplete="off" value="${escapeAttr(state.config.apiKey || '')}" placeholder="gsk_..." />
+                    <button type="button" id="toggle-api-key">${state.apiKeyVisible ? 'Ocultar' : 'Ver'}</button>
+                  </span>
                 </label>
               </div>
               <label>
@@ -228,6 +242,7 @@ function renderSettingsModal() {
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
                 ${renderToolToggle('autoCompact', 'Compactação automática', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
+                ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
               </div>
             </section>
 
@@ -239,6 +254,12 @@ function renderSettingsModal() {
                 <p><strong>Compactar contexto:</strong> pede ao modelo para resumir histórico, memória e decisões em context.md. Esse arquivo entra no prompt das próximas mensagens.</p>
                 <p><strong>compact_context:</strong> tool opcional para a própria IA atualizar context.md quando perceber que a conversa está longa.</p>
               </div>
+            </section>
+
+            <section class="modal-section danger-zone">
+              <h3>Servidor local</h3>
+              <p class="help-text">Encerrar para o processo do My Computer. Para iniciar de novo, rode <code>./install.sh</code> ou <code>npm run start:open</code> nesta pasta.</p>
+              <button type="button" id="shutdown-app" class="danger-button">Encerrar My Computer</button>
             </section>
           </div>
 
@@ -278,12 +299,26 @@ function renderChatItem(chat) {
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
   const modelUsed = message.modelUsed ? `<span class="message-model">${escapeHtml(message.modelUsed)}</span>` : '';
+  const copyButton =
+    message.role === 'assistant'
+      ? `<button class="copy-message" data-message-id="${escapeAttr(message.id)}">Copiar</button>`
+      : '';
   return `
     <article class="message ${escapeAttr(message.role)}">
-      <div class="message-label">${label}${modelUsed}</div>
+      <div class="message-label">${label}${modelUsed}${copyButton}</div>
       ${(message.toolUses || []).map(renderToolUse).join('')}
       <div class="bubble">${formatContent(message.content)}</div>
     </article>
+  `;
+}
+
+function renderErrorBanner() {
+  return `
+    <div class="request-error">
+      <strong>Erro na requisição</strong>
+      <span>${escapeHtml(state.error)}</span>
+      ${state.lastFailedAction ? '<button id="retry-action-inline">Tentar novamente</button>' : ''}
+    </div>
   `;
 }
 
@@ -296,7 +331,7 @@ function renderToolUse(toolUse) {
     <details class="tool-box">
       <summary class="tool-summary">
         <span>Tool usada: ${escapeHtml(toolUse.name)}</span>
-        <span>${result.exitCode === undefined ? escapeHtml(result.action || 'ok') : `exit ${escapeHtml(String(result.exitCode))}`}</span>
+        <span>${result.timedOut ? 'timeout' : result.exitCode === undefined ? escapeHtml(result.action || 'ok') : `exit ${escapeHtml(String(result.exitCode))}`}</span>
       </summary>
       <div class="tool-body">
         ${
@@ -370,15 +405,24 @@ function bindAppEvents() {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
   });
   document.querySelector('#composer').addEventListener('submit', sendMessage);
+  document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
   document.querySelector('#save-memory').addEventListener('click', saveMemory);
   document.querySelector('#save-chat-settings').addEventListener('click', saveChatSettings);
+  document.querySelector('#delete-chat').addEventListener('click', deleteActiveChat);
   document.querySelector('#compact-context').addEventListener('click', compactContext);
   document.querySelector('#save-context').addEventListener('click', saveContext);
+  document.querySelectorAll('.copy-message').forEach((button) => {
+    button.addEventListener('click', () => copyMessage(button.dataset.messageId));
+  });
+  document.querySelector('#retry-action')?.addEventListener('click', retryLastAction);
+  document.querySelector('#retry-action-inline')?.addEventListener('click', retryLastAction);
 
   if (state.settingsOpen) {
     document.querySelector('#general-settings-form').addEventListener('submit', saveGeneralSettings);
     document.querySelector('#close-settings').addEventListener('click', closeSettings);
     document.querySelector('#cancel-settings').addEventListener('click', closeSettings);
+    document.querySelector('#toggle-api-key').addEventListener('click', toggleApiKeyVisibility);
+    document.querySelector('#shutdown-app').addEventListener('click', shutdownApp);
   }
 }
 
@@ -405,6 +449,7 @@ async function createNewChat() {
     const data = await api('/api/chats', { method: 'POST' });
     state.chats = data.chats;
     state.activeChat = data.chat;
+    state.activeChatEvents = [];
   });
 }
 
@@ -412,6 +457,7 @@ async function loadChat(chatId) {
   await runAction('Abrindo chat...', async () => {
     const data = await api(`/api/chats/${chatId}`);
     state.activeChat = data.chat;
+    state.activeChatEvents = data.activeChatEvents || [];
   });
 }
 
@@ -421,7 +467,10 @@ async function sendMessage(event) {
   const content = textarea.value.trim();
   if (!content || !state.activeChat) return;
   textarea.value = '';
+  await sendMessageContent(content);
+}
 
+async function sendMessageContent(content) {
   const localMessage = {
     id: `local-${Date.now()}`,
     role: 'user',
@@ -430,15 +479,62 @@ async function sendMessage(event) {
   };
   state.activeChat.messages = [...state.activeChat.messages, localMessage];
 
-  await runAction('Enviando para Groq...', async () => {
-    const data = await api(`/api/chats/${state.activeChat.id}/messages`, {
-      method: 'POST',
-      body: { content },
+  const chatId = state.activeChat.id;
+  await runAction(
+    'Enviando para Groq...',
+    async () => {
+      const data = await api(`/api/chats/${chatId}/messages`, {
+        method: 'POST',
+        body: { content },
+      });
+      state.activeChat = data.chat;
+      state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+      const fresh = await api('/api/chats');
+      state.chats = fresh.chats;
+      await refreshActiveChatData();
+    },
+    () => sendMessageContent(content),
+  );
+  if (state.error && state.activeChat?.id === chatId) {
+    state.activeChat.messages = state.activeChat.messages.filter((message) => message.id !== localMessage.id);
+    render();
+  }
+}
+
+function handleComposerKeydown(event) {
+  if (event.key !== 'Enter') return;
+  if (event.altKey) return;
+  event.preventDefault();
+  event.currentTarget.form.requestSubmit();
+}
+
+async function retryLastAction() {
+  if (!state.lastFailedAction) return;
+  const retry = state.lastFailedAction;
+  state.lastFailedAction = null;
+  await retry();
+}
+
+async function copyMessage(messageId) {
+  const message = state.activeChat?.messages?.find((item) => item.id === messageId);
+  if (!message) return;
+  await navigator.clipboard.writeText(message.content || '');
+  state.status = 'Mensagem copiada.';
+  render();
+}
+
+async function deleteActiveChat() {
+  if (!state.activeChat) return;
+  const confirmed = window.confirm(`Apagar o chat "${state.activeChat.title}"?`);
+  if (!confirmed) return;
+
+  await runAction('Apagando chat...', async () => {
+    const data = await api(`/api/chats/${state.activeChat.id}`, {
+      method: 'DELETE',
     });
-    state.activeChat = data.chat;
-    const fresh = await api('/api/chats');
-    state.chats = fresh.chats;
-    await refreshBootstrapData();
+    state.chats = data.chats;
+    state.activeChat = data.activeChat;
+    state.activeChatEvents = data.activeChatEvents || [];
   });
 }
 
@@ -450,23 +546,28 @@ async function saveMemory() {
       body: { content },
     });
     state.activeChat = data.chat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    await refreshActiveChatData();
   });
 }
 
 async function saveChatSettings() {
+  const title = document.querySelector('#chat-title-input').value;
   const model = document.querySelector('#chat-model-input').value;
   const systemPromptExtra = document.querySelector('#chat-prompt-input').value;
   await runAction('Salvando configurações do chat...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}`, {
       method: 'PUT',
       body: {
+        title,
         model,
         systemPromptExtra,
       },
     });
     state.activeChat = data.chat;
     state.chats = data.chats;
-    await refreshBootstrapData();
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    await refreshActiveChatData();
   });
 }
 
@@ -479,6 +580,7 @@ async function saveGeneralSettings(event) {
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
       autoCompact: form.get('tool_autoCompact') === 'on',
+      chatTitle: form.get('tool_chatTitle') === 'on',
     };
     const configResponse = await api('/api/config', {
       method: 'PUT',
@@ -498,7 +600,7 @@ async function saveGeneralSettings(event) {
     state.config = configResponse.config;
     state.persistentMemory = memoryResponse.persistentMemory;
     state.settingsOpen = false;
-    await refreshBootstrapData();
+    await refreshActiveChatData();
   });
 }
 
@@ -506,7 +608,7 @@ async function compactContext() {
   await runAction('Compactando contexto...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}/compact`, { method: 'POST' });
     state.activeChat = data.chat;
-    await refreshBootstrapData();
+    await refreshActiveChatData();
   });
 }
 
@@ -515,7 +617,7 @@ async function saveContext() {
     const data = await api(`/api/chats/${state.activeChat.id}/save-context`, { method: 'POST' });
     state.activeChat = data.chat;
     state.status = `Snapshot salvo em ${data.path}`;
-    await refreshBootstrapData();
+    await refreshActiveChatData();
   });
 }
 
@@ -523,9 +625,20 @@ async function refreshBootstrapData() {
   const data = await api('/api/bootstrap');
   state.config = data.config;
   state.models = data.models;
-  state.events = data.events;
   state.chats = data.chats;
   state.persistentMemory = data.persistentMemory;
+  if (!state.activeChat && data.activeChat) {
+    state.activeChat = data.activeChat;
+    state.activeChatEvents = data.activeChatEvents || [];
+  }
+}
+
+async function refreshActiveChatData() {
+  await refreshBootstrapData();
+  if (!state.activeChat) return;
+  const data = await api(`/api/chats/${state.activeChat.id}`);
+  state.activeChat = data.chat;
+  state.activeChatEvents = data.activeChatEvents || [];
 }
 
 function openSettings() {
@@ -538,16 +651,31 @@ function closeSettings() {
   render();
 }
 
-async function runAction(status, action) {
+function toggleApiKeyVisibility() {
+  state.apiKeyVisible = !state.apiKeyVisible;
+  render();
+}
+
+async function shutdownApp() {
+  const confirmed = window.confirm('Encerrar o servidor local do My Computer? Para iniciar depois, rode ./install.sh ou npm run start:open.');
+  if (!confirmed) return;
+  await api('/api/shutdown', { method: 'POST' });
+  state.status = 'My Computer está encerrando. Para iniciar novamente, rode ./install.sh.';
+  render();
+}
+
+async function runAction(status, action, retry = null) {
   state.busy = true;
   state.status = status;
   state.error = '';
+  state.lastFailedAction = null;
   render();
   try {
     await action();
     state.status = 'Pronto';
   } catch (error) {
     state.error = error.message;
+    state.lastFailedAction = retry || (() => runAction(status, action));
   } finally {
     state.busy = false;
     render();

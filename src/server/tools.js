@@ -14,6 +14,11 @@ export const terminalToolDefinition = {
           type: 'string',
           description: 'The exact shell command to execute.',
         },
+        timeoutSeconds: {
+          type: 'number',
+          description:
+            'Optional timeout in seconds, from 1 to 300. Use a short timeout for inspection and a longer one for explicit long-running tasks.',
+        },
       },
       required: ['command'],
       additionalProperties: false,
@@ -102,8 +107,36 @@ export const compactContextToolDefinition = {
   },
 };
 
+export const renameChatToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'rename_chat',
+    description:
+      'Rename the current chat with a short, descriptive title. Usually call this after the first user message if the current title is generic, and call it later if the chat topic changes substantially.',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Short chat title, ideally 3 to 8 words.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for renaming the chat.',
+        },
+      },
+      required: ['title', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export async function runTerminalCommand(command, options = {}) {
-  const timeoutMs = Number(options.timeoutMs || process.env.MC_SHELL_TIMEOUT_MS || 120000);
+  const requestedTimeoutMs = Number(options.timeoutSeconds ? options.timeoutSeconds * 1000 : options.timeoutMs);
+  const timeoutMs = Math.min(
+    Math.max(requestedTimeoutMs || Number(process.env.MC_SHELL_TIMEOUT_MS || 120000), 1000),
+    300000,
+  );
   const outputLimit = Number(options.outputLimit || process.env.MC_SHELL_OUTPUT_LIMIT || 40000);
   const startedAt = Date.now();
   const cwd = options.cwd || process.env.HOME || os.homedir();
@@ -116,14 +149,17 @@ export async function runTerminalCommand(command, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(String(command || ''), {
       cwd,
-      env: process.env,
+      env: { ...process.env, CI: process.env.CI || '1' },
       shell: process.env.SHELL || true,
+      detached: process.platform !== 'win32',
       windowsHide: true,
     });
 
+    child.stdin?.end();
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
+      killProcessTree(child);
     }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
@@ -167,6 +203,26 @@ export async function runTerminalCommand(command, options = {}) {
       });
     });
   });
+}
+
+function killProcessTree(child) {
+  if (process.platform === 'win32') {
+    child.kill('SIGTERM');
+    return;
+  }
+
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+    setTimeout(() => {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }, 1500).unref();
+  } catch {
+    child.kill('SIGTERM');
+  }
 }
 
 function collect(current, next, limit) {

@@ -24,7 +24,6 @@ export async function callGroqChat({
   if (tools?.length) {
     body.tools = tools;
     body.tool_choice = 'auto';
-    body.parallel_tool_calls = false;
   }
 
   const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {

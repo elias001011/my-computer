@@ -33,4 +33,10 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);
+
+  const chatEvents = await store.readEvents({ chatId: chat.id });
+  assert.ok(chatEvents.every((event) => event.chatId === chat.id));
+
+  await store.deleteChat(chat.id);
+  assert.equal((await store.listChats()).length, 0);
 });

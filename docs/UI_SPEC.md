@@ -31,8 +31,11 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 - Cada tool aparece agrupada como `Tool usada` e começa recolhida.
 - `run_terminal_command` mostra comando, stdout e stderr.
 - `memory_chat` mostra input e resultado em JSON.
+- Cada mensagem da IA tem botão de copiar.
+- Erros de request aparecem na conversa e no painel com botão de retry.
 - O modelo ativo aparece no cabeçalho do chat.
 - O usuário pode trocar o modelo do chat durante a conversa.
+- `Enter` envia a mensagem; `Alt+Enter` insere nova linha.
 
 ## Model selection
 
@@ -55,6 +58,7 @@ Inclui:
 - Memória persistente.
 - Toggles de tools.
 - Explicação avançada sobre tools e contexto.
+- Botão para encerrar o servidor local, com instrução de como iniciar novamente.
 
 ## Context and memory controls
 
@@ -64,3 +68,8 @@ Inclui:
 - A IA também pode editar a memória via tool `memory_chat`.
 - A IA pode editar memória global via `persistent_memory`.
 - A IA pode compactar contexto via `compact_context`, se a tool estiver ligada.
+- A IA pode renomear o chat via `rename_chat`, se a tool estiver ligada.
+
+## Chat events
+
+O painel de eventos mostra apenas eventos do chat ativo. Eventos globais continuam no arquivo `events.jsonl`, mas não poluem a visão de cada conversa.

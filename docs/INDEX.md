@@ -18,5 +18,5 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 - Modelo salvo por chat e editável durante a conversa.
 - Runtime central em `~/.my-computer` ou `MY_COMPUTER_HOME`.
 - Painel vanilla: `index.html`, `styles.css`, `app.js`.
-- Tools do MVP: `run_terminal_command`, `memory_chat`, `persistent_memory` e `compact_context`.
+- Tools do MVP: `run_terminal_command`, `memory_chat`, `persistent_memory`, `compact_context` e `rename_chat`.
 - Tools podem ser ligadas/desligadas nas configurações gerais.
