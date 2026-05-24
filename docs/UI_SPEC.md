@@ -2,7 +2,7 @@
 
 ## Shape
 
-O MVP e uma single-page app branca, minimalista e funcional.
+O MVP é uma single-page app branca, minimalista e funcional.
 
 ### Setup inicial
 
@@ -10,41 +10,57 @@ Campos:
 
 - Provider: Groq.
 - Groq API key.
-- Modelo padrao.
-- Idioma da IA, com `Automatico` como padrao.
-- System prompt extra / preferencias do usuario.
+- Modelo padrão em um seletor.
+- Idioma da IA, com `Automático` como padrão.
+- Apelido do usuário.
+- System prompt geral.
 
 ### Layout principal
 
-Desktop usa tres areas:
+Desktop usa três áreas fixas:
 
-- Esquerda: marca, modelo para novo chat, botao de novo chat e lista de chats.
-- Centro: cabecalho do chat, mensagens, tool groups e composer.
-- Direita: configuracao, modelo do chat, memoria Markdown, status e eventos.
+- Esquerda: marca, botão de novo chat, configurações gerais e lista de chats.
+- Centro: cabeçalho do chat, mensagens, tool groups e composer.
+- Direita: configurações do chat, memória Markdown, status e eventos.
 
-Em telas menores, as areas empilham.
+A página não cresce conforme o chat: a área de mensagens rola internamente.
 
 ## Chat behavior
 
-- O historico e persistido por chat.
-- Cada tool aparece agrupada como `Tool usada`.
+- O histórico é persistido por chat.
+- Cada tool aparece agrupada como `Tool usada` e começa recolhida.
 - `run_terminal_command` mostra comando, stdout e stderr.
 - `memory_chat` mostra input e resultado em JSON.
-- O modelo ativo aparece no cabecalho do chat.
-- O usuario pode trocar o modelo do chat durante a conversa.
+- O modelo ativo aparece no cabeçalho do chat.
+- O usuário pode trocar o modelo do chat durante a conversa.
 
 ## Model selection
 
-- O setup define o modelo padrao.
-- Ao criar novo chat, a UI mostra um campo `Modelo do novo chat`.
+- O setup define o modelo padrão.
+- Chat novo usa automaticamente o modelo padrão.
 - O chat guarda o modelo em `metadata.json`.
-- Trocar o modelo durante o chat e permitido e gera evento.
+- Trocar o modelo durante o chat é permitido e gera evento.
 
-Trocar no meio pode mudar estilo e qualidade da resposta, mas nao corrompe o historico. Para o MVP, a melhor regra e permitir, deixando visivel e auditavel.
+Trocar no meio pode mudar estilo, qualidade de tool calling e limite efetivo de contexto, mas não corrompe o histórico. Para o MVP, a regra é permitir, deixando visível e auditável.
+
+## General settings modal
+
+Inclui:
+
+- Apelido.
+- API key da Groq.
+- Modelo padrão.
+- Idioma.
+- System prompt geral.
+- Memória persistente.
+- Toggles de tools.
+- Explicação avançada sobre tools e contexto.
 
 ## Context and memory controls
 
-- `Salvar contexto` cria snapshot em `context-snapshots/`.
-- `Compactar` atualiza `context.md` usando Groq.
-- `Memoria do chat` edita `memory.md` manualmente.
-- A IA tambem pode editar a memoria via tool `memory_chat`.
+- `Salvar snapshot` cria snapshot em `context-snapshots/` e atualiza `context-window.md`.
+- `Compactar contexto` atualiza `context.md` usando Groq.
+- `Memória do chat` edita `memory.md` manualmente.
+- A IA também pode editar a memória via tool `memory_chat`.
+- A IA pode editar memória global via `persistent_memory`.
+- A IA pode compactar contexto via `compact_context`, se a tool estiver ligada.

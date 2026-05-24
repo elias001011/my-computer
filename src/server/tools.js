@@ -52,6 +52,56 @@ export const memoryChatToolDefinition = {
   },
 };
 
+export const persistentMemoryToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'persistent_memory',
+    description:
+      'Read or update the global persistent Markdown memory shared across all chats. Use it for stable user preferences, identity details, long-running project facts, and reusable context that should be available beyond the current chat.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['read', 'write', 'append'],
+          description:
+            'read returns the current persistent memory. write replaces it with the full edited Markdown. append adds new Markdown notes.',
+        },
+        content: {
+          type: 'string',
+          description: 'Markdown content. Required for write and append.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for this persistent memory operation.',
+        },
+      },
+      required: ['action', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const compactContextToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'compact_context',
+    description:
+      'Compact the current chat transcript into durable Markdown context. Use this when the current conversation is getting long, when important context should be preserved, or before the context window gets too full.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Short reason for compacting this chat context now.',
+        },
+      },
+      required: ['reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export async function runTerminalCommand(command, options = {}) {
   const timeoutMs = Number(options.timeoutMs || process.env.MC_SHELL_TIMEOUT_MS || 120000);
   const outputLimit = Number(options.outputLimit || process.env.MC_SHELL_OUTPUT_LIMIT || 40000);

@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { panelDir, runtimeHome } from './paths.js';
 import { compactChat, saveContextWindow, sendUserMessage } from './assistant.js';
+import { groqModels } from './models.js';
 import {
   appendEvent,
   createChat,
@@ -11,9 +12,11 @@ import {
   loadConfig,
   readChat,
   readEvents,
+  readPersistentMemory,
   sanitizeConfig,
   saveConfig,
   updateChatMetadata,
+  writePersistentMemory,
   writeMemory,
 } from './store.js';
 
@@ -61,8 +64,10 @@ async function handleApi(request, response, url) {
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       config: sanitizeConfig(config),
+      models: groqModels,
       chats,
       activeChat,
+      persistentMemory: await readPersistentMemory(),
       events: await readEvents(),
       runtimeHome,
     });
@@ -76,10 +81,19 @@ async function handleApi(request, response, url) {
       apiKey: body.apiKey,
       model: body.model,
       language: body.language || 'auto',
+      userNickname: body.userNickname || '',
       systemPromptExtra: body.systemPromptExtra || '',
+      tools: body.tools,
       setupComplete: true,
     });
     sendJson(response, 200, { config: sanitizeConfig(config) });
+    return;
+  }
+
+  if (method === 'PUT' && parts[1] === 'persistent-memory') {
+    const body = await readBody(request);
+    const persistentMemory = await writePersistentMemory(body.content || '');
+    sendJson(response, 200, { persistentMemory });
     return;
   }
 
@@ -101,9 +115,8 @@ async function handleChatsApi(request, response, parts) {
   }
 
   if (method === 'POST' && !chatId) {
-    const body = await readBody(request);
     const config = await loadConfig();
-    const chat = await createChat(body.title || 'Novo chat', { model: body.model || config.model });
+    const chat = await createChat('Novo chat', { model: config.model });
     sendJson(response, 201, { chat, chats: await listChats() });
     return;
   }
@@ -113,6 +126,7 @@ async function handleChatsApi(request, response, parts) {
     await updateChatMetadata(chatId, {
       title: body.title,
       model: body.model,
+      systemPromptExtra: body.systemPromptExtra,
     });
     await appendEvent({
       type: 'chat.metadata.updated',

@@ -1,14 +1,21 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { chatsDir, configPath, eventsPath, runtimeHome } from './paths.js';
+import { chatsDir, configPath, eventsPath, persistentMemoryPath, runtimeHome } from './paths.js';
 
 export const defaultConfig = Object.freeze({
   setupComplete: false,
   provider: 'groq',
   model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   language: 'auto',
+  userNickname: '',
   systemPromptExtra: '',
+  tools: {
+    terminal: true,
+    chatMemory: true,
+    persistentMemory: true,
+    autoCompact: true,
+  },
   apiKey: process.env.GROQ_API_KEY || '',
 });
 
@@ -16,6 +23,10 @@ export async function ensureRuntime() {
   await fs.mkdir(runtimeHome, { recursive: true, mode: 0o700 });
   await fs.mkdir(chatsDir, { recursive: true, mode: 0o700 });
   await fs.mkdir(path.join(runtimeHome, 'logs'), { recursive: true, mode: 0o700 });
+  await ensureTextFile(
+    persistentMemoryPath,
+    '# Memória persistente\n\nUse este arquivo para informações duráveis entre todos os chats.\n',
+  );
 
   try {
     await fs.access(configPath);
@@ -48,7 +59,9 @@ export async function saveConfig(patch) {
     provider: 'groq',
     model: String(patch.model || current.model || defaultConfig.model).trim(),
     language: String(patch.language || current.language || 'auto').trim(),
+    userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
     systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
+    tools: normalizeTools(patch.tools || current.tools),
     apiKey,
     setupComplete: Boolean(patch.setupComplete ?? true),
     updatedAt: new Date().toISOString(),
@@ -65,7 +78,9 @@ export function sanitizeConfig(config) {
     provider: 'groq',
     model: config.model,
     language: config.language,
+    userNickname: config.userNickname,
     systemPromptExtra: config.systemPromptExtra,
+    tools: normalizeTools(config.tools),
     apiKeySet: Boolean(config.apiKey),
   };
 }
@@ -96,6 +111,7 @@ export async function createChat(title = 'Novo chat', options = {}) {
     id,
     title: normalizeTitle(title),
     model: String(options.model || defaultConfig.model).trim(),
+    systemPromptExtra: String(options.systemPromptExtra || '').trim(),
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     paths: {
@@ -113,10 +129,10 @@ export async function createChat(title = 'Novo chat', options = {}) {
     '# Chat memory\n\nUse este arquivo para notas duraveis que devem acompanhar este chat.\n',
     { mode: 0o600 },
   );
-  await fs.writeFile(metadata.paths.context, '# Context summary\n\nAinda nao compactado.\n', {
+  await fs.writeFile(metadata.paths.context, '# Context summary\n\nAinda não compactado.\n', {
     mode: 0o600,
   });
-  await fs.writeFile(metadata.paths.contextWindow, '# Context window\n\nAinda nao salvo.\n', {
+  await fs.writeFile(metadata.paths.contextWindow, '# Context window\n\nAinda não salvo.\n', {
     mode: 0o600,
   });
   await appendEvent({ type: 'chat.created', chatId: id, details: { title: metadata.title } });
@@ -151,6 +167,10 @@ export async function updateChatMetadata(id, patch) {
     ...patch,
     title: patch.title ? normalizeTitle(patch.title) : metadata.title,
     model: patch.model ? String(patch.model).trim() : metadata.model,
+    systemPromptExtra:
+      patch.systemPromptExtra === undefined
+        ? metadata.systemPromptExtra || ''
+        : String(patch.systemPromptExtra || '').trim(),
     updatedAt: new Date().toISOString(),
   };
   await writeJson(path.join(getChatDir(id), 'metadata.json'), next, 0o600);
@@ -168,6 +188,18 @@ export async function writeMemory(id, content) {
   await touchChat(id);
   await appendEvent({ type: 'chat.memory.updated', chatId: id });
   return readChat(id);
+}
+
+export async function readPersistentMemory() {
+  await ensureRuntime();
+  return readText(persistentMemoryPath, '');
+}
+
+export async function writePersistentMemory(content) {
+  await ensureRuntime();
+  await fs.writeFile(persistentMemoryPath, String(content || ''), { mode: 0o600 });
+  await appendEvent({ type: 'memory.persistent.updated', details: { path: persistentMemoryPath } });
+  return readPersistentMemory();
 }
 
 export async function readContextSummary(id) {
@@ -278,6 +310,15 @@ async function writeJson(filePath, value, mode = 0o600) {
   await fs.rename(tempPath, filePath);
 }
 
+async function ensureTextFile(filePath, content) {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await fs.writeFile(filePath, content, { mode: 0o600 });
+  }
+}
+
 async function readText(filePath, fallback) {
   try {
     return await fs.readFile(filePath, 'utf8');
@@ -290,6 +331,15 @@ async function readText(filePath, fallback) {
 function normalizeTitle(title) {
   const clean = String(title || '').replace(/\s+/g, ' ').trim();
   return clean.slice(0, 80) || 'Novo chat';
+}
+
+function normalizeTools(tools = {}) {
+  return {
+    terminal: tools.terminal !== false,
+    chatMemory: tools.chatMemory !== false,
+    persistentMemory: tools.persistentMemory !== false,
+    autoCompact: tools.autoCompact !== false,
+  };
 }
 
 function stamp(date) {

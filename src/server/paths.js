@@ -10,3 +10,4 @@ export const runtimeHome = path.resolve(
 export const chatsDir = path.join(runtimeHome, 'chats');
 export const configPath = path.join(runtimeHome, 'config.json');
 export const eventsPath = path.join(runtimeHome, 'events.jsonl');
+export const persistentMemoryPath = path.join(runtimeHome, 'persistent-memory.md');

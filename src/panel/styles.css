@@ -22,13 +22,14 @@
 html,
 body,
 #app {
-  min-height: 100%;
+  height: 100%;
   margin: 0;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
+  overflow: hidden;
 }
 
 button,
@@ -106,7 +107,8 @@ pre {
 
 .loading,
 .setup-screen {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: auto;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -144,26 +146,30 @@ pre {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 320px;
+  overflow: hidden;
 }
 
 .sidebar,
 .inspector {
-  min-height: 100vh;
+  min-height: 0;
+  height: 100vh;
   border-right: 1px solid var(--line);
   background: var(--surface);
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow: hidden;
 }
 
 .inspector {
   border-right: 0;
   border-left: 1px solid var(--line);
   background: #fbfbfa;
+  overflow: auto;
 }
 
 .brand h1,
@@ -182,16 +188,23 @@ pre {
 .runtime,
 .meta,
 .empty,
-.status {
+.status,
+.help-text {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.sidebar-actions {
+  display: grid;
+  gap: 8px;
 }
 
 .chat-list {
   display: grid;
   gap: 8px;
   overflow: auto;
+  min-height: 0;
 }
 
 .chat-item {
@@ -210,9 +223,11 @@ pre {
 
 .chat-main {
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  height: 100vh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -277,6 +292,15 @@ pre {
 .message-label {
   color: var(--muted);
   font-size: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.message-model {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
 }
 
 .tool-box {
@@ -304,6 +328,10 @@ pre {
   padding: 12px;
 }
 
+.tool-box:not([open]) .tool-summary {
+  border-bottom: 0;
+}
+
 .composer {
   border-top: 1px solid var(--line);
   padding: 16px 22px;
@@ -318,9 +346,14 @@ pre {
   max-height: 180px;
 }
 
+.inspector {
+  min-height: 0;
+}
+
 .inspector-section {
   display: grid;
   gap: 10px;
+  min-height: 0;
 }
 
 .inspector-section h2 {
@@ -335,10 +368,19 @@ pre {
   font-size: 13px;
 }
 
+.persistent-memory-editor {
+  min-height: 220px;
+}
+
 .event-list {
   display: grid;
   gap: 8px;
   overflow: auto;
+  min-height: 0;
+}
+
+.events-section {
+  flex: 1;
 }
 
 .event-item {
@@ -353,16 +395,123 @@ pre {
   color: var(--danger);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(23 23 23 / 0.24);
+  padding: 24px;
+}
+
+.modal {
+  width: min(920px, 100%);
+  max-height: min(880px, calc(100vh - 48px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 24px 80px rgb(23 23 23 / 0.18);
+  overflow: hidden;
+}
+
+.modal form {
+  max-height: inherit;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.modal-header,
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-footer {
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  justify-content: flex-end;
+}
+
+.modal-header h2,
+.modal-section h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.modal-header h2 {
+  font-size: 20px;
+}
+
+.modal-header p,
+.modal-section p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.modal-body {
+  overflow: auto;
+  padding: 18px;
+  display: grid;
+  gap: 22px;
+}
+
+.modal-section {
+  display: grid;
+  gap: 12px;
+}
+
+.toggle-list,
+.explain-list {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+  padding: 11px 12px;
+  color: var(--text);
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.toggle-row span {
+  display: grid;
+  gap: 3px;
+}
+
+.toggle-row small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.explain-list p {
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+}
+
 @media (max-width: 1040px) {
   .app-shell {
-    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr);
   }
 
   .inspector {
-    grid-column: 1 / -1;
-    min-height: auto;
+    display: none;
     border-left: 0;
-    border-top: 1px solid var(--line);
   }
 }
 
@@ -373,11 +522,23 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .app-shell {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
   .sidebar,
   .inspector {
-    min-height: auto;
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .sidebar {
+    max-height: 34vh;
+  }
+
+  .chat-main {
+    height: auto;
   }
 
   .chat-header {
@@ -387,5 +548,13 @@ pre {
 
   .messages {
     padding: 16px;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 20px);
   }
 }

@@ -8,7 +8,7 @@
 - Chat persistente.
 - Modelo por chat.
 - Tool de terminal.
-- Tool de memoria de chat.
+- Tool de memória de chat.
 - Compactacao e snapshot de contexto.
 - Install/uninstall simples.
 

@@ -25,6 +25,9 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const updated = await store.readChat(chat.id);
   assert.match(updated.memory, /keep this/);
 
+  await store.writePersistentMemory('# Global\n\n- cross-chat');
+  assert.match(await store.readPersistentMemory(), /cross-chat/);
+
   const snapshotPath = await store.saveContextSnapshot(chat.id, '# Context');
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
 

@@ -7,14 +7,22 @@ import {
   readChat,
   readContextSummary,
   readMemory,
+  readPersistentMemory,
   loadConfig,
   saveContextSnapshot,
   saveCurrentContextWindow,
   updateChatMetadata,
   writeMemory,
+  writePersistentMemory,
   writeContextSummary,
 } from './store.js';
-import { memoryChatToolDefinition, runTerminalCommand, terminalToolDefinition } from './tools.js';
+import {
+  compactContextToolDefinition,
+  memoryChatToolDefinition,
+  persistentMemoryToolDefinition,
+  runTerminalCommand,
+  terminalToolDefinition,
+} from './tools.js';
 
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
@@ -38,9 +46,11 @@ export async function sendUserMessage(chatId, content) {
   }
 
   const chat = await readChat(chatId);
+  const persistentMemory = await readPersistentMemory();
   const effectiveConfig = { ...config, model: chat.model || config.model };
-  const workingMessages = buildProviderMessages(chat, effectiveConfig);
+  const workingMessages = buildProviderMessages(chat, effectiveConfig, persistentMemory);
   const toolUses = [];
+  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let finalContent = '';
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
@@ -48,7 +58,7 @@ export async function sendUserMessage(chatId, content) {
       apiKey: config.apiKey,
       model: effectiveConfig.model,
       messages: workingMessages,
-      tools: [terminalToolDefinition, memoryChatToolDefinition],
+      tools: enabledTools,
     });
 
     const toolCalls = assistantMessage.tool_calls || [];
@@ -82,14 +92,18 @@ export async function sendUserMessage(chatId, content) {
       messages: workingMessages,
       tools: [],
     });
-    finalContent = assistantMessage.content || 'Terminei a execucao das tools, mas nao recebi texto final.';
+    finalContent = assistantMessage.content || 'Terminei a execução das tools, mas não recebi texto final.';
   }
 
-  const savedAssistantMessage = createMessage('assistant', finalContent, { toolUses });
+  const savedAssistantMessage = createMessage('assistant', finalContent, {
+    modelUsed: effectiveConfig.model,
+    toolUses,
+  });
   await appendMessages(chatId, [savedAssistantMessage]);
 
   const updatedChat = await readChat(chatId);
-  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig));
+  const latestPersistentMemory = await readPersistentMemory();
+  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
   await appendEvent({ type: 'chat.message.completed', chatId, details: { toolCount: toolUses.length } });
 
   return {
@@ -102,6 +116,7 @@ export async function sendUserMessage(chatId, content) {
 export async function compactChat(chatId) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
+  const persistentMemory = await readPersistentMemory();
   const effectiveConfig = { ...config, model: chat.model || config.model };
   const transcript = renderTranscript(chat.messages, MAX_CONTEXT_SAVE_CHARS);
   const contextSummary = await readContextSummary(chatId);
@@ -122,6 +137,7 @@ export async function compactChat(chatId) {
         role: 'user',
         content: [
           `Existing saved context:\n${contextSummary}`,
+          `Persistent memory:\n${persistentMemory}`,
           `Chat memory:\n${chat.memory}`,
           `Transcript:\n${transcript}`,
         ].join('\n\n---\n\n'),
@@ -131,21 +147,22 @@ export async function compactChat(chatId) {
 
   const summary = response.content || '# Context summary\n\nNenhum resumo retornado.';
   const updatedChat = await writeContextSummary(chatId, summary);
-  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig));
+  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, persistentMemory));
   return { summary, chat: await readChat(chatId) };
 }
 
 export async function saveContextWindow(chatId) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
+  const persistentMemory = await readPersistentMemory();
   const effectiveConfig = { ...config, model: chat.model || config.model };
-  const content = buildContextWindowMarkdown(chat, effectiveConfig);
+  const content = buildContextWindowMarkdown(chat, effectiveConfig, persistentMemory);
   const path = await saveContextSnapshot(chatId, content);
   await saveCurrentContextWindow(chatId, content);
   return { path, chat: await readChat(chatId) };
 }
 
-export function buildContextWindowMarkdown(chat, config) {
+export function buildContextWindowMarkdown(chat, config, persistentMemory = '') {
   return [
     `# Context window - ${chat.title}`,
     '',
@@ -154,14 +171,23 @@ export function buildContextWindowMarkdown(chat, config) {
     `- Provider: ${config.provider}`,
     `- Model: ${chat.model || config.model}`,
     `- Language: ${config.language}`,
+    `- User nickname: ${config.userNickname || 'Não definido'}`,
     '',
-    '## User preferences',
+    '## General system prompt',
     '',
-    config.systemPromptExtra || 'Nenhuma preferencia extra configurada.',
+    config.systemPromptExtra || 'Nenhuma preferência geral configurada.',
+    '',
+    '## Persistent memory',
+    '',
+    persistentMemory || 'Sem memória persistente.',
+    '',
+    '## Chat preferences',
+    '',
+    chat.systemPromptExtra || 'Nenhuma preferência específica do chat.',
     '',
     '## Chat memory',
     '',
-    chat.memory || 'Sem memoria de chat.',
+    chat.memory || 'Sem memória de chat.',
     '',
     '## Compacted context',
     '',
@@ -173,12 +199,12 @@ export function buildContextWindowMarkdown(chat, config) {
   ].join('\n');
 }
 
-function buildProviderMessages(chat, config) {
-  const systemPrompt = buildSystemPrompt(chat, config);
+function buildProviderMessages(chat, config, persistentMemory) {
+  const systemPrompt = buildSystemPrompt(chat, config, persistentMemory);
   return [{ role: 'system', content: systemPrompt }, ...selectRecentMessages(chat.messages)];
 }
 
-function buildSystemPrompt(chat, config) {
+function buildSystemPrompt(chat, config, persistentMemory) {
   const languageInstruction =
     config.language === 'auto'
       ? 'Respond in the same language the user is using.'
@@ -186,21 +212,41 @@ function buildSystemPrompt(chat, config) {
 
   return [
     'You are My Computer, a self-hosted AI assistant running on the user machine.',
+    config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
-    'You have two tools: run_terminal_command and memory_chat.',
-    'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer.',
-    'When stable user preferences, decisions, file paths, facts, or TODOs appear, use memory_chat to read or update the current chat memory.',
-    'For memory_chat write operations, send the full edited Markdown memory file, using the current memory below as the base.',
+    `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
+    config.tools?.terminal
+      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer.'
+      : 'Terminal execution is disabled by user settings.',
+    config.tools?.chatMemory
+      ? 'When stable user preferences, decisions, file paths, facts, or TODOs appear inside this chat, use memory_chat to read or update the current chat memory.'
+      : 'Chat memory editing through tools is disabled by user settings.',
+    config.tools?.persistentMemory
+      ? 'When stable information should survive across all chats, use persistent_memory to read or update the global memory.'
+      : 'Persistent memory editing through tools is disabled by user settings.',
+    config.tools?.autoCompact
+      ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
+      : 'Automatic context compaction through tools is disabled by user settings.',
+    config.tools?.chatMemory
+      ? 'For memory_chat write operations, send the full edited Markdown memory file, using the current memory below as the base.'
+      : '',
+    config.tools?.persistentMemory
+      ? 'For persistent_memory write operations, send the full edited Markdown memory file, using the current persistent memory below as the base.'
+      : '',
     'For this MVP there is no extra confirmation step before terminal execution. Be careful, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
     `Runtime folder: ${runtimeHome}`,
     `Chat memory file: ${chat.paths.memory}`,
     `Saved context file: ${chat.paths.context}`,
     `Current context window file: ${chat.paths.contextWindow}`,
     '',
-    'Always use the chat memory and compacted context below as durable context for this chat.',
+    'Always use the persistent memory, chat memory, and compacted context below as durable context.',
+    '',
+    '<persistent_memory_md>',
+    persistentMemory || 'Sem memória persistente.',
+    '</persistent_memory_md>',
     '',
     '<chat_memory_md>',
-    chat.memory || 'Sem memoria de chat.',
+    chat.memory || 'Sem memória de chat.',
     '</chat_memory_md>',
     '',
     '<compacted_context_md>',
@@ -210,6 +256,10 @@ function buildSystemPrompt(chat, config) {
     '<extra_user_preferences>',
     config.systemPromptExtra || 'Nenhuma preferencia extra configurada.',
     '</extra_user_preferences>',
+    '',
+    '<chat_specific_preferences>',
+    chat.systemPromptExtra || 'Nenhuma preferência específica do chat.',
+    '</chat_specific_preferences>',
   ].join('\n');
 }
 
@@ -243,6 +293,14 @@ async function executeToolCall(chatId, toolCall) {
     return executeMemoryToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'persistent_memory') {
+    return executePersistentMemoryToolCall(chatId, toolCall.id, input);
+  }
+
+  if (name === 'compact_context') {
+    return executeCompactContextToolCall(chatId, toolCall.id, input);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -270,6 +328,102 @@ async function executeToolCall(chatId, toolCall) {
     name,
     input: { command: input.command },
     result,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function executeCompactContextToolCall(chatId, toolCallId, input) {
+  const compacted = await compactChat(chatId);
+  await appendEvent({
+    type: 'tool.compact_context',
+    chatId,
+    details: { reason: input.reason },
+  });
+  return {
+    id: toolCallId,
+    name: 'compact_context',
+    input,
+    result: {
+      action: 'compact',
+      summary: truncate(compacted.summary, 12000),
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function buildEnabledToolDefinitions(tools = {}) {
+  return [
+    tools.terminal !== false ? terminalToolDefinition : null,
+    tools.chatMemory !== false ? memoryChatToolDefinition : null,
+    tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
+    tools.autoCompact !== false ? compactContextToolDefinition : null,
+  ].filter(Boolean);
+}
+
+function describeEnabledTools(tools = {}) {
+  return [
+    tools.terminal !== false ? 'run_terminal_command' : null,
+    tools.chatMemory !== false ? 'memory_chat' : null,
+    tools.persistentMemory !== false ? 'persistent_memory' : null,
+    tools.autoCompact !== false ? 'compact_context' : null,
+  ].filter(Boolean);
+}
+
+async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
+  const action = input.action || 'read';
+  const previous = await readPersistentMemory();
+
+  if (action === 'read') {
+    await appendEvent({ type: 'tool.persistent_memory.read', chatId, details: { reason: input.reason } });
+    return {
+      id: toolCallId,
+      name: 'persistent_memory',
+      input,
+      result: {
+        action,
+        content: truncate(previous, 12000),
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const content = String(input.content || '').trim();
+  if (!content) {
+    return {
+      id: toolCallId,
+      name: 'persistent_memory',
+      input,
+      result: {
+        action,
+        error: 'content is required for write and append actions',
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const next =
+    action === 'append'
+      ? `${previous.trim()}\n\n${content}\n`
+      : content.endsWith('\n')
+        ? content
+        : `${content}\n`;
+
+  await writePersistentMemory(next);
+  await appendEvent({
+    type: `tool.persistent_memory.${action}`,
+    chatId,
+    details: { reason: input.reason },
+  });
+
+  return {
+    id: toolCallId,
+    name: 'persistent_memory',
+    input,
+    result: {
+      action,
+      previousContent: truncate(previous, 4000),
+      content: truncate(next, 12000),
+    },
     createdAt: new Date().toISOString(),
   };
 }
