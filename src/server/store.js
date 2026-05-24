@@ -17,6 +17,19 @@ export const defaultConfig = Object.freeze({
     persistentMemory: true,
     autoCompact: true,
     chatTitle: true,
+    webSearch: true,
+    searchTerminal: false,
+    alwaysAllow: false,
+    terminalMode: 'standard',
+  },
+  context: {
+    autoCompactEnabled: false,
+    autoCompactChars: 24000,
+    autoCompactMinMessages: 12,
+  },
+  server: {
+    networkEnabled: false,
+    authPassword: '',
   },
   apiKey: process.env.GROQ_API_KEY || '',
   providerSettings: buildDefaultProviderSettings(),
@@ -70,6 +83,14 @@ export async function saveConfig(patch) {
     userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
     systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
     tools: normalizeTools(patch.tools || current.tools),
+    context: normalizeContextSettings({
+      ...current.context,
+      ...(patch.context || {}),
+    }),
+    server: normalizeServerSettings({
+      ...current.server,
+      ...(patch.server || {}),
+    }),
     providerSettings,
     customModels: normalizeCustomModels({
       ...current.customModels,
@@ -99,6 +120,8 @@ export function sanitizeConfig(config) {
     userNickname: config.userNickname,
     systemPromptExtra: config.systemPromptExtra,
     tools: normalizeTools(config.tools),
+    context: normalizeContextSettings(config.context),
+    server: normalizeServerSettings(config.server),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
     modelCapabilities: normalizeModelCapabilities(config.modelCapabilities || {}),
@@ -137,6 +160,7 @@ export async function createChat(title = 'Novo chat', options = {}) {
     model: String(options.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(options.modelSettings || {}),
     systemPromptExtra: String(options.systemPromptExtra || '').trim(),
+    lastAutoCompactMessageCount: 0,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     paths: {
@@ -448,6 +472,7 @@ export async function exportRuntimeData() {
         model: fullChat.model,
         modelSettings: normalizeModelSettings(fullChat.modelSettings || {}),
         systemPromptExtra: fullChat.systemPromptExtra || '',
+        lastAutoCompactMessageCount: Number(fullChat.lastAutoCompactMessageCount || 0),
         createdAt: fullChat.createdAt,
         updatedAt: fullChat.updatedAt,
       },
@@ -522,6 +547,7 @@ async function readChatMetadata(id) {
     model: String(metadata.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(metadata.modelSettings || {}),
     systemPromptExtra: String(metadata.systemPromptExtra || '').trim(),
+    lastAutoCompactMessageCount: Number(metadata.lastAutoCompactMessageCount || 0),
     paths: {
       ...(metadata.paths || {}),
       memory: metadata.paths?.memory || path.join(getChatDir(id), 'memory.md'),
@@ -547,6 +573,7 @@ async function writeImportedChat(importedChat = {}) {
     model: String(importedMetadata.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(importedMetadata.modelSettings || {}),
     systemPromptExtra: String(importedMetadata.systemPromptExtra || '').trim(),
+    lastAutoCompactMessageCount: Number(importedMetadata.lastAutoCompactMessageCount || 0),
     createdAt: importedMetadata.createdAt || now,
     updatedAt: now,
     paths: {
@@ -662,6 +689,26 @@ function normalizeTools(tools = {}) {
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
     chatTitle: tools.chatTitle !== false,
+    webSearch: tools.webSearch !== false,
+    searchTerminal: tools.searchTerminal === true,
+    alwaysAllow: tools.alwaysAllow === true,
+    terminalMode: tools.terminalMode === 'isolated' ? 'isolated' : 'standard',
+  };
+}
+
+function normalizeContextSettings(context = {}) {
+  return {
+    autoCompactEnabled: context.autoCompactEnabled === true,
+    autoCompactChars: clampInteger(context.autoCompactChars, 8000, 120000, 24000),
+    autoCompactMinMessages: clampInteger(context.autoCompactMinMessages, 2, 80, 12),
+  };
+}
+
+function normalizeServerSettings(server = {}) {
+  const authPassword = String(server.authPassword || '').trim();
+  return {
+    networkEnabled: server.networkEnabled === true && Boolean(authPassword),
+    authPassword,
   };
 }
 
@@ -684,6 +731,8 @@ function normalizeConfig(config = {}) {
     userNickname: String(config.userNickname || '').trim(),
     systemPromptExtra: String(config.systemPromptExtra || '').trim(),
     tools: normalizeTools(config.tools || defaultConfig.tools),
+    context: normalizeContextSettings(config.context || defaultConfig.context),
+    server: normalizeServerSettings(config.server || defaultConfig.server),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
     modelCapabilities: normalizeModelCapabilities(config.modelCapabilities || {}),
@@ -814,6 +863,12 @@ function numberInRange(value, min, max) {
   return Math.min(max, Math.max(min, number));
 }
 
+function clampInteger(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
 function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {
   const provider = normalizeProviderId(providerId);
   return providerSettings[provider]?.apiKeys?.[0]?.value || '';
@@ -825,12 +880,14 @@ function getAttachmentsMetadataPath(id) {
 
 function classifyAttachment(mimeType, name) {
   if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
   if (isTextLike(mimeType, name)) return 'text';
   return 'document';
 }
 
 function defaultAttachmentSendMode(mimeType, name, extraction) {
   if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'reference';
   if (extraction.status === 'extracted') return 'text';
   return 'reference';
 }
@@ -840,7 +897,9 @@ function extractAttachmentText(buffer, file) {
     return {
       status: 'reference',
       text: '',
-      note: 'Arquivo salvo no chat. O MVP ainda não extrai texto deste formato.',
+      note: file.mimeType.startsWith('video/')
+        ? 'Vídeo salvo no chat. O MVP ainda não envia vídeo nativo para providers; a IA recebe caminho/metadados.'
+        : 'Arquivo salvo no chat. O MVP ainda não extrai texto deste formato.',
     };
   }
 

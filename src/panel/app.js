@@ -10,7 +10,10 @@ const state = {
   runtimeHome: '',
   busy: false,
   settingsOpen: false,
+  chatSettingsOpen: false,
   chatContextOpen: false,
+  contextEditorOpen: false,
+  contextEditor: null,
   modelSettingsOpen: false,
   settingsProvider: '',
   pendingAttachments: [],
@@ -18,6 +21,7 @@ const state = {
   apiKeyVisible: false,
   setupApiKeyVisible: false,
   lastFailedAction: null,
+  eventPollingTimer: null,
   status: '',
   error: '',
 };
@@ -124,6 +128,27 @@ function renderSetup() {
             System prompt geral
             <textarea name="systemPromptExtra" rows="5" placeholder="Preferências gerais de tom, formato, limites e jeito de trabalhar."></textarea>
           </label>
+          <section class="setup-assist">
+            <h2>Segurança inicial</h2>
+            <label class="toggle-row">
+              <input type="checkbox" name="alwaysAllowTools" />
+              <span>
+                <strong>Sempre permitir qualquer tool</strong>
+                <small>Desligado por padrão. Quando desligado, a IA precisa da sua aprovação na UI antes de executar tools.</small>
+              </span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" name="networkEnabled" />
+              <span>
+                <strong>Abrir painel para a rede local</strong>
+                <small>Exige senha abaixo e só vale depois de reiniciar o servidor. Use apenas em rede confiável.</small>
+              </span>
+            </label>
+            <label>
+              Senha da rede local
+              <input name="authPassword" type="password" autocomplete="new-password" placeholder="Obrigatória para abrir na rede" />
+            </label>
+          </section>
           <div class="button-row">
             <button class="primary" type="submit">Salvar e abrir chat</button>
           </div>
@@ -185,11 +210,13 @@ function renderApp() {
           <div class="chat-header-actions">
             <button id="save-context" ${!chat || state.busy ? 'disabled' : ''}>Salvar snapshot</button>
             <button id="compact-context" ${!chat || state.busy ? 'disabled' : ''}>Compactar contexto</button>
+            <button class="icon-button small-icon" id="edit-context" ${!chat || state.busy ? 'disabled' : ''} title="Editar contexto compactado" aria-label="Editar contexto compactado">✎</button>
           </div>
         </header>
         <section class="messages" id="messages">
           ${state.error ? renderErrorBanner() : ''}
           ${chat?.messages?.length ? chat.messages.map(renderMessage).join('') : '<p class="empty">Comece uma conversa.</p>'}
+          ${renderContextEventCards()}
           ${state.busy ? renderPending() : ''}
         </section>
         <form class="composer" id="composer">
@@ -201,7 +228,7 @@ function renderApp() {
               <span aria-hidden="true">+</span>
               <input id="file-input" type="file" multiple ${!chat || state.busy ? 'disabled' : ''} />
             </label>
-            <textarea name="content" placeholder="Digite uma mensagem..." ${state.busy ? 'disabled' : ''}></textarea>
+            <textarea name="content" placeholder="Digite uma mensagem..." ${state.busy ? 'disabled' : ''}>${escapeHtml(getComposerDraft(chat?.id))}</textarea>
             <button class="primary icon-button" type="submit" aria-label="Enviar" title="Enviar" ${state.busy ? 'disabled' : ''}>
               <span aria-hidden="true">↑</span>
             </button>
@@ -210,6 +237,9 @@ function renderApp() {
       </main>
 
       <aside class="inspector">
+        <section class="inspector-section mobile-chat-settings-entry">
+          <button type="button" id="open-chat-settings-mobile" ${!chat ? 'disabled' : ''}>Configurações de chat</button>
+        </section>
         <section class="inspector-section">
           <h2>Configurações do chat</h2>
           <div class="settings-block">
@@ -265,7 +295,9 @@ function renderApp() {
       </aside>
     </div>
     ${state.settingsOpen ? renderSettingsModal() : ''}
+    ${state.chatSettingsOpen ? renderChatSettingsModal() : ''}
     ${state.chatContextOpen ? renderChatContextModal() : ''}
+    ${state.contextEditorOpen ? renderContextEditorModal() : ''}
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
   `;
 
@@ -389,21 +421,67 @@ function renderSettingsModal() {
               <h3>Tools</h3>
               <div class="toggle-list">
                 ${renderToolToggle('terminal', 'Terminal local', 'Permite que a IA execute comandos no terminal por run_terminal_command.')}
+                ${renderToolToggle('webSearch', 'Pesquisa web', 'Permite que a IA solicite web_search quando informação atual ou fontes forem necessárias.')}
+                ${renderToolToggle('searchTerminal', 'Pesquisa via terminal', 'Executa a busca por uma chamada local de terminal. Necessário para Ollama e providers sem busca nativa neste MVP.')}
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
                 ${renderToolToggle('autoCompact', 'Compactação automática', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
+                ${renderToolToggle('alwaysAllow', 'Sempre permitir qualquer tool', 'Quando ligado, tools executam sem aprovação. Quando desligado, a UI pede Permitir ou Negar antes de executar.')}
               </div>
+              <label>
+                Método do terminal
+                <select name="terminalMode">
+                  <option value="standard" ${state.config.tools?.terminalMode !== 'isolated' ? 'selected' : ''}>Padrão: terminal do usuário</option>
+                  <option value="isolated" ${state.config.tools?.terminalMode === 'isolated' ? 'selected' : ''}>Isolado leve: HOME sandbox do My Computer</option>
+                </select>
+              </label>
+              <p class="help-text">O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.</p>
             </section>
 
             <section class="modal-section">
               <h3>Contexto</h3>
+              <div class="toggle-list">
+                <label class="toggle-row">
+                  <input type="checkbox" name="autoCompactEnabled" ${state.config.context?.autoCompactEnabled ? 'checked' : ''} />
+                  <span>
+                    <strong>Compactar automaticamente</strong>
+                    <small>Depois de uma resposta, o app compacta o chat quando o contexto estimado passar do limite configurado.</small>
+                  </span>
+                </label>
+              </div>
+              <div class="setup-grid">
+                <label>
+                  Limite estimado para compactar
+                  <input name="autoCompactChars" type="number" min="8000" max="120000" step="1000" value="${escapeAttr(state.config.context?.autoCompactChars || 24000)}" />
+                </label>
+                <label>
+                  Mínimo de mensagens entre compactações
+                  <input name="autoCompactMinMessages" type="number" min="2" max="80" step="1" value="${escapeAttr(state.config.context?.autoCompactMinMessages || 12)}" />
+                </label>
+              </div>
               <div class="explain-list">
                 <p><strong>Janela interna do modelo:</strong> limite real do modelo/provider em uso. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.</p>
                 <p><strong>Salvar snapshot:</strong> salva uma fotografia Markdown do estado atual em context-snapshots e atualiza context-window.md. Não muda o prompt futuro por si só.</p>
                 <p><strong>Compactar contexto:</strong> pede ao modelo para resumir histórico, memória e decisões em context.md. Esse arquivo entra no prompt das próximas mensagens.</p>
                 <p><strong>compact_context:</strong> tool opcional para a própria IA atualizar context.md quando perceber que a conversa está longa.</p>
               </div>
+            </section>
+
+            <section class="modal-section">
+              <h3>Rede local</h3>
+              <p class="help-text">Por padrão o My Computer escuta só em 127.0.0.1. Abrir para a rede usa 0.0.0.0 no próximo restart e exige autenticação básica com senha única.</p>
+              <label class="toggle-row">
+                <input type="checkbox" name="networkEnabled" ${state.config.server?.networkEnabled ? 'checked' : ''} />
+                <span>
+                  <strong>Abrir painel para a rede</strong>
+                  <small>Permite acessar pelo IP local da máquina. Para acesso fora da rede, precisaremos projetar HTTPS, usuários e permissões com mais calma.</small>
+                </span>
+              </label>
+              <label>
+                Senha de acesso
+                <input name="authPassword" type="password" autocomplete="new-password" value="${escapeAttr(state.config.server?.authPassword || '')}" placeholder="Obrigatória para rede local" />
+              </label>
             </section>
 
             <section class="modal-section">
@@ -428,6 +506,69 @@ function renderSettingsModal() {
           <footer class="modal-footer">
             <button type="button" id="cancel-settings">Cancelar</button>
             <button class="primary" type="submit">Salvar configurações</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderChatSettingsModal() {
+  const chat = state.activeChat;
+  const chatProviderId = chat?.provider || state.config.provider;
+  const chatModel = chat?.model || state.config.model;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="mobile-chat-settings-title">
+        <form id="mobile-chat-settings-form">
+          <header class="modal-header">
+            <div>
+              <h2 id="mobile-chat-settings-title">Configurações de chat</h2>
+              <p>Provider, modelo e atalhos deste chat.</p>
+            </div>
+            <button type="button" id="close-chat-settings-mobile" aria-label="Fechar">×</button>
+          </header>
+          <div class="modal-body">
+            <section class="modal-section">
+              <div class="settings-block">
+                <label>
+                  Nome do chat
+                  <input id="mobile-chat-title-input" value="${escapeAttr(chat?.title || '')}" ${!chat ? 'disabled' : ''} />
+                </label>
+                <label>
+                  Provider deste chat
+                  <select id="mobile-chat-provider-input" ${!chat ? 'disabled' : ''}>
+                    ${renderProviderOptions(chatProviderId)}
+                  </select>
+                </label>
+                <label>
+                  Modelo deste chat
+                  <select id="mobile-chat-model-input" ${!chat ? 'disabled' : ''}>
+                    ${renderModelOptions(chatProviderId, chatModel)}
+                  </select>
+                </label>
+                <label class="${isKnownModel(chatProviderId, chatModel) ? 'hidden' : ''}" id="mobile-chat-custom-model-row">
+                  Modelo personalizado
+                  <input id="mobile-chat-custom-model-input" value="${isKnownModel(chatProviderId, chatModel) ? '' : escapeAttr(chatModel)}" ${!chat ? 'disabled' : ''} placeholder="provider/model ou nome local" />
+                </label>
+                <label class="toggle-row ${isKnownModel(chatProviderId, chatModel) ? 'hidden' : ''}" id="mobile-chat-custom-model-images-row">
+                  <input type="checkbox" id="mobile-chat-custom-model-images" ${modelSupportsImages(chatProviderId, chatModel) ? 'checked' : ''} ${!chat ? 'disabled' : ''} />
+                  <span>
+                    <strong>Este modelo suporta imagens</strong>
+                    <small>Use apenas se o endpoint aceitar imagens multimodais.</small>
+                  </span>
+                </label>
+                <div class="button-row stacked-actions">
+                  <button type="button" id="mobile-open-chat-context" ${!chat ? 'disabled' : ''}>Prompt e memória</button>
+                  <button type="button" id="mobile-open-model-settings" ${!chat ? 'disabled' : ''}>Configurações do modelo</button>
+                </div>
+              </div>
+            </section>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" id="cancel-chat-settings-mobile">Cancelar</button>
+            <button type="button" id="mobile-delete-chat" class="danger-button" ${!chat ? 'disabled' : ''}>Apagar chat</button>
+            <button class="primary" type="submit" ${!chat ? 'disabled' : ''}>Salvar</button>
           </footer>
         </form>
       </section>
@@ -473,6 +614,35 @@ function renderChatContextModal() {
   `;
 }
 
+function renderContextEditorModal() {
+  const context = state.contextEditor || {};
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="context-editor-title">
+        <form id="context-editor-form">
+          <header class="modal-header">
+            <div>
+              <h2 id="context-editor-title">Contexto compactado</h2>
+              <p>${escapeHtml(context.path || 'context.md')}</p>
+            </div>
+            <button type="button" id="close-context-editor" aria-label="Fechar">×</button>
+          </header>
+          <div class="modal-body">
+            <section class="modal-section">
+              <p class="help-text">Este Markdown entra no prompt das próximas mensagens como resumo durável do chat. Edite para corrigir fatos, remover ruído ou preservar decisões importantes.</p>
+              <textarea id="context-editor-input" class="memory-editor">${escapeHtml(context.content || '')}</textarea>
+            </section>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" id="cancel-context-editor">Cancelar</button>
+            <button class="primary" type="submit">Salvar contexto</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function renderModelSettingsModal() {
   const chat = state.activeChat;
   const providerId = chat?.provider || state.config.provider;
@@ -495,6 +665,12 @@ function renderModelSettingsModal() {
           <div class="modal-body">
             <section class="modal-section">
               <p class="help-text">Esses parâmetros valem só para este chat. Campos não compatíveis com o provider ficam ocultos para reduzir erro de API.</p>
+              <div class="explain-list compact-explain">
+                <p><strong>Temperatura:</strong> aumenta ou reduz variação/criatividade. Valores baixos tendem a ser mais previsíveis.</p>
+                <p><strong>Top P:</strong> limita a amostragem por probabilidade acumulada. Use junto com temperatura só quando souber o motivo.</p>
+                <p><strong>Máximo de tokens:</strong> teto da resposta do modelo. Alto demais pode custar mais ou falhar por limite do provider.</p>
+                <p><strong>Stop:</strong> sequências que interrompem a geração quando aparecem.</p>
+              </div>
               <div class="setup-grid">
                 ${renderModelNumberInput('temperature', 'Temperatura', settings.temperature, '0', '2', '0.1', support.temperature)}
                 ${renderModelNumberInput('topP', 'Top P', settings.topP, '0', '1', '0.05', support.topP)}
@@ -638,8 +814,8 @@ function renderMessage(message) {
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
       <div class="message-label">${label}${modelUsed}${status}${retryButton}${copyButton}</div>
-      ${(message.toolUses || []).map(renderToolUse).join('')}
-      <div class="bubble">${formatContent(message.content)}</div>
+      ${(message.toolUses || []).map((toolUse) => renderToolUse(toolUse, message)).join('')}
+      <div class="bubble">${formatContent(message.content, message.role)}</div>
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
     </article>
@@ -649,6 +825,9 @@ function renderMessage(message) {
 function renderMessageStatus(status) {
   if (status === 'pending') return 'enviando';
   if (status === 'failed') return 'falhou';
+  if (status === 'needs_tool_approval') return 'aguardando aprovação';
+  if (status === 'running_tools') return 'executando tools';
+  if (status === 'tool_denied') return 'tool negada';
   return '';
 }
 
@@ -662,26 +841,73 @@ function renderErrorBanner() {
   `;
 }
 
-function renderToolUse(toolUse) {
+function renderContextEventCards() {
+  const events = state.activeChatEvents.filter((event) => event.type === 'chat.context.auto_compacted').slice(0, 2);
+  if (!events.length) return '';
+  return events
+    .map(
+      (event) => `
+        <article class="context-event-card">
+          <div>
+            <strong>Compactação automática</strong>
+            <span>${escapeHtml(new Date(event.createdAt).toLocaleString())}</span>
+          </div>
+          <p>${escapeHtml(event.details?.summaryPreview || 'Contexto compactado atualizado.')}</p>
+          <div class="button-row">
+            <button type="button" class="open-context-editor">Editar contexto</button>
+            <span class="meta">${escapeHtml(event.details?.path || 'context.md')}</span>
+          </div>
+        </article>
+      `,
+    )
+    .join('');
+}
+
+function renderToolUse(toolUse, message = null) {
   const result = toolUse.result || {};
   const command = toolUse.input?.command || '';
+  const searchResults = toolUse.name === 'web_search' && Array.isArray(result.results) ? result.results : [];
   const genericInput = JSON.stringify(toolUse.input || {}, null, 2);
   const genericResult = JSON.stringify(result || {}, null, 2);
+  const approvalActions =
+    toolUse.status === 'pending_approval'
+      ? `
+        <div class="tool-approval-actions">
+          <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message?.id || '')}">Permitir</button>
+          <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message?.id || '')}">Negar</button>
+        </div>
+      `
+      : '';
   return `
     <details class="tool-box">
       <summary class="tool-summary">
         <span>Tool usada: ${escapeHtml(toolUse.name)}</span>
-        <span>${result.timedOut ? 'timeout' : result.exitCode === undefined ? escapeHtml(result.action || 'ok') : `exit ${escapeHtml(String(result.exitCode))}`}</span>
+        <span>${toolUse.status === 'pending_approval' ? 'aguardando aprovação' : result.timedOut ? 'timeout' : result.exitCode === undefined ? escapeHtml(result.action || result.method || 'ok') : `exit ${escapeHtml(String(result.exitCode))}`}</span>
       </summary>
       <div class="tool-body">
+        ${approvalActions}
         ${
           command
             ? `<div><div class="message-label">Comando</div><pre>${escapeHtml(command)}</pre></div>`
             : `<div><div class="message-label">Input</div><pre>${escapeHtml(genericInput)}</pre></div>`
         }
+        ${
+          searchResults.length
+            ? `<div><div class="message-label">Fontes encontradas</div>${searchResults
+                .map(
+                  (item) => `
+                    <div class="search-result">
+                      <a href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || item.url)}</a>
+                      ${item.snippet ? `<small>${escapeHtml(item.snippet)}</small>` : ''}
+                    </div>
+                  `,
+                )
+                .join('')}</div>`
+            : ''
+        }
         ${result.stdout ? `<div><div class="message-label">stdout</div><pre>${escapeHtml(result.stdout)}</pre></div>` : ''}
         ${result.stderr ? `<div><div class="message-label">stderr</div><pre>${escapeHtml(result.stderr)}</pre></div>` : ''}
-        ${!result.stdout && !result.stderr ? `<div><div class="message-label">Resultado</div><pre>${escapeHtml(genericResult)}</pre></div>` : ''}
+        ${!result.stdout && !result.stderr && !searchResults.length ? `<div><div class="message-label">Resultado</div><pre>${escapeHtml(genericResult)}</pre></div>` : ''}
       </div>
     </details>
   `;
@@ -694,6 +920,10 @@ function renderAttachmentCard(attachment, options = {}) {
     attachment.kind === 'image' && contentUrl
       ? `<img class="attachment-thumb" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`
       : '';
+  const videoPreview =
+    attachment.kind === 'video' && contentUrl
+      ? `<video class="attachment-video" src="${escapeAttr(contentUrl)}" controls preload="metadata"></video>`
+      : '';
   const warning = getAttachmentWarning(attachment);
   const actions = options.pending
     ? `
@@ -705,7 +935,7 @@ function renderAttachmentCard(attachment, options = {}) {
     : '';
   return `
     <article class="attachment-card ${warning.level}">
-      ${imagePreview}
+      ${imagePreview || videoPreview}
       <div class="attachment-info">
         <strong>${escapeHtml(attachment.name)}</strong>
         <span>${escapeHtml(formatBytes(attachment.size))} · ${escapeHtml(attachment.mimeType || 'arquivo')} · ${escapeHtml(attachment.kind || 'documento')}</span>
@@ -718,10 +948,27 @@ function renderAttachmentCard(attachment, options = {}) {
 }
 
 function renderPending() {
+  const liveEvents = state.activeChatEvents
+    .filter((event) => event.type?.startsWith('tool.') || event.type?.startsWith('chat.context.auto'))
+    .slice(0, 5);
   return `
     <article class="message assistant pending">
       <div class="message-label">Assistente</div>
       <div class="bubble">${escapeHtml(state.status || 'Pensando...')}</div>
+      ${
+        liveEvents.length
+          ? `<div class="live-events">${liveEvents
+              .map(
+                (event) => `
+                  <div>
+                    <strong>${escapeHtml(event.type)}</strong>
+                    <span>${escapeHtml(formatEventDetails(event.details))}</span>
+                  </div>
+                `,
+              )
+              .join('')}</div>`
+          : ''
+      }
     </article>
   `;
 }
@@ -733,6 +980,14 @@ function renderEvent(event) {
       ${escapeHtml(new Date(event.createdAt).toLocaleString())}
     </div>
   `;
+}
+
+function formatEventDetails(details = {}) {
+  if (!details || typeof details !== 'object') return '';
+  return Object.entries(details)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join(' · ');
 }
 
 function renderApiKeyRow(key, index, options = {}) {
@@ -949,6 +1204,14 @@ function getAttachmentWarning(attachment) {
     };
   }
 
+  if (attachment.kind === 'video') {
+    return {
+      level: 'warn',
+      text:
+        'Vídeo fica salvo no chat e é enviado como referência/caminho. Gemini pode aceitar vídeo por Files API, mas esse adapter nativo ainda não está implementado no MVP.',
+    };
+  }
+
   return {
     level: 'warn',
     text: 'Arquivo salvo no chat. A IA verá caminho e metadados; para ler o conteúdo, pode usar o terminal.',
@@ -991,12 +1254,13 @@ function guessMimeType(name) {
 function bindAppEvents() {
   document.querySelector('#new-chat').addEventListener('click', createNewChat);
   document.querySelector('#open-settings').addEventListener('click', openSettings);
+  document.querySelector('#open-chat-settings-mobile')?.addEventListener('click', openChatSettings);
   document.querySelectorAll('[data-chat-id]').forEach((button) => {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
   });
   document.querySelector('#composer').addEventListener('submit', sendMessage);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
-  document.querySelector('#composer textarea').addEventListener('input', autoResizeComposer);
+  document.querySelector('#composer textarea').addEventListener('input', handleComposerInput);
   document.querySelector('#file-input')?.addEventListener('change', uploadSelectedFiles);
   document.querySelectorAll('.remove-pending-attachment').forEach((button) => {
     button.addEventListener('click', () => removePendingAttachment(button.dataset.attachmentId));
@@ -1012,11 +1276,21 @@ function bindAppEvents() {
   document.querySelector('#delete-chat').addEventListener('click', deleteActiveChat);
   document.querySelector('#compact-context').addEventListener('click', compactContext);
   document.querySelector('#save-context').addEventListener('click', saveContext);
+  document.querySelector('#edit-context').addEventListener('click', openContextEditor);
+  document.querySelectorAll('.open-context-editor').forEach((button) => {
+    button.addEventListener('click', openContextEditor);
+  });
   document.querySelectorAll('.copy-message').forEach((button) => {
     button.addEventListener('click', () => copyMessage(button.dataset.messageId));
   });
   document.querySelectorAll('.retry-message').forEach((button) => {
     button.addEventListener('click', () => retryMessage(button.dataset.messageId));
+  });
+  document.querySelectorAll('.approve-tool').forEach((button) => {
+    button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'approve'));
+  });
+  document.querySelectorAll('.deny-tool').forEach((button) => {
+    button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'deny'));
   });
   document.querySelector('#retry-action')?.addEventListener('click', retryLastAction);
   document.querySelector('#retry-action-inline')?.addEventListener('click', retryLastAction);
@@ -1049,6 +1323,23 @@ function bindAppEvents() {
     document.querySelector('#chat-context-form').addEventListener('submit', saveChatContext);
     document.querySelector('#close-chat-context').addEventListener('click', closeChatContext);
     document.querySelector('#cancel-chat-context').addEventListener('click', closeChatContext);
+  }
+
+  if (state.chatSettingsOpen) {
+    document.querySelector('#mobile-chat-settings-form').addEventListener('submit', saveChatSettings);
+    document.querySelector('#mobile-chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
+    document.querySelector('#mobile-chat-model-input')?.addEventListener('change', () => toggleChatCustomModel('mobile-'));
+    document.querySelector('#mobile-open-chat-context')?.addEventListener('click', openChatContext);
+    document.querySelector('#mobile-open-model-settings')?.addEventListener('click', openModelSettings);
+    document.querySelector('#mobile-delete-chat')?.addEventListener('click', deleteActiveChat);
+    document.querySelector('#close-chat-settings-mobile').addEventListener('click', closeChatSettings);
+    document.querySelector('#cancel-chat-settings-mobile').addEventListener('click', closeChatSettings);
+  }
+
+  if (state.contextEditorOpen) {
+    document.querySelector('#context-editor-form').addEventListener('submit', saveContextEditor);
+    document.querySelector('#close-context-editor').addEventListener('click', closeContextEditor);
+    document.querySelector('#cancel-context-editor').addEventListener('click', closeContextEditor);
   }
 
   if (state.modelSettingsOpen) {
@@ -1101,6 +1392,14 @@ async function saveSetup(event) {
         language: form.get('language'),
         userNickname: form.get('userNickname'),
         systemPromptExtra: form.get('systemPromptExtra'),
+        tools: {
+          ...(state.config.tools || {}),
+          alwaysAllow: form.get('alwaysAllowTools') === 'on',
+        },
+        server: {
+          networkEnabled: form.get('networkEnabled') === 'on',
+          authPassword: form.get('authPassword'),
+        },
       },
     });
     await bootstrap();
@@ -1250,10 +1549,10 @@ function changeChatProviderDraft(event) {
   render();
 }
 
-function toggleChatCustomModel() {
-  const select = document.querySelector('#chat-model-input');
-  const row = document.querySelector('#chat-custom-model-row');
-  const imagesRow = document.querySelector('#chat-custom-model-images-row');
+function toggleChatCustomModel(prefix = '') {
+  const select = document.querySelector(`#${prefix}chat-model-input`);
+  const row = document.querySelector(`#${prefix}chat-custom-model-row`);
+  const imagesRow = document.querySelector(`#${prefix}chat-custom-model-images-row`);
   if (!select || !row) return;
   row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
   imagesRow?.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
@@ -1424,6 +1723,7 @@ async function sendMessage(event) {
     return;
   }
   textarea.value = '';
+  clearComposerDraft(state.activeChat.id);
   autoResizeComposer();
   const attachments = state.pendingAttachments;
   state.pendingAttachments = [];
@@ -1454,14 +1754,20 @@ async function sendMessageContent(content, options = {}) {
   await runAction(
     `Enviando para ${providerLabel(state.activeChat.provider || state.config.provider)}...`,
     async () => {
-      const data = await api(`/api/chats/${chatId}/messages`, {
-        method: 'POST',
-        body: {
-          content,
-          retryMessageId: options.retryMessageId,
-          attachmentIds: attachments.map((attachment) => attachment.id),
-        },
-      });
+      startEventPolling(chatId);
+      let data;
+      try {
+        data = await api(`/api/chats/${chatId}/messages`, {
+          method: 'POST',
+          body: {
+            content,
+            retryMessageId: options.retryMessageId,
+            attachmentIds: attachments.map((attachment) => attachment.id),
+          },
+        });
+      } finally {
+        stopEventPolling();
+      }
       state.activeChat = data.chat;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
       const fresh = await api('/api/chats');
@@ -1473,6 +1779,53 @@ async function sendMessageContent(content, options = {}) {
   if (state.error && state.activeChat?.id === chatId) {
     await refreshActiveChatData();
     render();
+  }
+}
+
+async function decideToolApproval(messageId, decision) {
+  await runAction(decision === 'approve' ? 'Executando tool aprovada...' : 'Negando tool...', async () => {
+    startEventPolling(state.activeChat.id);
+    let data;
+    try {
+      data = await api(`/api/chats/${state.activeChat.id}/tool-approvals/${messageId}`, {
+        method: 'POST',
+        body: { decision },
+      });
+    } finally {
+      stopEventPolling();
+    }
+    state.activeChat = data.chat;
+    state.chats = data.chats || state.chats;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    await refreshActiveChatData();
+  });
+}
+
+function startEventPolling(chatId) {
+  stopEventPolling();
+  const poll = async () => {
+    try {
+      const data = await api(`/api/chats/${chatId}`);
+      if (state.activeChat?.id === chatId) {
+        state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+        state.activeChat = {
+          ...state.activeChat,
+          messages: data.chat?.messages || state.activeChat.messages,
+        };
+        render();
+      }
+    } catch {
+      // Polling is best-effort; the main request still owns errors.
+    }
+  };
+  poll();
+  state.eventPollingTimer = window.setInterval(poll, 1500);
+}
+
+function stopEventPolling() {
+  if (state.eventPollingTimer) {
+    window.clearInterval(state.eventPollingTimer);
+    state.eventPollingTimer = null;
   }
 }
 
@@ -1495,6 +1848,32 @@ function insertTextAtCursor(textarea, text) {
   textarea.selectionStart = nextPosition;
   textarea.selectionEnd = nextPosition;
   autoResizeComposer();
+  saveComposerDraft();
+}
+
+function handleComposerInput() {
+  saveComposerDraft();
+  autoResizeComposer();
+}
+
+function getComposerDraft(chatId) {
+  if (!chatId) return '';
+  return localStorage.getItem(getComposerDraftKey(chatId)) || '';
+}
+
+function saveComposerDraft() {
+  const textarea = document.querySelector('#composer textarea');
+  if (!textarea || !state.activeChat?.id) return;
+  localStorage.setItem(getComposerDraftKey(state.activeChat.id), textarea.value);
+}
+
+function clearComposerDraft(chatId) {
+  if (!chatId) return;
+  localStorage.removeItem(getComposerDraftKey(chatId));
+}
+
+function getComposerDraftKey(chatId) {
+  return `my-computer:draft:${chatId}`;
 }
 
 async function retryLastAction() {
@@ -1547,6 +1926,7 @@ async function saveMemory() {
 }
 
 function openChatContext() {
+  state.chatSettingsOpen = false;
   state.chatContextOpen = true;
   render();
 }
@@ -1584,6 +1964,7 @@ async function saveChatContext(event) {
 }
 
 function openModelSettings() {
+  state.chatSettingsOpen = false;
   state.modelSettingsOpen = true;
   render();
 }
@@ -1591,6 +1972,50 @@ function openModelSettings() {
 function closeModelSettings() {
   state.modelSettingsOpen = false;
   render();
+}
+
+function openChatSettings() {
+  state.chatSettingsOpen = true;
+  render();
+}
+
+function closeChatSettings() {
+  state.chatSettingsOpen = false;
+  render();
+}
+
+async function openContextEditor() {
+  if (!state.activeChat) return;
+  await runAction('Carregando contexto compactado...', async () => {
+    const data = await api(`/api/chats/${state.activeChat.id}/context`);
+    state.contextEditor = {
+      content: data.content || '',
+      path: data.path || '',
+    };
+    state.contextEditorOpen = true;
+  });
+}
+
+function closeContextEditor() {
+  state.contextEditorOpen = false;
+  state.contextEditor = null;
+  render();
+}
+
+async function saveContextEditor(event) {
+  event.preventDefault();
+  const content = document.querySelector('#context-editor-input').value;
+  await runAction('Salvando contexto compactado...', async () => {
+    const data = await api(`/api/chats/${state.activeChat.id}/context`, {
+      method: 'PUT',
+      body: { content },
+    });
+    state.activeChat = data.chat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    state.contextEditorOpen = false;
+    state.contextEditor = null;
+    await refreshActiveChatData();
+  });
 }
 
 async function clearModelSettings() {
@@ -1637,15 +2062,17 @@ function readModelSettingsForm() {
   return settings;
 }
 
-async function saveChatSettings() {
-  const title = document.querySelector('#chat-title-input').value;
-  const provider = document.querySelector('#chat-provider-input').value;
-  const model = getModelValue('#chat-model-input', '#chat-custom-model-input', provider);
+async function saveChatSettings(event) {
+  event?.preventDefault();
+  const prefix = state.chatSettingsOpen ? 'mobile-' : '';
+  const title = document.querySelector(`#${prefix}chat-title-input`)?.value || document.querySelector('#chat-title-input')?.value || '';
+  const provider = document.querySelector(`#${prefix}chat-provider-input`)?.value || document.querySelector('#chat-provider-input')?.value;
+  const model = getModelValue(`#${prefix}chat-model-input`, `#${prefix}chat-custom-model-input`, provider);
   const modelCapabilities = withCustomModelCapabilities(
     state.config.modelCapabilities,
     provider,
     model,
-    document.querySelector('#chat-custom-model-images')?.checked,
+    document.querySelector(`#${prefix}chat-custom-model-images`)?.checked,
   );
   await runAction('Salvando configurações do chat...', async () => {
     if (provider === 'ollama') {
@@ -1665,6 +2092,7 @@ async function saveChatSettings() {
     state.activeChat = data.chat;
     state.chats = data.chats;
     state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    state.chatSettingsOpen = false;
     await refreshActiveChatData();
   });
 }
@@ -1685,10 +2113,14 @@ async function saveGeneralSettings(event) {
   await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
+      webSearch: form.get('tool_webSearch') === 'on',
+      searchTerminal: form.get('tool_searchTerminal') === 'on',
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
       autoCompact: form.get('tool_autoCompact') === 'on',
       chatTitle: form.get('tool_chatTitle') === 'on',
+      alwaysAllow: form.get('tool_alwaysAllow') === 'on',
+      terminalMode: form.get('terminalMode') || 'standard',
     };
     if (provider === 'ollama') {
       await ensureOllamaModelAvailable(model);
@@ -1702,6 +2134,15 @@ async function saveGeneralSettings(event) {
         userNickname: form.get('userNickname'),
         systemPromptExtra: form.get('systemPromptExtra'),
         tools,
+        context: {
+          autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
+          autoCompactChars: Number(form.get('autoCompactChars')),
+          autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
+        },
+        server: {
+          networkEnabled: form.get('networkEnabled') === 'on',
+          authPassword: form.get('authPassword'),
+        },
         providerSettings: state.config.providerSettings,
         customModels,
         modelCapabilities,
@@ -1784,6 +2225,7 @@ async function compactContext() {
   await runAction('Compactando contexto...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}/compact`, { method: 'POST' });
     state.activeChat = data.chat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
     await refreshActiveChatData();
   });
 }
@@ -1792,6 +2234,7 @@ async function saveContext() {
   await runAction('Salvando snapshot de contexto...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}/save-context`, { method: 'POST' });
     state.activeChat = data.chat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
     state.status = `Snapshot salvo em ${data.path}`;
     await refreshActiveChatData();
   });
@@ -1891,8 +2334,88 @@ function renderError(error) {
   app.innerHTML = `<main class="setup-screen"><p class="error">${escapeHtml(error.message)}</p></main>`;
 }
 
-function formatContent(content) {
-  return escapeHtml(content || '');
+function formatContent(content, role = 'assistant') {
+  const text = String(content || '');
+  if (role !== 'assistant') return escapeHtml(text);
+  return renderMarkdownLite(text);
+}
+
+function renderMarkdownLite(text) {
+  const lines = String(text || '').split('\n');
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+  let code = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${formatInline(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    blocks.push(`<${list.type}>${list.items.map((item) => `<li>${formatInline(item)}</li>`).join('')}</${list.type}>`);
+    list = null;
+  };
+
+  for (const line of lines) {
+    const codeFence = /^```/.exec(line);
+    if (codeFence) {
+      if (code) {
+        blocks.push(`<pre><code>${escapeHtml(code.lines.join('\n'))}</code></pre>`);
+        code = null;
+      } else {
+        flushParagraph();
+        flushList();
+        code = { lines: [] };
+      }
+      continue;
+    }
+    if (code) {
+      code.lines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = heading[1].length + 2;
+      blocks.push(`<h${level}>${formatInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const numbered = /^\s*\d+\.\s+(.+)$/.exec(line);
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+    if (numbered || bullet) {
+      flushParagraph();
+      const type = numbered ? 'ol' : 'ul';
+      if (!list || list.type !== type) flushList();
+      if (!list) list = { type, items: [] };
+      list.items.push(numbered?.[1] || bullet?.[1]);
+      continue;
+    }
+
+    paragraph.push(line.trim());
+  }
+
+  if (code) blocks.push(`<pre><code>${escapeHtml(code.lines.join('\n'))}</code></pre>`);
+  flushParagraph();
+  flushList();
+  return blocks.join('');
+}
+
+function formatInline(text) {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
 }
 
 function escapeHtml(value) {

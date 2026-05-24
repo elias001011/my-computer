@@ -89,6 +89,7 @@ Metodologia atual:
 - Texto, Markdown, JSON, CSV, HTML e código têm texto extraído e enviado ao modelo em uma seção de documentos.
 - HTML é convertido para texto legível antes de ir para o modelo.
 - Formatos sem extração nativa no MVP, como PDF e DOCX, ficam salvos no chat; a IA recebe caminho/metadados e pode acessá-los pelo terminal se a tool estiver ligada.
+- Vídeos têm preview e ficam salvos como referência/caminho. Gemini tem suporte nativo a vídeo via Files API, mas o adapter nativo de vídeo ainda não está implementado neste MVP.
 - Quando o texto extraído é grande, ele é truncado antes de entrar no prompt. O painel deixa isso claro.
 
 ## O que existe no MVP
@@ -101,11 +102,16 @@ Metodologia atual:
 - Chat com histórico persistente.
 - Upload de arquivos com preview e tratamento de imagem/modelo incompatível.
 - Tool `run_terminal_command` para a IA usar o terminal local.
+- Tool `web_search` para pesquisa web transparente. Neste MVP a execução real usa pesquisa via terminal quando esse método está habilitado nas configurações.
 - Tool `memory_chat` para a IA ler, anexar ou reescrever a memória Markdown do chat.
 - Tool `persistent_memory` para memória global entre chats.
 - Tool `compact_context` para compactação automática quando habilitada.
 - Tool `rename_chat` para a IA nomear o chat.
-- Toggles globais para ligar/desligar tools.
+- Toggles globais para ligar/desligar tools, alternar terminal padrão/isolado leve e escolher se tools exigem aprovação pela UI.
+- Cache local do prompt em andamento por chat, para não perder texto ao abrir configurações antes de enviar.
+- Compactação automática configurável por limite estimado de contexto e mínimo de mensagens.
+- Editor manual de `context.md` pelo botão de caneta ao lado de compactar contexto.
+- Abertura opcional para rede local com autenticação básica e senha única, aplicada no próximo restart.
 - Eventos filtrados por chat no painel lateral.
 - Botão de copiar respostas da IA e retry para requests com erro.
 - Export/import de configurações, chats, memórias, contexto e anexos.

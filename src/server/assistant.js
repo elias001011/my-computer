@@ -25,7 +25,9 @@ import {
   persistentMemoryToolDefinition,
   renameChatToolDefinition,
   runTerminalCommand,
+  runWebSearch,
   terminalToolDefinition,
+  webSearchToolDefinition,
 } from './tools.js';
 
 const MAX_CONTEXT_CHARS = 28000;
@@ -95,8 +97,36 @@ export async function sendUserMessage(chatId, content, options = {}) {
         tool_calls: toolCalls,
       });
 
+      if (effectiveConfig.tools?.alwaysAllow !== true) {
+        if (chatBefore.title === 'Novo chat' && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
+          await updateChatMetadata(chatId, { title: trimmed });
+        }
+        const pendingAssistantMessage = createToolApprovalMessage(assistantMessage, toolCalls, workingMessages, effectiveConfig);
+        await appendMessages(chatId, [pendingAssistantMessage]);
+        await updateMessage(chatId, userMessage.id, {
+          status: 'sent',
+          error: null,
+          sentAt: new Date().toISOString(),
+        });
+        await appendEvent({
+          type: 'tool.approval.requested',
+          chatId,
+          details: {
+            messageId: pendingAssistantMessage.id,
+            toolCount: toolCalls.length,
+            tools: toolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
+          },
+        });
+        return {
+          userMessage,
+          assistantMessage: pendingAssistantMessage,
+          awaitingApproval: true,
+          chat: await readChat(chatId),
+        };
+      }
+
       for (const toolCall of toolCalls) {
-        const toolUse = await executeToolCall(chatId, toolCall);
+        const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
         toolUses.push(toolUse);
         workingMessages.push({
           role: 'tool',
@@ -151,13 +181,120 @@ export async function sendUserMessage(chatId, content, options = {}) {
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
+  const autoCompact = await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
   await appendEvent({ type: 'chat.message.completed', chatId, details: { toolCount: toolUses.length } });
 
   return {
     userMessage,
     assistantMessage: savedAssistantMessage,
+    autoCompact,
     chat: await readChat(chatId),
   };
+}
+
+export async function continueToolApproval(chatId, messageId, decision = 'approve') {
+  const chat = await readChat(chatId);
+  const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
+  if (!pendingMessage?.pendingToolApproval) {
+    const error = new Error('Aprovação de tool não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  if (decision !== 'approve') {
+    const deniedToolUses = (pendingMessage.toolUses || []).map((toolUse) => ({
+      ...toolUse,
+      status: 'denied',
+      result: { action: 'denied', reason: 'Negado pelo usuário na UI.' },
+    }));
+    await updateMessage(chatId, messageId, {
+      status: 'tool_denied',
+      content: 'Execução de tool negada pelo usuário.',
+      toolUses: deniedToolUses,
+      pendingToolApproval: null,
+    });
+    await appendEvent({ type: 'tool.approval.denied', chatId, details: { messageId } });
+    return { chat: await readChat(chatId) };
+  }
+
+  const config = await loadConfig();
+  const currentChat = await readChat(chatId);
+  const effectiveConfig = {
+    ...config,
+    provider: currentChat.provider || config.provider,
+    model: currentChat.model || config.model,
+    modelSettings: currentChat.modelSettings || {},
+  };
+  const workingMessages = pendingMessage.pendingToolApproval.providerMessages || [];
+  const toolCalls = pendingMessage.pendingToolApproval.toolCalls || [];
+  const toolUses = [];
+
+  await updateMessage(chatId, messageId, {
+    status: 'running_tools',
+    content: pendingMessage.content || 'Executando tools aprovadas...',
+  });
+  await appendEvent({ type: 'tool.approval.approved', chatId, details: { messageId, toolCount: toolCalls.length } });
+
+  for (const toolCall of toolCalls) {
+    const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
+    toolUses.push(toolUse);
+    workingMessages.push({
+      role: 'tool',
+      tool_call_id: toolCall.id,
+      name: toolUse.name,
+      content: truncate(JSON.stringify(toolUse.result), 12000),
+    });
+  }
+
+  const assistantMessage = await callProviderChat({
+    config: effectiveConfig,
+    provider: effectiveConfig.provider,
+    model: effectiveConfig.model,
+    messages: workingMessages,
+    tools: [],
+    modelSettings: effectiveConfig.modelSettings,
+  });
+  const finalContent = assistantMessage.content || 'Tools executadas, mas o provider não retornou texto final.';
+  await updateMessage(chatId, messageId, {
+    status: 'sent',
+    content: finalContent,
+    toolUses,
+    pendingToolApproval: null,
+    modelUsed: effectiveConfig.model,
+    providerUsed: effectiveConfig.provider,
+  });
+
+  const updatedChat = await readChat(chatId);
+  const latestPersistentMemory = await readPersistentMemory();
+  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
+  await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
+  await appendEvent({ type: 'chat.message.completed', chatId, details: { approvedToolCount: toolUses.length } });
+  return { chat: await readChat(chatId) };
+}
+
+function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages, config) {
+  return createMessage(
+    'assistant',
+    assistantMessage.content || 'A IA solicitou uma tool e está aguardando aprovação.',
+    {
+      status: 'needs_tool_approval',
+      modelUsed: config.model,
+      providerUsed: config.provider,
+      toolUses: toolCalls.map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.function?.name || 'unknown_tool',
+        input: parseToolArguments(toolCall.function?.arguments),
+        status: 'pending_approval',
+        approvalRequired: true,
+        result: { action: 'pending_approval' },
+        createdAt: new Date().toISOString(),
+      })),
+      pendingToolApproval: {
+        toolCalls,
+        providerMessages,
+      },
+    },
+  );
 }
 
 async function saveUserMessageForRequest(chatId, chat, content, retryMessageId, attachments = []) {
@@ -187,7 +324,7 @@ async function saveUserMessageForRequest(chatId, chat, content, retryMessageId, 
   return userMessage;
 }
 
-export async function compactChat(chatId) {
+export async function compactChat(chatId, options = {}) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
@@ -226,8 +363,36 @@ export async function compactChat(chatId) {
 
   const summary = response.content || '# Context summary\n\nNenhum resumo retornado.';
   const updatedChat = await writeContextSummary(chatId, summary);
+  if (options.automatic) {
+    await updateChatMetadata(chatId, {
+      lastAutoCompactMessageCount: chat.messages?.length || 0,
+    });
+    await appendEvent({
+      type: 'chat.context.auto_compacted',
+      chatId,
+      details: {
+        reason: options.reason || 'threshold',
+        path: updatedChat.paths.context,
+        messageCount: chat.messages?.length || 0,
+        summaryPreview: truncate(summary, 1200),
+      },
+    });
+  }
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, persistentMemory));
-  return { summary, chat: await readChat(chatId) };
+  return { summary, path: updatedChat.paths.context, chat: await readChat(chatId), automatic: Boolean(options.automatic) };
+}
+
+export async function editContextSummary(chatId, content) {
+  const updatedChat = await writeContextSummary(chatId, content);
+  const config = await loadConfig();
+  const persistentMemory = await readPersistentMemory();
+  const effectiveConfig = {
+    ...config,
+    provider: updatedChat.provider || config.provider,
+    model: updatedChat.model || config.model,
+  };
+  await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, persistentMemory));
+  return { chat: await readChat(chatId), path: updatedChat.paths.context };
 }
 
 export async function saveContextWindow(chatId) {
@@ -243,6 +408,32 @@ export async function saveContextWindow(chatId) {
   const path = await saveContextSnapshot(chatId, content);
   await saveCurrentContextWindow(chatId, content);
   return { path, chat: await readChat(chatId) };
+}
+
+async function maybeAutoCompactChat(chatId, chat, config, persistentMemory) {
+  const settings = config.context || {};
+  if (!settings.autoCompactEnabled) return null;
+  const messageCount = chat.messages?.length || 0;
+  const lastCount = Number(chat.lastAutoCompactMessageCount || 0);
+  const minMessages = Number(settings.autoCompactMinMessages || 12);
+  if (messageCount - lastCount < minMessages) return null;
+
+  const contextWindow = buildContextWindowMarkdown(chat, config, persistentMemory);
+  if (contextWindow.length < Number(settings.autoCompactChars || 24000)) return null;
+
+  await appendEvent({
+    type: 'chat.context.auto_compaction_requested',
+    chatId,
+    details: {
+      messageCount,
+      chars: contextWindow.length,
+      threshold: settings.autoCompactChars,
+    },
+  });
+  return compactChat(chatId, {
+    automatic: true,
+    reason: `context window reached ${contextWindow.length} chars`,
+  });
 }
 
 export function buildContextWindowMarkdown(chat, config, persistentMemory = '') {
@@ -298,10 +489,22 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
-    'Respond with a clear structure: short answer first, then concise sections or bullets when useful. Be explicit about commands run, files changed, and next steps.',
+    'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
     config.tools?.terminal
       ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
+    config.tools?.terminalMode === 'isolated'
+      ? 'Terminal mode is soft-isolated: commands run from a My Computer sandbox HOME. This is not a full VM/container isolation; absolute paths can still touch the host.'
+      : 'Terminal mode is standard: commands run on the user machine with the normal user environment.',
+    config.tools?.alwaysAllow
+      ? 'The user enabled automatic tool execution. Tools may run without an extra confirmation step.'
+      : 'The user disabled automatic tool execution. The app may ask the user to approve a tool before it actually runs.',
+    config.tools?.webSearch
+      ? 'Use web_search when current or source-backed information matters. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.'
+      : 'Web search is disabled by user settings.',
+    config.tools?.webSearch && !config.tools?.searchTerminal
+      ? 'The terminal-backed search method is disabled; web_search may report that it needs the setting enabled.'
+      : '',
     config.tools?.chatMemory
       ? 'When stable user preferences, decisions, file paths, facts, or TODOs appear inside this chat, use memory_chat to read or update the current chat memory.'
       : 'Chat memory editing through tools is disabled by user settings.',
@@ -320,7 +523,7 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     config.tools?.persistentMemory
       ? 'For persistent_memory write operations, send the full edited Markdown memory file, using the current persistent memory below as the base.'
       : '',
-    'For this MVP there is no extra confirmation step before terminal execution. Be careful, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
+    'Be careful with host actions, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
     `Runtime folder: ${runtimeHome}`,
     `Current chat title: ${chat.title}`,
     `Chat memory file: ${chat.paths.memory}`,
@@ -369,13 +572,23 @@ async function selectRecentMessages(chat, config, options = {}) {
   return selected;
 }
 
-async function executeToolCall(chatId, toolCall) {
+async function executeToolCall(chatId, toolCall, config = {}) {
   const name = toolCall?.function?.name;
   let input = {};
   try {
     input = JSON.parse(toolCall?.function?.arguments || '{}');
   } catch (error) {
     input = { parseError: error.message, raw: toolCall?.function?.arguments || '' };
+  }
+
+  if (!isToolEnabled(name, config.tools || {})) {
+    return {
+      id: toolCall.id,
+      name: name || 'unknown_tool',
+      input,
+      result: { error: `Tool desabilitada nas configurações: ${name}` },
+      createdAt: new Date().toISOString(),
+    };
   }
 
   if (name === 'memory_chat') {
@@ -394,6 +607,10 @@ async function executeToolCall(chatId, toolCall) {
     return executeRenameChatToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'web_search') {
+    return executeWebSearchToolCall(chatId, toolCall.id, input, config);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -404,13 +621,26 @@ async function executeToolCall(chatId, toolCall) {
     };
   }
 
-  const result = await runTerminalCommand(input.command, { timeoutSeconds: input.timeoutSeconds });
   await appendEvent({
-    type: 'tool.run_terminal_command',
+    type: 'tool.run_terminal_command.requested',
     chatId,
     details: {
       command: input.command,
       timeoutSeconds: input.timeoutSeconds,
+      terminalMode: config.tools?.terminalMode || 'standard',
+    },
+  });
+  const result = await runTerminalCommand(input.command, {
+    timeoutSeconds: input.timeoutSeconds,
+    terminalMode: config.tools?.terminalMode,
+  });
+  await appendEvent({
+    type: 'tool.run_terminal_command.completed',
+    chatId,
+    details: {
+      command: input.command,
+      timeoutSeconds: input.timeoutSeconds,
+      terminalMode: result.terminalMode,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
@@ -479,6 +709,7 @@ async function executeCompactContextToolCall(chatId, toolCallId, input) {
 function buildEnabledToolDefinitions(tools = {}) {
   return [
     tools.terminal !== false ? terminalToolDefinition : null,
+    tools.webSearch !== false ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
     tools.autoCompact !== false ? compactContextToolDefinition : null,
@@ -489,11 +720,77 @@ function buildEnabledToolDefinitions(tools = {}) {
 function describeEnabledTools(tools = {}) {
   return [
     tools.terminal !== false ? 'run_terminal_command' : null,
+    tools.webSearch !== false ? 'web_search' : null,
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
     tools.autoCompact !== false ? 'compact_context' : null,
     tools.chatTitle !== false ? 'rename_chat' : null,
   ].filter(Boolean);
+}
+
+function isToolEnabled(name, tools = {}) {
+  if (name === 'run_terminal_command') return tools.terminal !== false;
+  if (name === 'web_search') return tools.webSearch !== false;
+  if (name === 'memory_chat') return tools.chatMemory !== false;
+  if (name === 'persistent_memory') return tools.persistentMemory !== false;
+  if (name === 'compact_context') return tools.autoCompact !== false;
+  if (name === 'rename_chat') return tools.chatTitle !== false;
+  return true;
+}
+
+async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) {
+  const query = String(input.query || '').trim();
+  await appendEvent({
+    type: 'tool.web_search.requested',
+    chatId,
+    details: {
+      query,
+      reason: input.reason,
+      method: config.tools?.searchTerminal ? 'terminal' : 'disabled',
+    },
+  });
+
+  if (!config.tools?.searchTerminal) {
+    const result = {
+      error:
+        'A pesquisa via terminal está desligada nas configurações. Ative "Pesquisa via terminal" para permitir web_search neste MVP.',
+      query,
+      method: 'disabled',
+      results: [],
+    };
+    await appendEvent({ type: 'tool.web_search.blocked', chatId, details: { query } });
+    return {
+      id: toolCallId,
+      name: 'web_search',
+      input,
+      result,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const result = await runWebSearch(query, {
+    maxResults: input.maxResults,
+    terminalMode: config.tools?.terminalMode,
+  });
+  await appendEvent({
+    type: 'tool.web_search.completed',
+    chatId,
+    details: {
+      query,
+      resultCount: result.results?.length || 0,
+      method: result.method,
+      durationMs: result.terminal?.durationMs,
+      exitCode: result.terminal?.exitCode,
+    },
+  });
+
+  return {
+    id: toolCallId,
+    name: 'web_search',
+    input,
+    result,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
@@ -779,6 +1076,14 @@ function estimateMessageSize(content) {
 
 function escapeXmlAttribute(value) {
   return String(value || '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+function parseToolArguments(value) {
+  try {
+    return JSON.parse(value || '{}');
+  } catch {
+    return { raw: String(value || '') };
+  }
 }
 
 function truncate(value, limit) {

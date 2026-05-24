@@ -9,8 +9,9 @@ const command = args[0] && !args[0].startsWith('-') ? args[0] : 'start';
 try {
   if (command === 'start') {
     const port = getFlagValue('--port') || process.env.PORT || 8787;
+    const host = getFlagValue('--host') || process.env.HOST || null;
     const shouldOpen = args.includes('--open') || process.env.MC_OPEN === '1';
-    const { server, url } = await startServer({ port: Number(port) });
+    const { server, url } = await startServer({ port: Number(port), host });
     console.log(`My Computer rodando em ${url}`);
     console.log(`Runtime: ${runtimeHome}`);
     console.log('Pressione Ctrl+C para parar.');
@@ -56,7 +57,7 @@ function printHelp() {
   console.log(`My Computer
 
 Comandos:
-  my-computer start [--open] [--port 8787]   inicia o painel local
+  my-computer start [--open] [--port 8787] [--host 127.0.0.1]   inicia o painel local
   my-computer doctor                         verifica o ambiente
   my-computer help                           mostra esta ajuda
 `);

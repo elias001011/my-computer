@@ -25,10 +25,30 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const config = await store.loadConfig();
   assert.equal(config.provider, 'openai-compatible');
   assert.equal(config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
+  assert.equal(config.tools.alwaysAllow, false);
+  assert.equal(config.tools.terminalMode, 'standard');
+  assert.equal(config.tools.searchTerminal, false);
+  assert.equal(config.context.autoCompactEnabled, false);
+  assert.equal(config.context.autoCompactChars, 24000);
+  assert.equal(config.server.networkEnabled, false);
+
+  await store.saveConfig({
+    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchTerminal: true },
+    context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
+    server: { networkEnabled: true, authPassword: 'local-pass' },
+  });
+  const securityConfig = await store.loadConfig();
+  assert.equal(securityConfig.tools.alwaysAllow, true);
+  assert.equal(securityConfig.tools.terminalMode, 'isolated');
+  assert.equal(securityConfig.tools.searchTerminal, true);
+  assert.equal(securityConfig.context.autoCompactEnabled, true);
+  assert.equal(securityConfig.context.autoCompactChars, 32000);
+  assert.equal(securityConfig.context.autoCompactMinMessages, 5);
+  assert.equal(securityConfig.server.networkEnabled, true);
 
   const chat = await store.createChat('Teste', {
-    provider: config.provider,
-    model: config.model,
+    provider: securityConfig.provider,
+    model: securityConfig.model,
     modelSettings: { temperature: 0.4, maxTokens: 1000 },
   });
   assert.equal(chat.title, 'Teste');
@@ -60,6 +80,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.match(attachment.extractedText, /Texto extraido/);
   assert.equal((await store.listAttachments(chat.id)).length, 1);
 
+  const video = await store.saveAttachment(chat.id, {
+    name: 'clip.mp4',
+    mimeType: 'video/mp4',
+    dataBase64: Buffer.from('fake video bytes').toString('base64'),
+  });
+  assert.equal(video.kind, 'video');
+  assert.equal(video.sendMode, 'reference');
+
   const snapshotPath = await store.saveContextSnapshot(chat.id, '# Context');
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
 
@@ -67,7 +95,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
-  assert.equal(exported.chats[0].attachments.length, 1);
+  assert.equal(exported.chats[0].attachments.length, 2);
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);

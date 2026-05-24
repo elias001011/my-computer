@@ -13,7 +13,7 @@ Browser
   -> ~/.my-computer runtime
 ```
 
-O servidor escuta em `127.0.0.1` e tenta portas livres a partir de `8787`.
+O servidor escuta em `127.0.0.1` por padrão e tenta portas livres a partir de `8787`. Se `server.networkEnabled` estiver ativo e houver senha configurada, o próximo start escuta em `0.0.0.0` com autenticação básica.
 
 ## Project layout
 
@@ -45,6 +45,7 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
       memory.md
       context.md
       context-window.md
+      isolated-terminal/   # no runtime, usado quando terminalMode=isolated
       attachments.json
       attachments/
       context-snapshots/
@@ -69,9 +70,10 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
    - contexto compactado
    - histórico recente
 7. O provider selecionado pode responder direto ou chamar tools.
-8. Cada tool executada é salva no histórico do chat e no event log.
-9. A resposta final é salva em `messages.json`.
-10. A janela atual de contexto é atualizada em `context-window.md`.
+8. Se `alwaysAllow` estiver desligado, a resposta da IA fica pendente e a UI pede aprovação antes de executar tools.
+9. Cada tool solicitada/executada é salva no histórico do chat e no event log.
+10. A resposta final é salva em `messages.json`.
+11. A janela atual de contexto é atualizada em `context-window.md`.
 
 Eventos são gravados em um `events.jsonl` global, mas a UI mostra apenas os eventos do chat ativo.
 
@@ -79,8 +81,13 @@ Eventos são gravados em um `events.jsonl` global, mas a UI mostra apenas os eve
 
 ### `run_terminal_command`
 
-Executa um comando shell na máquina do usuário. A execução usa timeout e limite de output, mas no MVP não tem confirmação manual antes de rodar.
+Executa um comando shell na máquina do usuário. A execução usa timeout, limite de output e eventos `requested/completed`.
 O stdin é fechado automaticamente para evitar prompts interativos travados, e o processo é encerrado por timeout.
+O timeout aceito vai até 900 segundos. No modo `isolated`, o comando roda com `HOME` e `cwd` em `~/.my-computer/isolated-terminal`; é isolamento leve, não VM/container.
+
+### `web_search`
+
+Pesquisa a web quando informação atual ou fontes forem necessárias. Neste MVP, a execução real depende do toggle `searchTerminal` e usa uma busca via terminal contra DuckDuckGo HTML com Python padrão do sistema. O resultado inclui método, query, títulos, URLs e snippets para a IA citar na resposta final.
 
 ### `memory_chat`
 
@@ -113,12 +120,27 @@ Permite que a IA renomeie o chat atual com um título curto e descritivo, normal
 As configurações gerais guardam toggles para:
 
 - terminal local
+- pesquisa web
+- pesquisa via terminal
 - memória do chat
 - memória persistente
 - compactação automática por tool
 - título do chat por tool
+- sempre permitir tools sem aprovação
+- método do terminal: `standard` ou `isolated`
 
 Quando uma tool é desligada, ela não é enviada ao modelo.
+Quando `alwaysAllow` está desligado, chamadas de tool viram mensagens pendentes com botões `Permitir` e `Negar`.
+
+## Context compaction
+
+Existem três caminhos de contexto:
+
+- `Salvar snapshot`: salva uma fotografia em `context-snapshots/` e atualiza `context-window.md`.
+- `Compactar contexto`: atualiza `context.md` manualmente via modelo.
+- Compactação automática: após uma resposta, se `context.autoCompactEnabled` estiver ativo e a janela estimada passar de `autoCompactChars` respeitando `autoCompactMinMessages`, o app compacta e mostra um card `Compactação automática` no chat.
+
+O botão de caneta no cabeçalho abre um editor manual de `context.md`.
 
 ## Providers
 
@@ -171,7 +193,8 @@ Fluxo:
 3. Texto, Markdown, JSON, CSV, HTML e código passam por extração de texto local.
 4. HTML é reduzido para texto legível, sem scripts/styles.
 5. Imagens ficam salvas e podem ser enviadas como `image_url` base64 para modelos marcados como vision.
-6. Formatos sem extração nativa, como PDF/DOCX, entram como referência com caminho local.
+6. Vídeos entram como referência com preview e caminho local.
+7. Formatos sem extração nativa, como PDF/DOCX, entram como referência com caminho local.
 
 Na chamada ao modelo:
 
@@ -182,6 +205,12 @@ Na chamada ao modelo:
 - cada mensagem aceita até 8 anexos no MVP;
 - limites conhecidos de visão, como quantidade de imagens e tamanho máximo por imagem, são validados antes da chamada ao provider;
 - a IA sempre recebe o caminho local do anexo, então pode usar `run_terminal_command` para inspecionar o arquivo quando a tool estiver habilitada.
+- vídeos não são enviados nativamente para o provider no MVP. Para Gemini, isso exige adapter Files API separado.
+
+## Network mode
+
+Configurações gerais permitem marcar `Abrir painel para a rede`. O app só ativa isso quando há senha, e o efeito vale no próximo restart. A autenticação atual é Basic Auth com senha única, sem usuários/permissões por pessoa.
+Expor fora da rede local ainda é roadmap: precisa HTTPS, usuários, permissões e configuração de transporte seguro.
 
 ## Shutdown
 

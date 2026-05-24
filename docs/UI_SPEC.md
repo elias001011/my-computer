@@ -15,6 +15,7 @@ Campos:
 - Idioma da IA, com `Automático` como padrão.
 - Apelido do usuário.
 - System prompt geral.
+- Segurança inicial: aprovar tools por padrão, abrir para rede local e senha.
 
 Quando Ollama é selecionado, a tela mostra um bloco de onboarding com:
 
@@ -39,7 +40,10 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 
 - O histórico é persistido por chat.
 - Cada tool aparece agrupada como `Tool usada` e começa recolhida.
+- Quando `Sempre permitir qualquer tool` está desligado, a tool aparece pendente com botões `Permitir` e `Negar`.
+- Enquanto uma request está em andamento, a UI faz polling de eventos do chat e mostra status de tools solicitadas/concluídas.
 - `run_terminal_command` mostra comando, stdout e stderr.
+- `web_search` mostra query, método e fontes encontradas.
 - `memory_chat` mostra input e resultado em JSON.
 - Cada mensagem da IA tem botão de copiar.
 - Erros de request aparecem na conversa e no painel com botão de retry.
@@ -48,12 +52,15 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 - O usuário pode trocar provider e modelo do chat durante a conversa.
 - `Enter` envia a mensagem; `Alt+Enter` insere nova linha.
 - No mobile, o composer fica preso ao rodapé visual e o textarea cresce automaticamente até o limite.
+- O texto ainda não enviado fica salvo em cache local por chat.
+- No mobile, a área inferior mostra só o botão `Configurações de chat`; as configurações abrem em modal rolável.
 
 ## Attachments
 
 - O composer tem botão de anexar arquivos.
 - Arquivo anexado aparece em uma bandeja antes do envio.
 - Imagens têm preview visual.
+- Vídeos têm preview com player, mas são enviados como referência/caminho no MVP.
 - Texto/HTML/código mostram trecho extraído.
 - Cada anexo mostra um aviso de como será enviado para a IA.
 - Quando há texto extraído, existe ação para colar o texto no composer.
@@ -90,6 +97,11 @@ Inclui:
 - Memória persistente.
 - Toggles de tools.
 - Explicação avançada sobre tools e contexto.
+- Método do terminal: padrão ou isolado leve.
+- Aprovação de tools: sempre permitir ou pedir aprovação na UI.
+- Pesquisa web e pesquisa via terminal.
+- Compactação automática com limite estimado e intervalo mínimo.
+- Rede local com senha única e aviso de restart.
 - Export/import de configurações, chats, memórias e contexto.
 - Botão para encerrar o servidor local, com instrução de como iniciar novamente.
 
@@ -97,6 +109,8 @@ Inclui:
 
 - `Salvar snapshot` cria snapshot em `context-snapshots/` e atualiza `context-window.md`.
 - `Compactar contexto` atualiza `context.md` usando o provider/modelo do chat.
+- O botão de caneta ao lado de compactar abre um modal para editar `context.md`.
+- Compactação automática mostra um card no chat com arquivo, preview do conteúdo e botão para editar.
 - O botão `Prompt e memória` abre um modal único para editar o system prompt do chat e `memory.md`.
 - A IA também pode editar a memória via tool `memory_chat`.
 - A IA pode editar memória global via `persistent_memory`.

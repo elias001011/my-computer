@@ -9,6 +9,7 @@ Este catálogo é curado manualmente em `src/server/models.js`. Ele foi revisado
 - `Modelo personalizado` continua disponível para endpoints, aliases e lançamentos que ainda não entraram no catálogo.
 - Capacidade de imagem é explícita. Se o modelo não está marcado como vision, a UI e o backend bloqueiam imagens.
 - Limites conhecidos, como quantidade de imagens ou tamanho máximo, são usados para avisos e validação.
+- Capacidade de vídeo ainda não é usada no envio. Mesmo providers que aceitam vídeo, como Gemini via Files API, recebem vídeo como referência no MVP.
 
 ## Presets principais
 
@@ -82,3 +83,5 @@ Nem todo endpoint OpenAI-compatible aceita todos os parâmetros. Se um provider 
 ## Próxima melhoria
 
 Alguns providers expõem APIs de lista de modelos, mas poucos expõem capacidades completas de visão, limites e parâmetros. Uma fase futura pode fazer descoberta dinâmica para nomes de modelos e manter o catálogo curado apenas para capacidades.
+
+Busca nativa também depende do adapter. OpenAI, Gemini e Groq têm caminhos próprios para search/grounding em APIs específicas, mas o MVP implementa a tool transparente `web_search` com método via terminal para manter comportamento uniforme entre providers, inclusive Ollama.

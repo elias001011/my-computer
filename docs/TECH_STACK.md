@@ -17,6 +17,7 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - HTTP server nativo de Node.
 - `fetch` nativo para providers OpenAI-compatible e Anthropic.
 - `child_process.spawn` para a tool de terminal.
+- Busca web via terminal usa Python padrão do sistema para consultar DuckDuckGo HTML quando habilitada.
 - Arquivos JSON, Markdown e JSONL para persistência local.
 - Extração de anexos feita com APIs nativas: texto/HTML/código sem dependências externas.
 
@@ -37,6 +38,13 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - Metadados e texto extraído em `attachments.json`.
 - Imagens multimodais enviadas como data URL/base64 para providers OpenAI-compatible.
 - Anthropic recebe imagens convertidas para blocos nativos de `image` na Messages API.
+- Vídeos ficam salvos com preview local e são enviados como referência/caminho. Upload nativo de vídeo depende de adapters de arquivos dos providers.
+
+### Networking
+
+- Local por padrão em `127.0.0.1`.
+- Modo rede usa `0.0.0.0` no próximo restart quando configurado com senha.
+- A autenticação atual do modo rede é Basic Auth com senha única.
 
 ## Why not React/Fastify/SQLite yet
 

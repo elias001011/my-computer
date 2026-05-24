@@ -10,18 +10,20 @@
 - Chat persistente.
 - Provider/modelo por chat.
 - Configurações técnicas de modelo por chat.
-- Anexos por chat com extração de texto e suporte multimodal controlado por modelo.
-- Tool de terminal.
+- Anexos por chat com extração de texto, preview de vídeo e suporte multimodal controlado por modelo.
+- Tool de terminal com aprovação por UI e modo isolado leve.
+- Tool de pesquisa web por terminal.
 - Tool de memória de chat.
-- Compactacao e snapshot de contexto.
+- Compactacao manual, snapshot, editor de contexto e compactação automática.
+- Modo rede local com autenticação básica.
 - Export/import de dados locais.
 - Install/uninstall simples.
 
 ## Phase 1 - Safety and polish
 
-- Confirmacao antes de comandos destrutivos ou sensiveis.
+- Classificação de risco para comandos destrutivos ou sensiveis.
 - UI melhor para detalhes de tool e logs.
-- Streaming de progresso em tempo real.
+- Streaming real de stdout/stderr durante tools longas.
 - Edicao de variaveis de ambiente pelo painel.
 - Mascaramento e protecao melhor de segredos.
 - Testes de API e smoke test do painel.
@@ -32,14 +34,16 @@
 
 - Presets adicionais de providers OpenAI-compatible.
 - File APIs nativas dos providers quando fizer sentido, sem perder fallback local.
+- Adapter nativo do Gemini Files API para vídeo.
+- Busca nativa dos providers quando o adapter suportar tools próprias de search.
 - Skills com manifestos e permissoes.
 - Mais tools locais.
 - Memoria prolongada entre chats.
 
 ## Phase 3 - Advanced capabilities
 
-- Navegacao web.
+- Navegacao web interativa.
 - Automacao do computador fora do terminal.
 - Multimodalidade mais completa.
 - Voz por etapas: primeiro transcrição de voz para texto; depois TTS; só depois realtime/voz nativa se a UX pedir baixa latência e interrupções.
-- Remote access seguro com autenticacao e transporte protegido.
+- Remote access seguro fora da rede local com autenticacao, HTTPS e transporte protegido.

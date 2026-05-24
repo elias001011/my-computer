@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
+import { runtimeHome } from './paths.js';
 
 export const terminalToolDefinition = {
   type: 'function',
@@ -17,10 +20,38 @@ export const terminalToolDefinition = {
         timeoutSeconds: {
           type: 'number',
           description:
-            'Optional timeout in seconds, from 1 to 300. Use a short timeout for inspection and a longer one for explicit long-running tasks.',
+            'Optional timeout in seconds, from 1 to 900. Use a short timeout for inspection and a longer one for explicit long-running tasks.',
         },
       },
       required: ['command'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const webSearchToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description:
+      'Search the public web when current information, source-backed answers, links, prices, schedules, or recent documentation matter. Return sources and cite them in the final answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query in the user language when possible.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for searching.',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Optional number of results, from 1 to 8.',
+        },
+      },
+      required: ['query', 'reason'],
       additionalProperties: false,
     },
   },
@@ -135,11 +166,18 @@ export async function runTerminalCommand(command, options = {}) {
   const requestedTimeoutMs = Number(options.timeoutSeconds ? options.timeoutSeconds * 1000 : options.timeoutMs);
   const timeoutMs = Math.min(
     Math.max(requestedTimeoutMs || Number(process.env.MC_SHELL_TIMEOUT_MS || 120000), 1000),
-    300000,
+    900000,
   );
   const outputLimit = Number(options.outputLimit || process.env.MC_SHELL_OUTPUT_LIMIT || 40000);
   const startedAt = Date.now();
-  const cwd = options.cwd || process.env.HOME || os.homedir();
+  const terminalMode = options.terminalMode === 'isolated' ? 'isolated' : 'standard';
+  const isolatedHome = path.join(runtimeHome, 'isolated-terminal');
+  if (terminalMode === 'isolated') await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
+  const cwd = options.cwd || (terminalMode === 'isolated' ? isolatedHome : process.env.HOME || os.homedir());
+  const env =
+    terminalMode === 'isolated'
+      ? { ...process.env, CI: process.env.CI || '1', HOME: isolatedHome, MC_TERMINAL_MODE: 'isolated' }
+      : { ...process.env, CI: process.env.CI || '1', MC_TERMINAL_MODE: 'standard' };
   let stdout = '';
   let stderr = '';
   let stdoutTruncated = false;
@@ -149,7 +187,7 @@ export async function runTerminalCommand(command, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(String(command || ''), {
       cwd,
-      env: { ...process.env, CI: process.env.CI || '1' },
+      env,
       shell: process.env.SHELL || true,
       detached: process.platform !== 'win32',
       windowsHide: true,
@@ -179,6 +217,7 @@ export async function runTerminalCommand(command, options = {}) {
       resolve({
         command,
         cwd,
+        terminalMode,
         exitCode: 1,
         stdout,
         stderr: `${stderr}${stderr ? '\n' : ''}${error.message}`,
@@ -193,6 +232,7 @@ export async function runTerminalCommand(command, options = {}) {
       resolve({
         command,
         cwd,
+        terminalMode,
         exitCode,
         signal,
         stdout,
@@ -203,6 +243,73 @@ export async function runTerminalCommand(command, options = {}) {
       });
     });
   });
+}
+
+export async function runWebSearch(query, options = {}) {
+  const cleanQuery = String(query || '').trim();
+  const maxResults = Math.min(Math.max(Number(options.maxResults || 5), 1), 8);
+  if (!cleanQuery) {
+    return {
+      query: cleanQuery,
+      method: 'terminal-duckduckgo-html',
+      results: [],
+      error: 'query is required',
+    };
+  }
+
+  const queryBase64 = Buffer.from(cleanQuery, 'utf8').toString('base64');
+  const command = `python3 - <<'PY'
+import base64, html, json, re, urllib.parse, urllib.request
+query = base64.b64decode('${queryBase64}').decode('utf-8')
+url = 'https://duckduckgo.com/html/?q=' + urllib.parse.quote(query)
+request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 MyComputer/0.1'})
+with urllib.request.urlopen(request, timeout=20) as response:
+    page = response.read().decode('utf-8', 'replace')
+items = []
+for match in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.S):
+    href = html.unescape(match.group(1))
+    title = re.sub('<[^>]+>', ' ', match.group(2))
+    title = html.unescape(re.sub(r'\\s+', ' ', title)).strip()
+    snippet = ''
+    block = page[match.end():match.end()+1600]
+    snippet_match = re.search(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', block, re.S)
+    if snippet_match:
+        snippet = html.unescape(re.sub('<[^>]+>', ' ', snippet_match.group(1)))
+        snippet = re.sub(r'\\s+', ' ', snippet).strip()
+    if href.startswith('//duckduckgo.com/l/?uddg='):
+        parsed = urllib.parse.urlparse('https:' + href)
+        href = urllib.parse.unquote(urllib.parse.parse_qs(parsed.query).get('uddg', [''])[0]) or href
+    items.append({'title': title, 'url': href, 'snippet': snippet})
+    if len(items) >= ${maxResults}:
+        break
+print(json.dumps({'query': query, 'method': 'terminal-duckduckgo-html', 'results': items}, ensure_ascii=False))
+PY`;
+
+  const terminalResult = await runTerminalCommand(command, {
+    timeoutSeconds: 30,
+    outputLimit: 20000,
+    terminalMode: options.terminalMode,
+  });
+
+  try {
+    const parsed = JSON.parse(terminalResult.stdout || '{}');
+    return {
+      ...parsed,
+      terminal: {
+        exitCode: terminalResult.exitCode,
+        durationMs: terminalResult.durationMs,
+        stderr: terminalResult.stderr,
+      },
+    };
+  } catch {
+    return {
+      query: cleanQuery,
+      method: 'terminal-duckduckgo-html',
+      results: [],
+      terminal: terminalResult,
+      error: terminalResult.stderr || 'Search command did not return valid JSON.',
+    };
+  }
 }
 
 function killProcessTree(child) {

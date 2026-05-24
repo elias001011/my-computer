@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { panelDir, runtimeHome } from './paths.js';
-import { compactChat, saveContextWindow, sendUserMessage } from './assistant.js';
+import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage } from './assistant.js';
 import { getProviderModels, getProvidersForClient } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
@@ -18,6 +18,7 @@ import {
   loadConfig,
   readAttachmentFile,
   readChat,
+  readContextSummary,
   readEvents,
   readPersistentMemory,
   saveAttachment,
@@ -37,13 +38,24 @@ const CONTENT_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-export async function startServer({ port = Number(process.env.PORT || 8787), host = '127.0.0.1' } = {}) {
+export async function startServer({ port = Number(process.env.PORT || 8787), host = null } = {}) {
   await ensureRuntime();
+  const config = await loadConfig();
+  const actualHost = host || (config.server?.networkEnabled ? '0.0.0.0' : '127.0.0.1');
+  const auth = config.server?.networkEnabled && config.server?.authPassword ? { password: config.server.authPassword } : null;
   const handler = (request, response) => {
+    if (auth && !isAuthorized(request, auth)) {
+      response.writeHead(401, {
+        'WWW-Authenticate': 'Basic realm="My Computer"',
+        'Content-Type': 'text/plain; charset=utf-8',
+      });
+      response.end('Autenticação necessária.');
+      return;
+    }
     handleRequest(request, response).catch((error) => sendError(response, error));
   };
-  const { server, actualPort } = await listen(handler, host, port);
-  const url = `http://${host}:${actualPort}`;
+  const { server, actualPort } = await listen(handler, actualHost, port);
+  const url = `http://${actualHost === '0.0.0.0' ? '127.0.0.1' : actualHost}:${actualPort}`;
   return { server, url, runtimeHome };
 }
 
@@ -103,6 +115,8 @@ async function handleApi(request, response, url) {
       userNickname: body.userNickname || '',
       systemPromptExtra: body.systemPromptExtra || '',
       tools: body.tools,
+      context: body.context,
+      server: body.server,
       providerSettings: body.providerSettings,
       customModels: body.customModels,
       modelCapabilities: body.modelCapabilities,
@@ -281,6 +295,23 @@ async function handleChatsApi(request, response, parts) {
     return;
   }
 
+  if (method === 'GET' && chatId && parts[3] === 'context') {
+    const chat = await readChat(chatId);
+    sendJson(response, 200, {
+      content: await readContextSummary(chatId),
+      path: chat.paths.context,
+      activeChatEvents: await readEvents({ chatId }),
+    });
+    return;
+  }
+
+  if (method === 'PUT' && chatId && parts[3] === 'context') {
+    const body = await readBody(request);
+    const result = await editContextSummary(chatId, body.content || '');
+    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    return;
+  }
+
   if (method === 'POST' && chatId && parts[3] === 'messages') {
     const body = await readBody(request);
     const result = await sendUserMessage(chatId, body.content || '', {
@@ -288,6 +319,13 @@ async function handleChatsApi(request, response, parts) {
       attachmentIds: body.attachmentIds || [],
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    return;
+  }
+
+  if (method === 'POST' && chatId && parts[3] === 'tool-approvals' && parts[4]) {
+    const body = await readBody(request);
+    const result = await continueToolApproval(chatId, parts[4], body.decision || 'approve');
+    sendJson(response, 200, { ...result, chats: await listChats(), activeChatEvents: await readEvents({ chatId }) });
     return;
   }
 
@@ -492,6 +530,15 @@ function sendError(response, error) {
     error: error.message || 'Erro interno.',
     details: process.env.NODE_ENV === 'development' ? error.details : undefined,
   });
+}
+
+function isAuthorized(request, auth) {
+  const header = request.headers.authorization || '';
+  if (!header.startsWith('Basic ')) return false;
+  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8');
+  const separatorIndex = decoded.indexOf(':');
+  const password = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : decoded;
+  return password === auth.password;
 }
 
 function encodeHeaderValue(value) {
