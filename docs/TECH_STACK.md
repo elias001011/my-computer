@@ -18,6 +18,7 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - `fetch` nativo para providers OpenAI-compatible e Anthropic.
 - `child_process.spawn` para a tool de terminal.
 - Arquivos JSON, Markdown e JSONL para persistência local.
+- Extração de anexos feita com APIs nativas: texto/HTML/código sem dependências externas.
 
 ### AI provider
 
@@ -27,6 +28,14 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - O provider/modelo global é apenas default; cada chat salva seu próprio provider e modelo.
 - A lista de providers e modelos fica em `src/server/models.js` e é enviada no bootstrap da UI.
 - `src/server/provider-client.js` centraliza chamadas, rotação de API keys, adaptador Anthropic e pull automático do Ollama.
+
+### Attachments
+
+- Upload via JSON base64 para manter o backend sem parser multipart no MVP.
+- Arquivo bruto salvo em `attachments/`.
+- Metadados e texto extraído em `attachments.json`.
+- Imagens multimodais enviadas como data URL/base64 para providers OpenAI-compatible.
+- Anthropic recebe imagens convertidas para blocos nativos de `image` na Messages API.
 
 ## Why not React/Fastify/SQLite yet
 

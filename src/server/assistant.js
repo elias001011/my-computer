@@ -1,5 +1,6 @@
 import { runtimeHome } from './paths.js';
 import { callProviderChat } from './provider-client.js';
+import { modelSupportsImages } from './models.js';
 import {
   appendEvent,
   appendMessages,
@@ -9,6 +10,7 @@ import {
   readMemory,
   readPersistentMemory,
   loadConfig,
+  readAttachmentFile,
   saveContextSnapshot,
   saveCurrentContextWindow,
   updateChatMetadata,
@@ -40,7 +42,14 @@ export async function sendUserMessage(chatId, content, options = {}) {
   }
 
   const chatBefore = await readChat(chatId);
-  const userMessage = await saveUserMessageForRequest(chatId, chatBefore, trimmed, options.retryMessageId);
+  const selectedAttachments = await resolveMessageAttachments(chatBefore, options);
+  const userMessage = await saveUserMessageForRequest(
+    chatId,
+    chatBefore,
+    trimmed,
+    options.retryMessageId,
+    selectedAttachments,
+  );
   const chatWithUserMessage = await readChat(chatId);
   const chat = {
     ...chatWithUserMessage,
@@ -54,12 +63,14 @@ export async function sendUserMessage(chatId, content, options = {}) {
     provider: chat.provider || config.provider,
     model: chat.model || config.model,
   };
-  const workingMessages = buildProviderMessages(chat, effectiveConfig, persistentMemory);
   const toolUses = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let finalContent = '';
 
   try {
+    const workingMessages = await buildProviderMessages(chat, effectiveConfig, persistentMemory, {
+      strictImageSupportForMessageId: userMessage.id,
+    });
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const assistantMessage = await callProviderChat({
         config: effectiveConfig,
@@ -145,7 +156,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
   };
 }
 
-async function saveUserMessageForRequest(chatId, chat, content, retryMessageId) {
+async function saveUserMessageForRequest(chatId, chat, content, retryMessageId, attachments = []) {
   if (retryMessageId) {
     const existing = chat.messages.find((message) => message.id === retryMessageId && message.role === 'user');
     if (!existing) {
@@ -156,6 +167,7 @@ async function saveUserMessageForRequest(chatId, chat, content, retryMessageId) 
 
     return updateMessage(chatId, retryMessageId, {
       content: existing.content || content,
+      attachments: existing.attachments || [],
       status: 'pending',
       error: null,
       retryCount: Number(existing.retryCount || 0) + 1,
@@ -164,6 +176,7 @@ async function saveUserMessageForRequest(chatId, chat, content, retryMessageId) 
   }
 
   const userMessage = createMessage('user', content, {
+    attachments,
     status: 'pending',
   });
   await appendMessages(chatId, [userMessage]);
@@ -265,9 +278,9 @@ export function buildContextWindowMarkdown(chat, config, persistentMemory = '') 
   ].join('\n');
 }
 
-function buildProviderMessages(chat, config, persistentMemory) {
+async function buildProviderMessages(chat, config, persistentMemory, options = {}) {
   const systemPrompt = buildSystemPrompt(chat, config, persistentMemory);
-  return [{ role: 'system', content: systemPrompt }, ...selectRecentMessages(chat.messages)];
+  return [{ role: 'system', content: systemPrompt }, ...(await selectRecentMessages(chat, config, options))];
 }
 
 function buildSystemPrompt(chat, config, persistentMemory) {
@@ -334,18 +347,18 @@ function buildSystemPrompt(chat, config, persistentMemory) {
   ].join('\n');
 }
 
-function selectRecentMessages(messages) {
+async function selectRecentMessages(chat, config, options = {}) {
   const selected = [];
   let total = 0;
 
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index];
     if (!['user', 'assistant'].includes(message.role)) continue;
     if (message.status === 'failed') continue;
-    const content = renderMessageForModel(message);
-    const size = content.length + 20;
+    const rendered = await renderProviderMessage(chat, message, config, options);
+    const size = estimateMessageSize(rendered.content) + 20;
     if (selected.length && total + size > MAX_CONTEXT_CHARS) break;
-    selected.unshift({ role: message.role, content });
+    selected.unshift(rendered);
     total += size;
   }
 
@@ -616,7 +629,101 @@ function renderMessageForModel(message) {
     )
     .join('\n\n');
 
-  return [toolText, message.content].filter(Boolean).join('\n\n');
+  return [toolText, message.content, renderAttachmentsForModel(message.attachments)].filter(Boolean).join('\n\n');
+}
+
+async function renderProviderMessage(chat, message, config, options = {}) {
+  if (message.role !== 'user') {
+    return { role: message.role, content: renderMessageForModel(message) };
+  }
+
+  const attachments = message.attachments || [];
+  const supportsImages = modelSupportsImages(config.provider, config.model, config);
+  if (options.strictImageSupportForMessageId === message.id) {
+    const unsupportedImage = attachments.find((attachment) => attachment.kind === 'image' && !supportsImages);
+    if (unsupportedImage) {
+      const error = new Error(
+        `O modelo ${config.model} não está marcado como compatível com imagens. Troque para um modelo vision ou ative "este modelo suporta imagens" no modelo personalizado.`,
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+
+  const text = renderMessageForModel(message);
+  const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image' && supportsImages);
+  if (!imageAttachments.length) {
+    return { role: 'user', content: text };
+  }
+
+  const content = [{ type: 'text', text }];
+  for (const attachment of imageAttachments) {
+    try {
+      const file = await readAttachmentFile(chat.id, attachment.id);
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:${attachment.mimeType};base64,${file.data.toString('base64')}`,
+        },
+      });
+    } catch (error) {
+      content[0].text += `\n\n[Imagem não enviada: ${attachment.name} - ${error.message}]`;
+    }
+  }
+
+  return { role: 'user', content };
+}
+
+async function resolveMessageAttachments(chat, options = {}) {
+  if (options.retryMessageId) {
+    const existing = chat.messages.find((message) => message.id === options.retryMessageId && message.role === 'user');
+    return existing?.attachments || [];
+  }
+
+  const ids = Array.isArray(options.attachmentIds) ? options.attachmentIds : [];
+  if (!ids.length) return [];
+  const attachmentsById = new Map((chat.attachments || []).map((attachment) => [attachment.id, attachment]));
+  return ids
+    .map((id) => attachmentsById.get(id))
+    .filter(Boolean)
+    .map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      path: attachment.path,
+      kind: attachment.kind,
+      sendMode: attachment.sendMode,
+      extractedText: attachment.extractedText,
+      previewText: attachment.previewText,
+      extractionStatus: attachment.extractionStatus,
+      extractionNote: attachment.extractionNote,
+    }));
+}
+
+function renderAttachmentsForModel(attachments = []) {
+  if (!attachments.length) return '';
+  const parts = ['<attachments>'];
+  for (const attachment of attachments) {
+    parts.push(
+      [
+        `## ${attachment.name}`,
+        `- id: ${attachment.id}`,
+        `- type: ${attachment.mimeType || 'application/octet-stream'}`,
+        `- kind: ${attachment.kind}`,
+        `- saved_path: ${attachment.path}`,
+        `- send_mode: ${attachment.sendMode}`,
+        attachment.extractionNote ? `- note: ${attachment.extractionNote}` : '',
+        attachment.extractedText
+          ? `\n<document_text name="${escapeXmlAttribute(attachment.name)}">\n${truncate(attachment.extractedText, 60000)}\n</document_text>`
+          : '\nSem texto extraído. A IA pode usar o terminal para ler o arquivo salvo se a tool de terminal estiver ligada.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  parts.push('</attachments>');
+  return parts.join('\n\n');
 }
 
 function renderTranscript(messages, maxChars) {
@@ -625,6 +732,24 @@ function renderTranscript(messages, maxChars) {
     return `### ${label} - ${message.createdAt}\n\n${renderMessageForModel(message)}`;
   });
   return truncate(parts.join('\n\n'), maxChars);
+}
+
+function estimateMessageSize(content) {
+  if (typeof content === 'string') return content.length;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (item.type === 'text') return item.text?.length || 0;
+        if (item.type === 'image_url') return 4000;
+        return JSON.stringify(item).length;
+      })
+      .reduce((sum, value) => sum + value, 0);
+  }
+  return JSON.stringify(content || '').length;
+}
+
+function escapeXmlAttribute(value) {
+  return String(value || '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
 }
 
 function truncate(value, limit) {

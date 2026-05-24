@@ -46,12 +46,22 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   await store.writePersistentMemory('# Global\n\n- cross-chat');
   assert.match(await store.readPersistentMemory(), /cross-chat/);
 
+  const attachment = await store.saveAttachment(chat.id, {
+    name: 'doc.html',
+    mimeType: 'text/html',
+    dataBase64: Buffer.from('<html><body><h1>Titulo</h1><p>Texto extraido.</p></body></html>').toString('base64'),
+  });
+  assert.equal(attachment.kind, 'text');
+  assert.match(attachment.extractedText, /Texto extraido/);
+  assert.equal((await store.listAttachments(chat.id)).length, 1);
+
   const snapshotPath = await store.saveContextSnapshot(chat.id, '# Context');
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
 
   const exported = await store.exportRuntimeData();
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
+  assert.equal(exported.chats[0].attachments.length, 1);
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);

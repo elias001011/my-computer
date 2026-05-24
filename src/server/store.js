@@ -21,6 +21,7 @@ export const defaultConfig = Object.freeze({
   apiKey: process.env.GROQ_API_KEY || '',
   providerSettings: buildDefaultProviderSettings(),
   customModels: {},
+  modelCapabilities: {},
 });
 
 export async function ensureRuntime() {
@@ -74,6 +75,10 @@ export async function saveConfig(patch) {
       ...current.customModels,
       ...(patch.customModels || {}),
     }),
+    modelCapabilities: normalizeModelCapabilities({
+      ...current.modelCapabilities,
+      ...(patch.modelCapabilities || {}),
+    }),
     setupComplete: Boolean(patch.setupComplete ?? true),
     updatedAt: new Date().toISOString(),
   };
@@ -96,6 +101,7 @@ export function sanitizeConfig(config) {
     tools: normalizeTools(config.tools),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
+    modelCapabilities: normalizeModelCapabilities(config.modelCapabilities || {}),
     apiKeySet: Boolean(getPrimaryApiKey(providerSettings, config.provider)),
     apiKey: getPrimaryApiKey(providerSettings, config.provider),
   };
@@ -136,10 +142,13 @@ export async function createChat(title = 'Novo chat', options = {}) {
       memory: path.join(chatDir, 'memory.md'),
       context: path.join(chatDir, 'context.md'),
       contextWindow: path.join(chatDir, 'context-window.md'),
+      attachments: path.join(chatDir, 'attachments'),
     },
   };
 
   await fs.mkdir(path.join(chatDir, 'context-snapshots'), { recursive: true, mode: 0o700 });
+  await fs.mkdir(metadata.paths.attachments, { recursive: true, mode: 0o700 });
+  await writeJson(path.join(chatDir, 'attachments.json'), [], 0o600);
   await writeJson(path.join(chatDir, 'metadata.json'), metadata, 0o600);
   await writeJson(path.join(chatDir, 'messages.json'), [], 0o600);
   await fs.writeFile(
@@ -162,9 +171,10 @@ export async function readChat(id) {
   const metadata = await readChatMetadata(id);
   const chatDir = getChatDir(id);
   const messages = await readJson(path.join(chatDir, 'messages.json'), []);
+  const attachments = await listAttachments(id);
   const memory = await readText(metadata.paths.memory, '');
   const contextSummary = await readText(metadata.paths.context, '');
-  return { ...metadata, messages, memory, contextSummary };
+  return { ...metadata, messages, attachments, memory, contextSummary };
 }
 
 export async function appendMessages(id, messages) {
@@ -285,6 +295,105 @@ export async function saveContextSnapshot(id, content) {
   return snapshotPath;
 }
 
+export async function saveAttachment(id, file = {}) {
+  assertChatId(id);
+  const metadata = await readChatMetadata(id);
+  const attachmentId = crypto.randomUUID();
+  const name = sanitizeFileName(file.name || 'attachment');
+  const mimeType = String(file.mimeType || file.type || 'application/octet-stream').slice(0, 120);
+  const size = Number(file.size || 0);
+  const rawBase64 = String(file.dataBase64 || '').replace(/^data:[^;]+;base64,/, '');
+  if (!rawBase64) {
+    const error = new Error('Arquivo sem conteúdo.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const buffer = Buffer.from(rawBase64, 'base64');
+  if (buffer.length > 20 * 1024 * 1024) {
+    const error = new Error('Arquivo muito grande. Limite atual: 20 MB por arquivo.');
+    error.statusCode = 413;
+    throw error;
+  }
+
+  const attachmentsDir = metadata.paths.attachments;
+  await fs.mkdir(attachmentsDir, { recursive: true, mode: 0o700 });
+  const fileName = `${attachmentId}-${name}`;
+  const filePath = path.join(attachmentsDir, fileName);
+  await fs.writeFile(filePath, buffer, { mode: 0o600 });
+
+  const extraction = extractAttachmentText(buffer, { name, mimeType });
+  const attachment = {
+    id: attachmentId,
+    name,
+    mimeType,
+    size: size || buffer.length,
+    path: filePath,
+    kind: classifyAttachment(mimeType, name),
+    sendMode: defaultAttachmentSendMode(mimeType, name, extraction),
+    extractedText: extraction.text,
+    previewText: truncate(extraction.text, 1800),
+    extractionStatus: extraction.status,
+    extractionNote: extraction.note,
+    createdAt: new Date().toISOString(),
+  };
+
+  const attachments = await listAttachments(id);
+  await writeJson(getAttachmentsMetadataPath(id), [...attachments, attachment], 0o600);
+  await touchChat(id);
+  await appendEvent({
+    type: 'chat.attachment.created',
+    chatId: id,
+    details: { name: attachment.name, kind: attachment.kind, sendMode: attachment.sendMode },
+  });
+  return attachment;
+}
+
+export async function listAttachments(id) {
+  assertChatId(id);
+  return readJson(getAttachmentsMetadataPath(id), []);
+}
+
+export async function readAttachment(id, attachmentId) {
+  assertChatId(id);
+  const attachment = (await listAttachments(id)).find((item) => item.id === attachmentId);
+  if (!attachment) {
+    const error = new Error('Anexo não encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return attachment;
+}
+
+export async function readAttachmentFile(id, attachmentId) {
+  const attachment = await readAttachment(id, attachmentId);
+  const chatDir = getChatDir(id);
+  const resolved = path.resolve(attachment.path);
+  if (!resolved.startsWith(`${path.resolve(chatDir)}${path.sep}`)) {
+    const error = new Error('Caminho de anexo inválido.');
+    error.statusCode = 403;
+    throw error;
+  }
+  return {
+    attachment,
+    data: await fs.readFile(resolved),
+  };
+}
+
+export async function deleteAttachment(id, attachmentId) {
+  const attachments = await listAttachments(id);
+  const attachment = attachments.find((item) => item.id === attachmentId);
+  if (!attachment) return;
+  await fs.rm(attachment.path, { force: true });
+  await writeJson(
+    getAttachmentsMetadataPath(id),
+    attachments.filter((item) => item.id !== attachmentId),
+    0o600,
+  );
+  await touchChat(id);
+  await appendEvent({ type: 'chat.attachment.deleted', chatId: id, details: { name: attachment.name } });
+}
+
 export async function readEvents(options = {}) {
   const limit = typeof options === 'number' ? options : Number(options.limit || 80);
   const chatId = typeof options === 'object' ? options.chatId : null;
@@ -342,6 +451,7 @@ export async function exportRuntimeData() {
       memory: fullChat.memory || '',
       contextSummary: fullChat.contextSummary || '',
       contextWindow: await readText(path.join(chatDir, 'context-window.md'), ''),
+      attachments: await exportChatAttachments(fullChat.id),
     });
   }
 
@@ -407,6 +517,13 @@ async function readChatMetadata(id) {
     provider,
     model: String(metadata.model || getDefaultModelForProvider(provider)).trim(),
     systemPromptExtra: String(metadata.systemPromptExtra || '').trim(),
+    paths: {
+      ...(metadata.paths || {}),
+      memory: metadata.paths?.memory || path.join(getChatDir(id), 'memory.md'),
+      context: metadata.paths?.context || path.join(getChatDir(id), 'context.md'),
+      contextWindow: metadata.paths?.contextWindow || path.join(getChatDir(id), 'context-window.md'),
+      attachments: metadata.paths?.attachments || path.join(getChatDir(id), 'attachments'),
+    },
   };
 }
 
@@ -430,15 +547,59 @@ async function writeImportedChat(importedChat = {}) {
       memory: path.join(chatDir, 'memory.md'),
       context: path.join(chatDir, 'context.md'),
       contextWindow: path.join(chatDir, 'context-window.md'),
+      attachments: path.join(chatDir, 'attachments'),
     },
   };
 
   await fs.mkdir(path.join(chatDir, 'context-snapshots'), { recursive: true, mode: 0o700 });
+  await fs.mkdir(metadata.paths.attachments, { recursive: true, mode: 0o700 });
   await writeJson(path.join(chatDir, 'metadata.json'), metadata, 0o600);
   await writeJson(path.join(chatDir, 'messages.json'), Array.isArray(importedChat.messages) ? importedChat.messages : [], 0o600);
   await fs.writeFile(metadata.paths.memory, String(importedChat.memory || '# Chat memory\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.context, String(importedChat.contextSummary || '# Context summary\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.contextWindow, String(importedChat.contextWindow || '# Context window\n'), { mode: 0o600 });
+  await importChatAttachments(id, importedChat.attachments || []);
+}
+
+async function exportChatAttachments(id) {
+  const attachments = await listAttachments(id);
+  const exported = [];
+  for (const attachment of attachments) {
+    let dataBase64 = '';
+    try {
+      dataBase64 = (await fs.readFile(attachment.path)).toString('base64');
+    } catch {
+      // Keep metadata if a file disappeared.
+    }
+    exported.push({ ...attachment, dataBase64 });
+  }
+  return exported;
+}
+
+async function importChatAttachments(id, attachments = []) {
+  const imported = [];
+  const chat = await readChatMetadata(id);
+  await fs.mkdir(chat.paths.attachments, { recursive: true, mode: 0o700 });
+
+  for (const attachment of attachments) {
+    const attachmentId = /^[a-zA-Z0-9_-]+$/.test(String(attachment.id || ''))
+      ? String(attachment.id)
+      : crypto.randomUUID();
+    const name = sanitizeFileName(attachment.name || 'attachment');
+    const filePath = path.join(chat.paths.attachments, `${attachmentId}-${name}`);
+    if (attachment.dataBase64) {
+      await fs.writeFile(filePath, Buffer.from(attachment.dataBase64, 'base64'), { mode: 0o600 });
+    }
+    imported.push({
+      ...attachment,
+      id: attachmentId,
+      name,
+      path: filePath,
+      dataBase64: undefined,
+    });
+  }
+
+  await writeJson(getAttachmentsMetadataPath(id), imported, 0o600);
 }
 
 async function touchChat(id) {
@@ -583,9 +744,139 @@ function normalizeCustomModels(customModels = {}) {
   return next;
 }
 
+function normalizeModelCapabilities(modelCapabilities = {}) {
+  const next = {};
+  for (const provider of providerCatalog) {
+    const providerCapabilities = modelCapabilities[provider.id] || {};
+    next[provider.id] = Object.fromEntries(
+      Object.entries(providerCapabilities).map(([modelId, capabilities]) => [
+        String(modelId),
+        { images: Boolean(capabilities?.images) },
+      ]),
+    );
+  }
+  return next;
+}
+
 function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {
   const provider = normalizeProviderId(providerId);
   return providerSettings[provider]?.apiKeys?.[0]?.value || '';
+}
+
+function getAttachmentsMetadataPath(id) {
+  return path.join(getChatDir(id), 'attachments.json');
+}
+
+function classifyAttachment(mimeType, name) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (isTextLike(mimeType, name)) return 'text';
+  return 'document';
+}
+
+function defaultAttachmentSendMode(mimeType, name, extraction) {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (extraction.status === 'extracted') return 'text';
+  return 'reference';
+}
+
+function extractAttachmentText(buffer, file) {
+  if (!isTextLike(file.mimeType, file.name)) {
+    return {
+      status: 'reference',
+      text: '',
+      note: 'Arquivo salvo no chat. O MVP ainda não extrai texto deste formato.',
+    };
+  }
+
+  const raw = buffer.toString('utf8').replace(/\u0000/g, '');
+  const text = file.mimeType === 'text/html' || /\.html?$/i.test(file.name) ? htmlToText(raw) : raw;
+  const clean = text.replace(/\r\n/g, '\n').trim();
+  if (!clean) {
+    return { status: 'empty', text: '', note: 'Não foi possível extrair texto útil deste arquivo.' };
+  }
+
+  const limit = 160000;
+  return {
+    status: clean.length > limit ? 'truncated' : 'extracted',
+    text: truncate(clean, limit),
+    note:
+      clean.length > limit
+        ? `Texto extraído e truncado para ${limit} caracteres antes de enviar ao modelo.`
+        : 'Texto extraído e enviado ao modelo em uma seção de documentos.',
+  };
+}
+
+function isTextLike(mimeType, name) {
+  const extension = path.extname(name || '').toLowerCase();
+  return (
+    mimeType.startsWith('text/') ||
+    [
+      '.md',
+      '.markdown',
+      '.json',
+      '.jsonl',
+      '.csv',
+      '.tsv',
+      '.html',
+      '.htm',
+      '.xml',
+      '.yaml',
+      '.yml',
+      '.js',
+      '.mjs',
+      '.cjs',
+      '.ts',
+      '.tsx',
+      '.jsx',
+      '.css',
+      '.py',
+      '.rb',
+      '.go',
+      '.rs',
+      '.java',
+      '.c',
+      '.cpp',
+      '.h',
+      '.hpp',
+      '.sh',
+      '.sql',
+      '.log',
+      '.ini',
+      '.toml',
+    ].includes(extension) ||
+    ['application/json', 'application/xml', 'application/x-yaml'].includes(mimeType)
+  );
+}
+
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|tr|section|article)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function sanitizeFileName(name) {
+  const clean = String(name || 'attachment')
+    .replace(/[^\w.\-() ]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.slice(0, 120) || 'attachment';
+}
+
+function truncate(value, limit) {
+  const text = String(value || '');
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n...[truncated]`;
 }
 
 function stamp(date) {

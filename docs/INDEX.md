@@ -18,6 +18,7 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 - Provider/modelo salvo por chat e editável durante a conversa.
 - Múltiplas API keys por provider, com rotação em falhas recuperáveis.
 - Export/import de configurações, chats, memórias e contexto.
+- Anexos por chat com extração simples de texto, preview e bloqueio de imagem para modelos sem vision.
 - Runtime central em `~/.my-computer` ou `MY_COMPUTER_HOME`.
 - Painel vanilla: `index.html`, `styles.css`, `app.js`.
 - Tools do MVP: `run_terminal_command`, `memory_chat`, `persistent_memory`, `compact_context` e `rename_chat`.

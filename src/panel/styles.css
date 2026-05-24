@@ -146,6 +146,20 @@ pre {
   line-height: 1.5;
 }
 
+.setup-assist {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.setup-assist h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
 .setup-form,
 .settings-block {
   display: grid;
@@ -396,7 +410,12 @@ pre {
   border-top: 1px solid var(--line);
   padding: 16px 22px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.composer-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -404,6 +423,85 @@ pre {
 .composer textarea {
   min-height: 54px;
   max-height: 180px;
+}
+
+.attach-button,
+.file-button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.attach-button input,
+.file-button input {
+  display: none;
+}
+
+.attachment-tray,
+.message-attachments {
+  display: grid;
+  gap: 8px;
+}
+
+.attachment-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+  padding: 9px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.attachment-card.warn {
+  border-color: #e7c27d;
+  background: #fffaf0;
+}
+
+.attachment-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+.attachment-info {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.attachment-info span,
+.attachment-info small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.attachment-info pre {
+  max-height: 120px;
+  font-size: 12px;
+  padding: 8px;
+}
+
+.attachment-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.attachment-actions button {
+  min-height: 28px;
+  font-size: 12px;
 }
 
 .inspector {
@@ -474,22 +572,6 @@ pre {
   display: grid;
 }
 
-.file-button {
-  min-height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  cursor: pointer;
-  padding: 0 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.file-button input {
-  display: none;
-}
 
 .danger-zone {
   border-top: 1px solid var(--line);
@@ -627,7 +709,8 @@ pre {
 @media (max-width: 760px) {
   .setup-grid,
   .app-shell,
-  .composer {
+  .composer,
+  .composer-main {
     grid-template-columns: 1fr;
   }
 

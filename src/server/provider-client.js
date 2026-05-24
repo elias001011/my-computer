@@ -235,7 +235,7 @@ function toAnthropicMessages(messages = []) {
     }
 
     if (message.role === 'user') {
-      anthropicMessages.push({ role: 'user', content: String(message.content || '') });
+      anthropicMessages.push({ role: 'user', content: toAnthropicContent(message.content) });
     }
   }
 
@@ -243,6 +243,29 @@ function toAnthropicMessages(messages = []) {
     system: systemParts.join('\n\n'),
     anthropicMessages: mergeAdjacentMessages(anthropicMessages),
   };
+}
+
+function toAnthropicContent(content) {
+  if (!Array.isArray(content)) return String(content || '');
+  return content
+    .map((block) => {
+      if (block.type === 'text') return { type: 'text', text: String(block.text || '') };
+      if (block.type === 'image_url') {
+        const url = block.image_url?.url || '';
+        const match = /^data:([^;]+);base64,(.+)$/.exec(url);
+        if (!match) return null;
+        return {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: match[1],
+            data: match[2],
+          },
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
 }
 
 async function ensureOllamaModel(model, openAIBaseUrl) {

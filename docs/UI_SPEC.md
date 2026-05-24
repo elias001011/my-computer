@@ -16,6 +16,13 @@ Campos:
 - Apelido do usuário.
 - System prompt geral.
 
+Quando Ollama é selecionado, a tela mostra um bloco de onboarding com:
+
+- verificar instalação;
+- tentar instalar pelo script oficial;
+- baixar o modelo selecionado;
+- comando manual quando a instalação pelo navegador precisar de sudo/senha.
+
 ### Layout principal
 
 Desktop usa três áreas fixas:
@@ -38,6 +45,18 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 - O modelo ativo aparece no cabeçalho do chat.
 - O usuário pode trocar provider e modelo do chat durante a conversa.
 - `Enter` envia a mensagem; `Alt+Enter` insere nova linha.
+
+## Attachments
+
+- O composer tem botão de anexar arquivos.
+- Arquivo anexado aparece em uma bandeja antes do envio.
+- Imagens têm preview visual.
+- Texto/HTML/código mostram trecho extraído.
+- Cada anexo mostra um aviso de como será enviado para a IA.
+- Quando há texto extraído, existe ação para colar o texto no composer.
+- Imagens são bloqueadas quando o modelo ativo não suporta imagem.
+- Modelos personalizados têm toggle para declarar suporte a imagens.
+- Formatos sem extração ficam salvos no chat; a UI explica que a IA receberá caminho/metadados e poderá acessar via terminal.
 
 ## Model selection
 

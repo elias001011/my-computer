@@ -9,6 +9,7 @@
 - Ollama com detecção de modelos instalados e pull automático.
 - Chat persistente.
 - Provider/modelo por chat.
+- Anexos por chat com extração de texto e suporte multimodal controlado por modelo.
 - Tool de terminal.
 - Tool de memória de chat.
 - Compactacao e snapshot de contexto.
@@ -23,10 +24,12 @@
 - Edicao de variaveis de ambiente pelo painel.
 - Mascaramento e protecao melhor de segredos.
 - Testes de API e smoke test do painel.
+- Parsers dedicados para PDF/DOCX e OCR local.
 
 ## Phase 2 - Extensibility
 
 - Presets adicionais de providers OpenAI-compatible.
+- File APIs nativas dos providers quando fizer sentido, sem perder fallback local.
 - Skills com manifestos e permissoes.
 - Mais tools locais.
 - Importacao/envio de arquivos.
@@ -36,6 +39,6 @@
 
 - Navegacao web.
 - Automacao do computador fora do terminal.
-- Multimodalidade.
-- Voz.
+- Multimodalidade mais completa.
+- Voz por etapas: primeiro transcrição de voz para texto; depois TTS; só depois realtime/voz nativa se a UX pedir baixa latência e interrupções.
 - Remote access seguro com autenticacao e transporte protegido.

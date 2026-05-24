@@ -44,6 +44,8 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
       memory.md
       context.md
       context-window.md
+      attachments.json
+      attachments/
       context-snapshots/
 ```
 
@@ -136,7 +138,27 @@ Ollama usa o endpoint local OpenAI-compatible por padrão (`http://127.0.0.1:114
 
 ## Import/export
 
-`/api/export` gera um JSON com configurações, chats, mensagens, memórias e contexto salvo. `/api/import` importa esse JSON e pode sobrescrever chats com o mesmo id.
+`/api/export` gera um JSON com configurações, chats, mensagens, memórias, contexto salvo e anexos. `/api/import` importa esse JSON e pode sobrescrever chats com o mesmo id.
+
+## Attachments
+
+Anexos são salvos por chat em `attachments/`, com metadados em `attachments.json`.
+
+Fluxo:
+
+1. A UI lê o arquivo como base64 e envia para `/api/chats/:id/attachments`.
+2. O servidor salva o arquivo no runtime do chat.
+3. Texto, Markdown, JSON, CSV, HTML e código passam por extração de texto local.
+4. HTML é reduzido para texto legível, sem scripts/styles.
+5. Imagens ficam salvas e podem ser enviadas como `image_url` base64 para modelos marcados como vision.
+6. Formatos sem extração nativa, como PDF/DOCX, entram como referência com caminho local.
+
+Na chamada ao modelo:
+
+- documentos com texto extraído entram em uma seção `<attachments>` no conteúdo da mensagem;
+- imagens entram como conteúdo multimodal apenas se `modelSupportsImages` retornar verdadeiro;
+- se o usuário tentar enviar imagem para um modelo sem suporte, o backend rejeita com erro claro e a UI também bloqueia antes do envio;
+- a IA sempre recebe o caminho local do anexo, então pode usar `run_terminal_command` para inspecionar o arquivo quando a tool estiver habilitada.
 
 ## Shutdown
 

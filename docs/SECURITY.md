@@ -14,6 +14,8 @@ Não exponha o painel na internet.
 - Output de terminal possui limite de tamanho.
 - Tools podem ser desligadas nas configurações gerais e deixam de ser enviadas ao modelo.
 - Rotação de API keys evita ficar preso em uma key rate-limited, mas não substitui autenticação nem controle de gasto.
+- Anexos ficam dentro da pasta do chat e são servidos apenas por endpoints locais com ids validados.
+- Imagens só são enviadas ao modelo quando o modelo está marcado como compatível.
 
 ## Current risks
 
@@ -23,6 +25,8 @@ Não exponha o painel na internet.
 - Não existe allowlist ou denylist de comandos.
 - Outputs de tools podem conter segredos se o comando imprimir segredos.
 - Endpoints OpenAI-compatible customizados são confiados pelo usuário; um endpoint malicioso pode receber prompt, memórias e tool outputs.
+- Anexos exportados entram em base64 no arquivo de backup. Esse arquivo pode conter documentos sensíveis.
+- A extração de texto do MVP é simples e não isola conteúdo malicioso dentro de HTML além de remover scripts/styles como texto.
 
 ## Near-term hardening
 
@@ -33,3 +37,4 @@ Não exponha o painel na internet.
 - Criptografia ou storage protegido para secrets locais.
 - Autenticação antes de qualquer acesso remoto.
 - Permissões mais granulares por tool.
+- Parsers dedicados e sandbox para PDF/DOCX/OCR.

@@ -5,18 +5,22 @@ import { panelDir, runtimeHome } from './paths.js';
 import { compactChat, saveContextWindow, sendUserMessage } from './assistant.js';
 import { getProviderModels, getProvidersForClient } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
+import { runTerminalCommand } from './tools.js';
 import {
   appendEvent,
   createChat,
   deleteChat,
+  deleteAttachment,
   ensureRuntime,
   exportRuntimeData,
   importRuntimeData,
   listChats,
   loadConfig,
+  readAttachmentFile,
   readChat,
   readEvents,
   readPersistentMemory,
+  saveAttachment,
   sanitizeConfig,
   saveConfig,
   updateChatMetadata,
@@ -71,10 +75,12 @@ async function handleApi(request, response, url) {
       config: sanitizeConfig(config),
       providers: getProvidersForClient({
         customModelsByProvider: config.customModels,
+        modelCapabilitiesByProvider: config.modelCapabilities,
         ollamaInstalledModels,
       }),
       models: getProviderModels(config.provider, {
         customModels: config.customModels?.[config.provider],
+        modelCapabilities: config.modelCapabilities?.[config.provider],
         ollamaInstalledModels,
       }),
       ollamaInstalledModels,
@@ -99,6 +105,7 @@ async function handleApi(request, response, url) {
       tools: body.tools,
       providerSettings: body.providerSettings,
       customModels: body.customModels,
+      modelCapabilities: body.modelCapabilities,
       setupComplete: true,
     });
     sendJson(response, 200, { config: sanitizeConfig(config) });
@@ -128,10 +135,12 @@ async function handleApi(request, response, url) {
       config: sanitizeConfig(config),
       providers: getProvidersForClient({
         customModelsByProvider: config.customModels,
+        modelCapabilitiesByProvider: config.modelCapabilities,
         ollamaInstalledModels,
       }),
       models: getProviderModels(config.provider, {
         customModels: config.customModels?.[config.provider],
+        modelCapabilities: config.modelCapabilities?.[config.provider],
         ollamaInstalledModels,
       }),
       ollamaInstalledModels,
@@ -147,6 +156,11 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     const persistentMemory = await writePersistentMemory(body.content || '');
     sendJson(response, 200, { persistentMemory });
+    return;
+  }
+
+  if (parts[1] === 'ollama') {
+    await handleOllamaApi(request, response, parts);
     return;
   }
 
@@ -182,6 +196,9 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'PUT' && chatId && parts.length === 3) {
     const body = await readBody(request);
+    if (body.modelCapabilities) {
+      await saveConfig({ modelCapabilities: body.modelCapabilities, setupComplete: true });
+    }
     await updateChatMetadata(chatId, {
       title: body.title,
       provider: body.provider,
@@ -223,6 +240,37 @@ async function handleChatsApi(request, response, parts) {
     return;
   }
 
+  if (method === 'POST' && chatId && parts[3] === 'attachments' && parts.length === 4) {
+    const body = await readBody(request, { limit: 30_000_000 });
+    const attachment = await saveAttachment(chatId, body);
+    sendJson(response, 201, {
+      attachment,
+      chat: await readChat(chatId),
+      activeChatEvents: await readEvents({ chatId }),
+    });
+    return;
+  }
+
+  if (method === 'GET' && chatId && parts[3] === 'attachments' && parts[5] === 'content') {
+    const { attachment, data } = await readAttachmentFile(chatId, parts[4]);
+    response.writeHead(200, {
+      'Content-Type': attachment.mimeType || 'application/octet-stream',
+      'Content-Disposition': `inline; filename="${encodeHeaderValue(attachment.name)}"`,
+      'Cache-Control': 'no-store',
+    });
+    response.end(data);
+    return;
+  }
+
+  if (method === 'DELETE' && chatId && parts[3] === 'attachments' && parts[4]) {
+    await deleteAttachment(chatId, parts[4]);
+    sendJson(response, 200, {
+      chat: await readChat(chatId),
+      activeChatEvents: await readEvents({ chatId }),
+    });
+    return;
+  }
+
   if (method === 'PUT' && chatId && parts[3] === 'memory') {
     const body = await readBody(request);
     sendJson(response, 200, {
@@ -236,6 +284,7 @@ async function handleChatsApi(request, response, parts) {
     const body = await readBody(request);
     const result = await sendUserMessage(chatId, body.content || '', {
       retryMessageId: body.retryMessageId || null,
+      attachmentIds: body.attachmentIds || [],
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
     return;
@@ -254,6 +303,72 @@ async function handleChatsApi(request, response, parts) {
   }
 
   sendJson(response, 404, { error: 'Endpoint de chat nao encontrado.' });
+}
+
+async function handleOllamaApi(request, response, parts) {
+  const method = request.method || 'GET';
+
+  if (method === 'GET' && parts[2] === 'status') {
+    const config = await loadConfig();
+    const version = await runTerminalCommand('command -v ollama >/dev/null 2>&1 && ollama --version || true', {
+      timeoutSeconds: 5,
+      outputLimit: 2000,
+    });
+    const installed = Boolean(version.stdout.trim());
+    const models = await listOllamaInstalledModels(config);
+    sendJson(response, 200, {
+      installed,
+      running: models.length > 0 || installed,
+      version: version.stdout.trim(),
+      models,
+      installCommand: 'curl -fsSL https://ollama.com/install.sh | sh',
+      note: installed
+        ? 'Ollama encontrado. Se a lista de modelos estiver vazia, o serviço pode estar parado ou sem modelos instalados.'
+        : 'Ollama não foi encontrado no PATH.',
+    });
+    return;
+  }
+
+  if (method === 'POST' && parts[2] === 'install') {
+    const result = await runTerminalCommand('curl -fsSL https://ollama.com/install.sh | sh', {
+      timeoutSeconds: 300,
+      outputLimit: 20000,
+    });
+    await appendEvent({
+      type: 'ollama.install',
+      details: { exitCode: result.exitCode, timedOut: result.timedOut },
+    });
+    sendJson(response, 200, {
+      ok: result.exitCode === 0,
+      result,
+      message:
+        result.exitCode === 0
+          ? 'Ollama instalado.'
+          : 'A instalação pelo navegador falhou. Se o output mencionar sudo/senha, rode o comando exibido no terminal.',
+    });
+    return;
+  }
+
+  if (method === 'POST' && parts[2] === 'pull') {
+    const body = await readBody(request);
+    const model = String(body.model || '').trim();
+    if (!model) {
+      sendJson(response, 400, { error: 'Modelo do Ollama não informado.' });
+      return;
+    }
+    const result = await runTerminalCommand(`ollama pull ${shellQuote(model)}`, {
+      timeoutSeconds: 600,
+      outputLimit: 30000,
+    });
+    await appendEvent({
+      type: 'ollama.pull',
+      details: { model, exitCode: result.exitCode, timedOut: result.timedOut },
+    });
+    sendJson(response, result.exitCode === 0 ? 200 : 500, { result });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de Ollama nao encontrado.' });
 }
 
 async function serveStatic(response, requestPath) {
@@ -321,6 +436,14 @@ function sendError(response, error) {
     error: error.message || 'Erro interno.',
     details: process.env.NODE_ENV === 'development' ? error.details : undefined,
   });
+}
+
+function encodeHeaderValue(value) {
+  return String(value || 'attachment').replace(/["\\]/g, '_');
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
 async function listen(handler, host, startPort) {

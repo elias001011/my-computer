@@ -11,6 +11,8 @@ const state = {
   busy: false,
   settingsOpen: false,
   settingsProvider: '',
+  pendingAttachments: [],
+  ollamaStatus: null,
   apiKeyVisible: false,
   lastFailedAction: null,
   status: '',
@@ -48,6 +50,7 @@ function renderSetup() {
   const providerSettings = state.config?.providerSettings?.[providerId] || {};
   const showCustomModel = !isKnownModel(providerId, model);
   const showBaseUrl = provider.id === 'openai-compatible' || provider.id === 'ollama';
+  const modelCanSeeImages = modelSupportsImages(providerId, model);
   app.innerHTML = `
     <main class="setup-screen">
       <section class="setup-panel">
@@ -74,6 +77,14 @@ function renderSetup() {
             Modelo personalizado
             <input name="customModel" value="${showCustomModel ? escapeAttr(model) : ''}" placeholder="provider/model ou nome local" />
           </label>
+          <label class="toggle-row ${showCustomModel ? '' : 'hidden'}" id="setup-custom-model-images-row">
+            <input type="checkbox" name="customModelImages" ${modelCanSeeImages ? 'checked' : ''} />
+            <span>
+              <strong>Este modelo suporta imagens</strong>
+              <small>Ative apenas se o endpoint aceitar imagens no formato OpenAI vision.</small>
+            </span>
+          </label>
+          ${providerId === 'ollama' ? renderOllamaSetup(model) : ''}
           <label class="${showBaseUrl ? '' : 'hidden'}">
             Endpoint/base URL
             <input name="baseUrl" value="${escapeAttr(providerSettings.baseUrl || provider.baseUrl || '')}" placeholder="https://api.exemplo.com/v1" ${showBaseUrl ? 'required' : ''} />
@@ -115,8 +126,12 @@ function renderSetup() {
     const selected = document.querySelector('#setup-model').value;
     if (selected === CUSTOM_MODEL_VALUE) {
       document.querySelector('#setup-custom-model-row').classList.remove('hidden');
+      document.querySelector('#setup-custom-model-images-row').classList.remove('hidden');
     }
   });
+  document.querySelector('#check-ollama')?.addEventListener('click', checkOllamaStatus);
+  document.querySelector('#install-ollama')?.addEventListener('click', installOllama);
+  document.querySelector('#pull-ollama-model')?.addEventListener('click', () => pullOllamaModel(model));
 }
 
 function renderApp() {
@@ -157,8 +172,17 @@ function renderApp() {
           ${state.busy ? renderPending() : ''}
         </section>
         <form class="composer" id="composer">
-          <textarea name="content" placeholder="Digite uma mensagem..." ${state.busy ? 'disabled' : ''}></textarea>
-          <button class="primary" type="submit" ${state.busy ? 'disabled' : ''}>Enviar</button>
+          <div class="attachment-tray" id="attachment-tray">
+            ${state.pendingAttachments.length ? state.pendingAttachments.map((attachment) => renderAttachmentCard(attachment, { pending: true })).join('') : ''}
+          </div>
+          <div class="composer-main">
+            <label class="attach-button" title="Anexar arquivo">
+              Anexar
+              <input id="file-input" type="file" multiple ${!chat || state.busy ? 'disabled' : ''} />
+            </label>
+            <textarea name="content" placeholder="Digite uma mensagem..." ${state.busy ? 'disabled' : ''}></textarea>
+            <button class="primary" type="submit" ${state.busy ? 'disabled' : ''}>Enviar</button>
+          </div>
         </form>
       </main>
 
@@ -185,6 +209,13 @@ function renderApp() {
             <label class="${isKnownModel(chatProviderId, chatModel) ? 'hidden' : ''}" id="chat-custom-model-row">
               Modelo personalizado
               <input id="chat-custom-model-input" value="${isKnownModel(chatProviderId, chatModel) ? '' : escapeAttr(chatModel)}" ${!chat ? 'disabled' : ''} placeholder="provider/model ou nome local" />
+            </label>
+            <label class="toggle-row ${isKnownModel(chatProviderId, chatModel) ? 'hidden' : ''}" id="chat-custom-model-images-row">
+              <input type="checkbox" id="chat-custom-model-images" ${modelSupportsImages(chatProviderId, chatModel) ? 'checked' : ''} ${!chat ? 'disabled' : ''} />
+              <span>
+                <strong>Este modelo suporta imagens</strong>
+                <small>Use para modelos personalizados vision. Se desligado, imagens ficam bloqueadas.</small>
+              </span>
             </label>
             ${chatProviderId === 'ollama' ? '<p class="help-text">Se o modelo local não estiver instalado, o My Computer chama o pull do Ollama antes da primeira resposta.</p>' : ''}
             <label>
@@ -274,6 +305,13 @@ function renderSettingsModal() {
               <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
                 Modelo personalizado
                 <input name="customModel" id="default-custom-model-input" value="${isKnownModel(defaultProvider, defaultModel) ? '' : escapeAttr(defaultModel)}" placeholder="provider/model ou nome local" />
+              </label>
+              <label class="toggle-row ${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-images-row">
+                <input type="checkbox" name="customModelImages" id="default-custom-model-images" ${modelSupportsImages(defaultProvider, defaultModel) ? 'checked' : ''} />
+                <span>
+                  <strong>Este modelo suporta imagens</strong>
+                  <small>Ative somente se o endpoint aceitar imagens. O app bloqueia imagem quando isso estiver desligado.</small>
+                </span>
               </label>
               <label>
                 System prompt geral
@@ -379,6 +417,29 @@ function renderSettingsModal() {
   `;
 }
 
+function renderOllamaSetup(model) {
+  const status = state.ollamaStatus;
+  const statusText = status
+    ? status.installed
+      ? `Ollama encontrado${status.version ? `: ${status.version}` : ''}. Modelos locais: ${status.models?.length || 0}.`
+      : 'Ollama ainda não foi encontrado no sistema.'
+    : 'Verifique o Ollama antes de salvar se quiser usar IA local.';
+  const installed = status?.models?.includes(model) || status?.models?.includes(`${model}:latest`);
+  return `
+    <section class="setup-assist">
+      <h2>Ollama local</h2>
+      <p>${escapeHtml(statusText)}</p>
+      <p>O navegador pede ao servidor local para instalar/verificar. Em Linux, a instalação oficial pode pedir sudo; se isso acontecer, o painel mostra o comando para rodar no terminal.</p>
+      <div class="button-row">
+        <button type="button" id="check-ollama">Verificar Ollama</button>
+        <button type="button" id="install-ollama">Instalar Ollama</button>
+        <button type="button" id="pull-ollama-model">${installed ? 'Modelo instalado' : 'Baixar modelo selecionado'}</button>
+      </div>
+      ${status?.installCommand ? `<pre>${escapeHtml(status.installCommand)}</pre>` : ''}
+    </section>
+  `;
+}
+
 function renderToolToggle(name, title, description) {
   const checked = state.config.tools?.[name] !== false ? 'checked' : '';
   return `
@@ -421,6 +482,7 @@ function renderMessage(message) {
       <div class="message-label">${label}${modelUsed}${status}${retryButton}${copyButton}</div>
       ${(message.toolUses || []).map(renderToolUse).join('')}
       <div class="bubble">${formatContent(message.content)}</div>
+      ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
     </article>
   `;
@@ -464,6 +526,36 @@ function renderToolUse(toolUse) {
         ${!result.stdout && !result.stderr ? `<div><div class="message-label">Resultado</div><pre>${escapeHtml(genericResult)}</pre></div>` : ''}
       </div>
     </details>
+  `;
+}
+
+function renderAttachmentCard(attachment, options = {}) {
+  const chatId = state.activeChat?.id || '';
+  const contentUrl = chatId ? `/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content` : '';
+  const imagePreview =
+    attachment.kind === 'image' && contentUrl
+      ? `<img class="attachment-thumb" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`
+      : '';
+  const warning = getAttachmentWarning(attachment);
+  const actions = options.pending
+    ? `
+      <div class="attachment-actions">
+        ${attachment.extractedText ? `<button type="button" class="paste-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Colar texto</button>` : ''}
+        <button type="button" class="remove-pending-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Remover</button>
+      </div>
+    `
+    : '';
+  return `
+    <article class="attachment-card ${warning.level}">
+      ${imagePreview}
+      <div class="attachment-info">
+        <strong>${escapeHtml(attachment.name)}</strong>
+        <span>${escapeHtml(formatBytes(attachment.size))} · ${escapeHtml(attachment.mimeType || 'arquivo')} · ${escapeHtml(attachment.kind || 'documento')}</span>
+        <small>${escapeHtml(warning.text)}</small>
+        ${attachment.previewText && attachment.kind !== 'image' ? `<pre>${escapeHtml(attachment.previewText)}</pre>` : ''}
+        ${actions}
+      </div>
+    </article>
   `;
 }
 
@@ -515,7 +607,8 @@ function renderModelOptions(providerId, selectedModel) {
     .map((model) => {
       const selected = model.id === selectedModel ? 'selected' : '';
       const installed = provider.id === 'ollama' && model.installed ? '&#10003; ' : '';
-      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)} · ${escapeHtml(model.id)}</option>`;
+      const vision = model.supportsImages ? ' · visão' : '';
+      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)}${vision} · ${escapeHtml(model.id)}</option>`;
     })
     .join('');
   const customSelected = selectedModel && !known.has(selectedModel) ? 'selected' : '';
@@ -562,6 +655,12 @@ function isKnownModel(providerId, model) {
   return Boolean(getProvider(providerId).models?.some((item) => item.id === model));
 }
 
+function modelSupportsImages(providerId, model) {
+  const known = getProvider(providerId).models?.find((item) => item.id === model);
+  const custom = state.config?.modelCapabilities?.[providerId]?.[model];
+  return Boolean(custom?.images ?? known?.supportsImages);
+}
+
 function getModelValue(modelSelectId, customInputId, providerId) {
   const selected = document.querySelector(modelSelectId)?.value;
   if (selected !== CUSTOM_MODEL_VALUE) return selected || getProvider(providerId).defaultModel;
@@ -576,6 +675,78 @@ function withCustomModel(customModels, providerId, model) {
   return next;
 }
 
+function withCustomModelCapabilities(modelCapabilities, providerId, model, supportsImages) {
+  if (!model || isKnownModel(providerId, model)) return structuredClone(modelCapabilities || {});
+  const next = structuredClone(modelCapabilities || {});
+  next[providerId] = {
+    ...(next[providerId] || {}),
+    [model]: { images: Boolean(supportsImages) },
+  };
+  return next;
+}
+
+function getAttachmentWarning(attachment) {
+  if (attachment.kind === 'image') {
+    const provider = state.activeChat?.provider || state.config.provider;
+    const model = state.activeChat?.model || state.config.model;
+    if (modelSupportsImages(provider, model)) {
+      return { level: 'ok', text: 'Será enviado ao modelo como imagem multimodal.' };
+    }
+    return {
+      level: 'warn',
+      text: 'Este modelo não está marcado como vision. Troque de modelo ou ative suporte para modelos personalizados.',
+    };
+  }
+
+  if (attachment.extractedText) {
+    return {
+      level: attachment.extractionStatus === 'truncated' ? 'warn' : 'ok',
+      text:
+        attachment.extractionStatus === 'truncated'
+          ? 'Texto extraído será enviado em uma seção de documentos, com truncamento.'
+          : 'Texto extraído será enviado em uma seção de documentos.',
+    };
+  }
+
+  return {
+    level: 'warn',
+    text: 'Arquivo salvo no chat. A IA verá caminho e metadados; para ler o conteúdo, pode usar o terminal.',
+  };
+}
+
+function formatBytes(size) {
+  const value = Number(size || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+    reader.onerror = () => reject(reader.error || new Error('Falha ao ler arquivo.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function guessMimeType(name) {
+  const extension = String(name || '').split('.').pop()?.toLowerCase();
+  const byExtension = {
+    md: 'text/markdown',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    json: 'application/json',
+    html: 'text/html',
+    htm: 'text/html',
+    xml: 'application/xml',
+    yaml: 'application/x-yaml',
+    yml: 'application/x-yaml',
+    pdf: 'application/pdf',
+  };
+  return byExtension[extension] || 'application/octet-stream';
+}
+
 function bindAppEvents() {
   document.querySelector('#new-chat').addEventListener('click', createNewChat);
   document.querySelector('#open-settings').addEventListener('click', openSettings);
@@ -584,6 +755,13 @@ function bindAppEvents() {
   });
   document.querySelector('#composer').addEventListener('submit', sendMessage);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
+  document.querySelector('#file-input')?.addEventListener('change', uploadSelectedFiles);
+  document.querySelectorAll('.remove-pending-attachment').forEach((button) => {
+    button.addEventListener('click', () => removePendingAttachment(button.dataset.attachmentId));
+  });
+  document.querySelectorAll('.paste-attachment').forEach((button) => {
+    button.addEventListener('click', () => pasteAttachmentText(button.dataset.attachmentId));
+  });
   document.querySelector('#save-memory').addEventListener('click', saveMemory);
   document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
   document.querySelector('#chat-model-input')?.addEventListener('change', toggleChatCustomModel);
@@ -624,6 +802,12 @@ async function saveSetup(event) {
   const provider = form.get('provider') || 'groq';
   const model = getModelValue('#setup-model', '[name="customModel"]', provider);
   const customModels = withCustomModel(state.config.customModels, provider, model);
+  const modelCapabilities = withCustomModelCapabilities(
+    state.config.modelCapabilities,
+    provider,
+    model,
+    form.get('customModelImages') === 'on',
+  );
   const providerSettings = structuredClone(state.config.providerSettings || {});
   const providerInfo = getProvider(provider);
   providerSettings[provider] = {
@@ -640,6 +824,7 @@ async function saveSetup(event) {
         model,
         providerSettings,
         customModels,
+        modelCapabilities,
         language: form.get('language'),
         userNickname: form.get('userNickname'),
         systemPromptExtra: form.get('systemPromptExtra'),
@@ -647,6 +832,73 @@ async function saveSetup(event) {
     });
     await bootstrap();
   });
+}
+
+async function checkOllamaStatus() {
+  await runAction('Verificando Ollama...', async () => {
+    state.ollamaStatus = await api('/api/ollama/status');
+  });
+}
+
+async function installOllama() {
+  await runAction('Instalando Ollama...', async () => {
+    const data = await api('/api/ollama/install', { method: 'POST' });
+    state.status = data.message || 'Instalação concluída.';
+    state.ollamaStatus = await api('/api/ollama/status');
+  });
+}
+
+async function pullOllamaModel(model) {
+  const selected = document.querySelector('#setup-model')?.value;
+  const actualModel =
+    selected === CUSTOM_MODEL_VALUE
+      ? document.querySelector('[name="customModel"]')?.value.trim()
+      : selected || model;
+  if (!actualModel) return;
+  await runAction(`Baixando ${actualModel} no Ollama...`, async () => {
+    await api('/api/ollama/pull', {
+      method: 'POST',
+      body: { model: actualModel },
+    });
+    state.ollamaStatus = await api('/api/ollama/status');
+  });
+}
+
+async function uploadSelectedFiles(event) {
+  const files = [...(event.target.files || [])];
+  event.target.value = '';
+  if (!files.length || !state.activeChat) return;
+
+  for (const file of files) {
+    await runAction(`Anexando ${file.name}...`, async () => {
+      const dataBase64 = await fileToBase64(file);
+      const data = await api(`/api/chats/${state.activeChat.id}/attachments`, {
+        method: 'POST',
+        body: {
+          name: file.name,
+          mimeType: file.type || guessMimeType(file.name),
+          size: file.size,
+          dataBase64,
+        },
+      });
+      state.activeChat = data.chat;
+      state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+      state.pendingAttachments = [...state.pendingAttachments, data.attachment];
+    });
+  }
+}
+
+function removePendingAttachment(attachmentId) {
+  state.pendingAttachments = state.pendingAttachments.filter((attachment) => attachment.id !== attachmentId);
+  render();
+}
+
+function pasteAttachmentText(attachmentId) {
+  const attachment = state.pendingAttachments.find((item) => item.id === attachmentId);
+  const textarea = document.querySelector('#composer textarea');
+  if (!attachment?.extractedText || !textarea) return;
+  const text = `\n\n${attachment.extractedText}`;
+  insertTextAtCursor(textarea, text);
 }
 
 function changeChatProviderDraft(event) {
@@ -663,8 +915,10 @@ function changeChatProviderDraft(event) {
 function toggleChatCustomModel() {
   const select = document.querySelector('#chat-model-input');
   const row = document.querySelector('#chat-custom-model-row');
+  const imagesRow = document.querySelector('#chat-custom-model-images-row');
   if (!select || !row) return;
   row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
+  imagesRow?.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
 }
 
 function changeDefaultProviderDraft(event) {
@@ -681,8 +935,10 @@ function changeDefaultProviderDraft(event) {
 function toggleDefaultCustomModel() {
   const select = document.querySelector('#default-model-input');
   const row = document.querySelector('#default-custom-model-row');
+  const imagesRow = document.querySelector('#default-custom-model-images-row');
   if (!select || !row) return;
   row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
+  imagesRow?.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
 }
 
 function changeApiProviderDraft(event) {
@@ -736,13 +992,26 @@ async function sendMessage(event) {
   event.preventDefault();
   const textarea = event.currentTarget.elements.content;
   const content = textarea.value.trim();
-  if (!content || !state.activeChat) return;
+  if ((!content && !state.pendingAttachments.length) || !state.activeChat) return;
+  const unsupportedImage = state.pendingAttachments.find(
+    (attachment) =>
+      attachment.kind === 'image' &&
+      !modelSupportsImages(state.activeChat.provider || state.config.provider, state.activeChat.model || state.config.model),
+  );
+  if (unsupportedImage) {
+    state.error = `O modelo atual não aceita imagens: ${unsupportedImage.name}. Troque para um modelo vision ou marque o modelo personalizado como compatível.`;
+    render();
+    return;
+  }
   textarea.value = '';
-  await sendMessageContent(content);
+  const attachments = state.pendingAttachments;
+  state.pendingAttachments = [];
+  await sendMessageContent(content || 'Analise os anexos enviados.', { attachments });
 }
 
 async function sendMessageContent(content, options = {}) {
   const chatId = state.activeChat.id;
+  const attachments = options.attachments || [];
   if (options.retryMessageId) {
     state.activeChat.messages = state.activeChat.messages.map((message) =>
       message.id === options.retryMessageId
@@ -754,6 +1023,7 @@ async function sendMessageContent(content, options = {}) {
       id: `local-${Date.now()}`,
       role: 'user',
       content,
+      attachments,
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
@@ -768,6 +1038,7 @@ async function sendMessageContent(content, options = {}) {
         body: {
           content,
           retryMessageId: options.retryMessageId,
+          attachmentIds: attachments.map((attachment) => attachment.id),
         },
       });
       state.activeChat = data.chat;
@@ -857,6 +1128,12 @@ async function saveChatSettings() {
   const title = document.querySelector('#chat-title-input').value;
   const provider = document.querySelector('#chat-provider-input').value;
   const model = getModelValue('#chat-model-input', '#chat-custom-model-input', provider);
+  const modelCapabilities = withCustomModelCapabilities(
+    state.config.modelCapabilities,
+    provider,
+    model,
+    document.querySelector('#chat-custom-model-images')?.checked,
+  );
   const systemPromptExtra = document.querySelector('#chat-prompt-input').value;
   await runAction('Salvando configurações do chat...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}`, {
@@ -865,6 +1142,7 @@ async function saveChatSettings() {
         title,
         provider,
         model,
+        modelCapabilities,
         systemPromptExtra,
       },
     });
@@ -882,6 +1160,12 @@ async function saveGeneralSettings(event) {
   const provider = form.get('provider') || state.config.provider;
   const model = getModelValue('#default-model-input', '#default-custom-model-input', provider);
   const customModels = withCustomModel(state.config.customModels, provider, model);
+  const modelCapabilities = withCustomModelCapabilities(
+    state.config.modelCapabilities,
+    provider,
+    model,
+    form.get('customModelImages') === 'on',
+  );
   await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
@@ -901,6 +1185,7 @@ async function saveGeneralSettings(event) {
         tools,
         providerSettings: state.config.providerSettings,
         customModels,
+        modelCapabilities,
       },
     });
     const memoryResponse = await api('/api/persistent-memory', {
