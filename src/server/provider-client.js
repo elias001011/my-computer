@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { getProvider } from './models.js';
 
 const rotationCursors = new Map();
@@ -12,6 +15,7 @@ export async function callProviderChat({
   tools,
   temperature = 0.2,
   maxTokens = 2048,
+  modelSettings = {},
 }) {
   const provider = getProvider(requestedProvider || config.provider);
   const selectedModel = String(model || config.model || provider.defaultModel).trim();
@@ -23,7 +27,17 @@ export async function callProviderChat({
 
   if (provider.adapter === 'anthropic') {
     return callWithKeyRotation(provider, runtime, (apiKey) =>
-      callAnthropicChat({ provider, runtime, apiKey, model: selectedModel, messages, tools, temperature, maxTokens }),
+      callAnthropicChat({
+        provider,
+        runtime,
+        apiKey,
+        model: selectedModel,
+        messages,
+        tools,
+        temperature,
+        maxTokens,
+        modelSettings,
+      }),
     );
   }
 
@@ -37,6 +51,7 @@ export async function callProviderChat({
       tools,
       temperature,
       maxTokens,
+      modelSettings,
     }),
   );
 }
@@ -50,17 +65,66 @@ export async function listOllamaInstalledModels(config = {}) {
 
   try {
     const response = await fetch(`${baseApiUrl}${OLLAMA_TAGS_PATH}`, { signal: controller.signal });
-    if (!response.ok) return [];
+    if (!response.ok) return listOllamaManifestModels();
     const data = await response.json().catch(() => ({}));
     const names = (data.models || []).map((item) => item.name).filter(Boolean);
     const aliases = names
       .filter((name) => name.endsWith(':latest'))
       .map((name) => name.replace(/:latest$/, ''));
-    return [...new Set([...names, ...aliases])].sort();
+    const manifestNames = await listOllamaManifestModels();
+    return [...new Set([...names, ...aliases, ...manifestNames])].sort();
   } catch {
-    return [];
+    return listOllamaManifestModels();
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function listOllamaManifestModels() {
+  const roots = [
+    path.join(os.homedir(), '.ollama', 'models', 'manifests'),
+    '/usr/share/ollama/.ollama/models/manifests',
+  ];
+  const names = [];
+  for (const root of roots) {
+    names.push(...(await readOllamaManifestRoot(root)));
+  }
+  return [...new Set(names)].sort();
+}
+
+async function readOllamaManifestRoot(root) {
+  const files = [];
+  await walkManifestFiles(root, files);
+  const names = [];
+  for (const file of files) {
+    const relative = path.relative(root, file);
+    const parts = relative.split(path.sep);
+    if (parts.length < 4) continue;
+    const namespace = parts.at(-3);
+    const model = parts.at(-2);
+    const tag = parts.at(-1);
+    const name = namespace === 'library' ? `${model}:${tag}` : `${namespace}/${model}:${tag}`;
+    names.push(name);
+    if (tag === 'latest') names.push(name.replace(/:latest$/, ''));
+  }
+  return names;
+}
+
+async function walkManifestFiles(directory, files) {
+  let entries = [];
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await walkManifestFiles(filePath, files);
+    } else if (entry.isFile()) {
+      files.push(filePath);
+    }
   }
 }
 
@@ -86,13 +150,22 @@ async function callWithKeyRotation(provider, runtime, request) {
   throw lastError || new Error(`Falha ao chamar ${provider.label}.`);
 }
 
-async function callOpenAICompatibleChat({ provider, runtime, apiKey, model, messages, tools, temperature, maxTokens }) {
+async function callOpenAICompatibleChat({
+  provider,
+  runtime,
+  apiKey,
+  model,
+  messages,
+  tools,
+  temperature,
+  maxTokens,
+  modelSettings = {},
+}) {
   const body = {
     model,
     messages,
-    temperature,
-    max_tokens: maxTokens,
   };
+  applyOpenAICompatibleModelSettings(body, provider, modelSettings, { temperature, maxTokens });
 
   if (tools?.length) {
     body.tools = tools;
@@ -134,15 +207,30 @@ async function callOpenAICompatibleChat({ provider, runtime, apiKey, model, mess
   return message;
 }
 
-async function callAnthropicChat({ provider, runtime, apiKey, model, messages, tools, temperature, maxTokens }) {
+async function callAnthropicChat({
+  provider,
+  runtime,
+  apiKey,
+  model,
+  messages,
+  tools,
+  temperature,
+  maxTokens,
+  modelSettings = {},
+}) {
   const { system, anthropicMessages } = toAnthropicMessages(messages);
   const body = {
     model,
-    max_tokens: maxTokens,
-    temperature,
+    max_tokens: Number(modelSettings.maxTokens || maxTokens || 2048),
     system,
     messages: anthropicMessages,
   };
+  if (modelSettings.topP !== undefined) {
+    body.top_p = Number(modelSettings.topP);
+  } else {
+    body.temperature = Number(modelSettings.temperature ?? temperature);
+  }
+  if (modelSettings.stop?.length) body.stop_sequences = modelSettings.stop;
 
   if (tools?.length) {
     body.tools = tools.map((tool) => ({
@@ -316,6 +404,27 @@ function resolveProviderRuntime(config, provider, options = {}) {
   }
 
   return { baseUrl, apiKeys };
+}
+
+function applyOpenAICompatibleModelSettings(body, provider, modelSettings = {}, defaults = {}) {
+  body.temperature = Number(modelSettings.temperature ?? defaults.temperature ?? 0.2);
+  body.max_tokens = Number(modelSettings.maxTokens || defaults.maxTokens || 2048);
+  if (modelSettings.topP !== undefined) body.top_p = Number(modelSettings.topP);
+  if (modelSettings.stop?.length) body.stop = modelSettings.stop;
+
+  if (['openai', 'openrouter', 'xai', 'openai-compatible'].includes(provider.id)) {
+    if (modelSettings.presencePenalty !== undefined) body.presence_penalty = Number(modelSettings.presencePenalty);
+    if (modelSettings.frequencyPenalty !== undefined) body.frequency_penalty = Number(modelSettings.frequencyPenalty);
+    if (modelSettings.seed !== undefined) body.seed = Number(modelSettings.seed);
+  }
+
+  if (['openai', 'openrouter', 'xai', 'openai-compatible'].includes(provider.id) && modelSettings.reasoningEffort) {
+    body.reasoning_effort = modelSettings.reasoningEffort;
+  }
+
+  if (provider.id === 'ollama' && modelSettings.seed !== undefined) {
+    body.seed = Number(modelSettings.seed);
+  }
 }
 
 function normalizeApiKeys(apiKeys) {

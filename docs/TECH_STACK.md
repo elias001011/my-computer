@@ -28,6 +28,7 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 - O provider/modelo global é apenas default; cada chat salva seu próprio provider e modelo.
 - A lista de providers e modelos fica em `src/server/models.js` e é enviada no bootstrap da UI.
 - `src/server/provider-client.js` centraliza chamadas, rotação de API keys, adaptador Anthropic e pull automático do Ollama.
+- `src/server/models.js` contém presets verificados e metadados básicos de visão/limite; modelos personalizados cobrem lançamentos ou endpoints fora do catálogo.
 
 ### Attachments
 
@@ -50,3 +51,5 @@ Dados do usuário ficam em `~/.my-computer` por padrão.
 
 `./uninstall.sh` remove dependências.
 `./uninstall.sh --remove-data` remove também o runtime.
+
+`./install.sh` e `./uninstall.sh` são wrappers públicos. A implementação fica em `scripts/bootstrap.sh` e `scripts/remove.sh` para evitar múltiplos `install.sh` concorrendo dentro do projeto.

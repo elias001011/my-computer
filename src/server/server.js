@@ -203,6 +203,7 @@ async function handleChatsApi(request, response, parts) {
       title: body.title,
       provider: body.provider,
       model: body.model,
+      modelSettings: body.modelSettings,
       systemPromptExtra: body.systemPromptExtra,
     });
     await appendEvent({
@@ -364,7 +365,62 @@ async function handleOllamaApi(request, response, parts) {
       type: 'ollama.pull',
       details: { model, exitCode: result.exitCode, timedOut: result.timedOut },
     });
-    sendJson(response, result.exitCode === 0 ? 200 : 500, { result });
+    const config = await loadConfig();
+    sendJson(response, result.exitCode === 0 ? 200 : 500, {
+      result,
+      models: await listOllamaInstalledModels(config),
+    });
+    return;
+  }
+
+  if (method === 'POST' && parts[2] === 'rm') {
+    const body = await readBody(request);
+    const model = String(body.model || '').trim();
+    if (!model) {
+      sendJson(response, 400, { error: 'Modelo do Ollama não informado.' });
+      return;
+    }
+    const result = await runTerminalCommand(`ollama rm ${shellQuote(model)}`, {
+      timeoutSeconds: 120,
+      outputLimit: 12000,
+    });
+    await appendEvent({
+      type: 'ollama.rm',
+      details: { model, exitCode: result.exitCode, timedOut: result.timedOut },
+    });
+    const config = await loadConfig();
+    sendJson(response, result.exitCode === 0 ? 200 : 500, {
+      result,
+      models: await listOllamaInstalledModels(config),
+    });
+    return;
+  }
+
+  if (method === 'POST' && parts[2] === 'uninstall') {
+    const command = [
+      'sudo systemctl stop ollama 2>/dev/null || true',
+      'sudo systemctl disable ollama 2>/dev/null || true',
+      'sudo rm -f /etc/systemd/system/ollama.service /usr/local/bin/ollama',
+      'sudo rm -rf /usr/share/ollama',
+      'sudo systemctl daemon-reload 2>/dev/null || true',
+    ].join(' && ');
+    const result = await runTerminalCommand(command, {
+      timeoutSeconds: 180,
+      outputLimit: 20000,
+    });
+    await appendEvent({
+      type: 'ollama.uninstall',
+      details: { exitCode: result.exitCode, timedOut: result.timedOut },
+    });
+    sendJson(response, 200, {
+      ok: result.exitCode === 0,
+      command,
+      result,
+      message:
+        result.exitCode === 0
+          ? 'Ollama removido pelo comando do sistema.'
+          : 'Não foi possível remover automaticamente. Se o output mencionar sudo/senha, rode o comando exibido no terminal.',
+    });
     return;
   }
 

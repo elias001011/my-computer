@@ -135,6 +135,7 @@ export async function createChat(title = 'Novo chat', options = {}) {
     title: normalizeTitle(title),
     provider,
     model: String(options.model || getDefaultModelForProvider(provider)).trim(),
+    modelSettings: normalizeModelSettings(options.modelSettings || {}),
     systemPromptExtra: String(options.systemPromptExtra || '').trim(),
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -223,6 +224,8 @@ export async function updateChatMetadata(id, patch) {
     title: patch.title ? normalizeTitle(patch.title) : metadata.title,
     provider: patch.provider ? normalizeProviderId(patch.provider) : normalizeProviderId(metadata.provider),
     model: patch.model ? String(patch.model).trim() : metadata.model,
+    modelSettings:
+      patch.modelSettings === undefined ? normalizeModelSettings(metadata.modelSettings || {}) : normalizeModelSettings(patch.modelSettings),
     systemPromptExtra:
       patch.systemPromptExtra === undefined
         ? metadata.systemPromptExtra || ''
@@ -443,6 +446,7 @@ export async function exportRuntimeData() {
         title: fullChat.title,
         provider: fullChat.provider,
         model: fullChat.model,
+        modelSettings: normalizeModelSettings(fullChat.modelSettings || {}),
         systemPromptExtra: fullChat.systemPromptExtra || '',
         createdAt: fullChat.createdAt,
         updatedAt: fullChat.updatedAt,
@@ -516,6 +520,7 @@ async function readChatMetadata(id) {
     ...metadata,
     provider,
     model: String(metadata.model || getDefaultModelForProvider(provider)).trim(),
+    modelSettings: normalizeModelSettings(metadata.modelSettings || {}),
     systemPromptExtra: String(metadata.systemPromptExtra || '').trim(),
     paths: {
       ...(metadata.paths || {}),
@@ -540,6 +545,7 @@ async function writeImportedChat(importedChat = {}) {
     title: normalizeTitle(importedMetadata.title || 'Chat importado'),
     provider,
     model: String(importedMetadata.model || getDefaultModelForProvider(provider)).trim(),
+    modelSettings: normalizeModelSettings(importedMetadata.modelSettings || {}),
     systemPromptExtra: String(importedMetadata.systemPromptExtra || '').trim(),
     createdAt: importedMetadata.createdAt || now,
     updatedAt: now,
@@ -680,6 +686,7 @@ function normalizeConfig(config = {}) {
     tools: normalizeTools(config.tools || defaultConfig.tools),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
+    modelCapabilities: normalizeModelCapabilities(config.modelCapabilities || {}),
     apiKey: getPrimaryApiKey(providerSettings, provider),
     setupComplete: Boolean(config.setupComplete),
   };
@@ -751,11 +758,60 @@ function normalizeModelCapabilities(modelCapabilities = {}) {
     next[provider.id] = Object.fromEntries(
       Object.entries(providerCapabilities).map(([modelId, capabilities]) => [
         String(modelId),
-        { images: Boolean(capabilities?.images) },
+        {
+          images: Boolean(capabilities?.images),
+          maxInputImages: positiveNumberOrNull(capabilities?.maxInputImages),
+          maxFileSizeMB: positiveNumberOrNull(capabilities?.maxFileSizeMB),
+          maxOutputTokens: positiveNumberOrNull(capabilities?.maxOutputTokens),
+        },
       ]),
     );
   }
   return next;
+}
+
+function normalizeModelSettings(settings = {}) {
+  const next = {};
+  const temperature = numberInRange(settings.temperature, 0, 2);
+  const topP = numberInRange(settings.topP ?? settings.top_p, 0, 1);
+  const maxTokens = positiveIntegerOrNull(settings.maxTokens ?? settings.max_tokens);
+  const presencePenalty = numberInRange(settings.presencePenalty ?? settings.presence_penalty, -2, 2);
+  const frequencyPenalty = numberInRange(settings.frequencyPenalty ?? settings.frequency_penalty, -2, 2);
+  const seed = positiveIntegerOrNull(settings.seed);
+  const reasoningEffort = String(settings.reasoningEffort ?? settings.reasoning_effort ?? '').trim();
+  const stop = normalizeStopSequences(settings.stop);
+
+  if (temperature !== null) next.temperature = temperature;
+  if (topP !== null) next.topP = topP;
+  if (maxTokens !== null) next.maxTokens = maxTokens;
+  if (presencePenalty !== null) next.presencePenalty = presencePenalty;
+  if (frequencyPenalty !== null) next.frequencyPenalty = frequencyPenalty;
+  if (seed !== null) next.seed = seed;
+  if (['none', 'low', 'medium', 'high', 'xhigh'].includes(reasoningEffort)) next.reasoningEffort = reasoningEffort;
+  if (stop.length) next.stop = stop;
+  return next;
+}
+
+function normalizeStopSequences(value) {
+  const entries = Array.isArray(value) ? value : String(value || '').split(/\n|,/);
+  return entries.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8);
+}
+
+function positiveNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function positiveIntegerOrNull(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function numberInRange(value, min, max) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.min(max, Math.max(min, number));
 }
 
 function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {

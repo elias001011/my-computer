@@ -26,9 +26,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.provider, 'openai-compatible');
   assert.equal(config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
 
-  const chat = await store.createChat('Teste', { provider: config.provider, model: config.model });
+  const chat = await store.createChat('Teste', {
+    provider: config.provider,
+    model: config.model,
+    modelSettings: { temperature: 0.4, maxTokens: 1000 },
+  });
   assert.equal(chat.title, 'Teste');
   assert.equal(chat.provider, 'openai-compatible');
+  assert.equal(chat.modelSettings.temperature, 0.4);
   assert.match(chat.paths.memory, /memory\.md$/);
 
   await store.writeMemory(chat.id, '# Memory\n\n- keep this');
@@ -61,6 +66,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const exported = await store.exportRuntimeData();
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
+  assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 1);
 
   const chats = await store.listChats();

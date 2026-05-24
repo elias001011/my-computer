@@ -6,9 +6,10 @@
 - Servidor Node local.
 - Setup inicial com provider, API key e modelo padrão.
 - Providers nomeados e provider custom OpenAI-compatible.
-- Ollama com detecção de modelos instalados e pull automático.
+- Ollama com detecção de modelos instalados, pull automático, remoção de modelo e tentativa de desinstalação.
 - Chat persistente.
 - Provider/modelo por chat.
+- Configurações técnicas de modelo por chat.
 - Anexos por chat com extração de texto e suporte multimodal controlado por modelo.
 - Tool de terminal.
 - Tool de memória de chat.
@@ -25,6 +26,7 @@
 - Mascaramento e protecao melhor de segredos.
 - Testes de API e smoke test do painel.
 - Parsers dedicados para PDF/DOCX e OCR local.
+- Descoberta dinâmica de modelos quando o provider expuser API confiável.
 
 ## Phase 2 - Extensibility
 
@@ -32,7 +34,6 @@
 - File APIs nativas dos providers quando fizer sentido, sem perder fallback local.
 - Skills com manifestos e permissoes.
 - Mais tools locais.
-- Importacao/envio de arquivos.
 - Memoria prolongada entre chats.
 
 ## Phase 3 - Advanced capabilities

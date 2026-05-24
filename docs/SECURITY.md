@@ -16,17 +16,21 @@ Não exponha o painel na internet.
 - Rotação de API keys evita ficar preso em uma key rate-limited, mas não substitui autenticação nem controle de gasto.
 - Anexos ficam dentro da pasta do chat e são servidos apenas por endpoints locais com ids validados.
 - Imagens só são enviadas ao modelo quando o modelo está marcado como compatível.
+- Limites de anexos e de imagem conhecidos são validados na UI e no backend.
 
 ## Current risks
 
 - A tool `run_terminal_command` executa comandos sem confirmação manual no MVP quando está ligada.
 - API keys ficam em texto claro no runtime local e também entram no arquivo exportado.
+- Múltiplas API keys aumentam conveniência, mas também aumentam o impacto de vazamento do `config.json` ou de um export.
 - Não existe autenticação no painel.
 - Não existe allowlist ou denylist de comandos.
 - Outputs de tools podem conter segredos se o comando imprimir segredos.
 - Endpoints OpenAI-compatible customizados são confiados pelo usuário; um endpoint malicioso pode receber prompt, memórias e tool outputs.
 - Anexos exportados entram em base64 no arquivo de backup. Esse arquivo pode conter documentos sensíveis.
 - A extração de texto do MVP é simples e não isola conteúdo malicioso dentro de HTML além de remover scripts/styles como texto.
+- A instalação/desinstalação de Ollama pelo painel pode falhar quando `sudo` pedir senha; o comando exibido deve ser tratado como comando administrativo.
+- Ajustes técnicos de modelo, como max tokens alto, podem elevar custo ou causar erro de rate limit no provider.
 
 ## Near-term hardening
 

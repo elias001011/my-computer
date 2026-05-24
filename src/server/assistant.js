@@ -1,6 +1,6 @@
 import { runtimeHome } from './paths.js';
 import { callProviderChat } from './provider-client.js';
-import { modelSupportsImages } from './models.js';
+import { getModelMetadata, modelSupportsImages } from './models.js';
 import {
   appendEvent,
   appendMessages,
@@ -31,6 +31,7 @@ import {
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
 const MAX_TOOL_ROUNDS = 4;
+const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 
 export async function sendUserMessage(chatId, content, options = {}) {
   const config = await loadConfig();
@@ -62,6 +63,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
     ...config,
     provider: chat.provider || config.provider,
     model: chat.model || config.model,
+    modelSettings: chat.modelSettings || {},
   };
   const toolUses = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
@@ -78,6 +80,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
         model: effectiveConfig.model,
         messages: workingMessages,
         tools: enabledTools,
+        modelSettings: effectiveConfig.modelSettings,
       });
 
       const toolCalls = assistantMessage.tool_calls || [];
@@ -111,6 +114,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
         model: effectiveConfig.model,
         messages: workingMessages,
         tools: [],
+        modelSettings: effectiveConfig.modelSettings,
       });
       finalContent = assistantMessage.content || 'Terminei a execução das tools, mas não recebi texto final.';
     }
@@ -639,11 +643,31 @@ async function renderProviderMessage(chat, message, config, options = {}) {
 
   const attachments = message.attachments || [];
   const supportsImages = modelSupportsImages(config.provider, config.model, config);
+  const modelMetadata = getModelMetadata(config.provider, config.model, config);
   if (options.strictImageSupportForMessageId === message.id) {
     const unsupportedImage = attachments.find((attachment) => attachment.kind === 'image' && !supportsImages);
     if (unsupportedImage) {
       const error = new Error(
         `O modelo ${config.model} não está marcado como compatível com imagens. Troque para um modelo vision ou ative "este modelo suporta imagens" no modelo personalizado.`,
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image');
+    if (modelMetadata.maxInputImages && imageAttachments.length > modelMetadata.maxInputImages) {
+      const error = new Error(
+        `O modelo ${config.model} aceita até ${modelMetadata.maxInputImages} imagem(ns) por mensagem. Remova anexos ou escolha outro modelo.`,
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    const oversizedImage = imageAttachments.find(
+      (attachment) => modelMetadata.maxFileSizeMB && attachment.size > modelMetadata.maxFileSizeMB * 1024 * 1024,
+    );
+    if (oversizedImage) {
+      const error = new Error(
+        `A imagem ${oversizedImage.name} excede o limite deste modelo (${modelMetadata.maxFileSizeMB} MB).`,
       );
       error.statusCode = 400;
       throw error;
@@ -682,6 +706,11 @@ async function resolveMessageAttachments(chat, options = {}) {
 
   const ids = Array.isArray(options.attachmentIds) ? options.attachmentIds : [];
   if (!ids.length) return [];
+  if (ids.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    const error = new Error(`Envie no máximo ${MAX_ATTACHMENTS_PER_MESSAGE} anexos por mensagem neste MVP.`);
+    error.statusCode = 400;
+    throw error;
+  }
   const attachmentsById = new Map((chat.attachments || []).map((attachment) => [attachment.id, attachment]));
   return ids
     .map((id) => attachmentsById.get(id))
