@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getDefaultModelForProvider, isKnownProvider, providerCatalog } from './models.js';
 import { chatsDir, configPath, eventsPath, persistentMemoryPath, runtimeHome } from './paths.js';
 
 export const defaultConfig = Object.freeze({
@@ -18,6 +19,8 @@ export const defaultConfig = Object.freeze({
     chatTitle: true,
   },
   apiKey: process.env.GROQ_API_KEY || '',
+  providerSettings: buildDefaultProviderSettings(),
+  customModels: {},
 });
 
 export async function ensureRuntime() {
@@ -40,33 +43,41 @@ export async function ensureRuntime() {
 export async function loadConfig() {
   await ensureRuntime();
   const config = await readJson(configPath, defaultConfig);
-  return {
-    ...defaultConfig,
-    ...config,
-    provider: 'groq',
-    apiKey: config.apiKey || process.env.GROQ_API_KEY || '',
-  };
+  return normalizeConfig(config);
 }
 
 export async function saveConfig(patch) {
   const current = await loadConfig();
-  const apiKey =
-    Object.hasOwn(patch, 'apiKey') && String(patch.apiKey || '').trim()
-      ? String(patch.apiKey).trim()
-      : current.apiKey;
+  const provider = normalizeProviderId(patch.provider || current.provider);
+  const providerSettings = normalizeProviderSettings({
+    ...current.providerSettings,
+    ...(patch.providerSettings || {}),
+  });
+
+  if (Object.hasOwn(patch, 'apiKey') && patch.apiKey !== undefined) {
+    providerSettings[provider] = {
+      ...providerSettings[provider],
+      apiKeys: normalizeApiKeyEntries([patch.apiKey]),
+    };
+  }
 
   const next = {
     ...current,
-    provider: 'groq',
-    model: String(patch.model || current.model || defaultConfig.model).trim(),
+    provider,
+    model: String(patch.model || current.model || getDefaultModelForProvider(provider)).trim(),
     language: String(patch.language || current.language || 'auto').trim(),
     userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
     systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
     tools: normalizeTools(patch.tools || current.tools),
-    apiKey,
+    providerSettings,
+    customModels: normalizeCustomModels({
+      ...current.customModels,
+      ...(patch.customModels || {}),
+    }),
     setupComplete: Boolean(patch.setupComplete ?? true),
     updatedAt: new Date().toISOString(),
   };
+  next.apiKey = getPrimaryApiKey(next.providerSettings, next.provider);
 
   await writeJson(configPath, next, 0o600);
   await appendEvent({ type: 'config.updated', details: { provider: next.provider, model: next.model } });
@@ -74,16 +85,19 @@ export async function saveConfig(patch) {
 }
 
 export function sanitizeConfig(config) {
+  const providerSettings = normalizeProviderSettings(config.providerSettings || {});
   return {
     setupComplete: Boolean(config.setupComplete),
-    provider: 'groq',
+    provider: normalizeProviderId(config.provider),
     model: config.model,
     language: config.language,
     userNickname: config.userNickname,
     systemPromptExtra: config.systemPromptExtra,
     tools: normalizeTools(config.tools),
-    apiKeySet: Boolean(config.apiKey),
-    apiKey: config.apiKey,
+    providerSettings,
+    customModels: normalizeCustomModels(config.customModels || {}),
+    apiKeySet: Boolean(getPrimaryApiKey(providerSettings, config.provider)),
+    apiKey: getPrimaryApiKey(providerSettings, config.provider),
   };
 }
 
@@ -109,10 +123,12 @@ export async function createChat(title = 'Novo chat', options = {}) {
   const now = new Date();
   const id = `${stamp(now)}-${crypto.randomUUID().slice(0, 8)}`;
   const chatDir = getChatDir(id);
+  const provider = normalizeProviderId(options.provider || defaultConfig.provider);
   const metadata = {
     id,
     title: normalizeTitle(title),
-    model: String(options.model || defaultConfig.model).trim(),
+    provider,
+    model: String(options.model || getDefaultModelForProvider(provider)).trim(),
     systemPromptExtra: String(options.systemPromptExtra || '').trim(),
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
@@ -195,6 +211,7 @@ export async function updateChatMetadata(id, patch) {
     ...metadata,
     ...patch,
     title: patch.title ? normalizeTitle(patch.title) : metadata.title,
+    provider: patch.provider ? normalizeProviderId(patch.provider) : normalizeProviderId(metadata.provider),
     model: patch.model ? String(patch.model).trim() : metadata.model,
     systemPromptExtra:
       patch.systemPromptExtra === undefined
@@ -305,6 +322,66 @@ export async function appendEvent(event) {
   return entry;
 }
 
+export async function exportRuntimeData() {
+  await ensureRuntime();
+  const chats = [];
+  for (const chat of await listChats()) {
+    const fullChat = await readChat(chat.id);
+    const chatDir = getChatDir(chat.id);
+    chats.push({
+      metadata: {
+        id: fullChat.id,
+        title: fullChat.title,
+        provider: fullChat.provider,
+        model: fullChat.model,
+        systemPromptExtra: fullChat.systemPromptExtra || '',
+        createdAt: fullChat.createdAt,
+        updatedAt: fullChat.updatedAt,
+      },
+      messages: fullChat.messages || [],
+      memory: fullChat.memory || '',
+      contextSummary: fullChat.contextSummary || '',
+      contextWindow: await readText(path.join(chatDir, 'context-window.md'), ''),
+    });
+  }
+
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    config: await loadConfig(),
+    persistentMemory: await readPersistentMemory(),
+    chats,
+    events: await readEvents({ limit: 10000 }),
+  };
+}
+
+export async function importRuntimeData(payload = {}) {
+  await ensureRuntime();
+  if (payload.config) {
+    await saveConfig({
+      ...payload.config,
+      setupComplete: Boolean(payload.config.setupComplete ?? true),
+    });
+  }
+
+  if (Object.hasOwn(payload, 'persistentMemory')) {
+    await writePersistentMemory(payload.persistentMemory || '');
+  }
+
+  if (Array.isArray(payload.chats)) {
+    for (const importedChat of payload.chats) {
+      await writeImportedChat(importedChat);
+    }
+  }
+
+  await appendEvent({
+    type: 'runtime.imported',
+    details: { chatCount: Array.isArray(payload.chats) ? payload.chats.length : 0 },
+  });
+
+  return exportRuntimeData();
+}
+
 export function createMessage(role, content, extra = {}) {
   return {
     id: crypto.randomUUID(),
@@ -322,7 +399,46 @@ export function getChatDir(id) {
 
 async function readChatMetadata(id) {
   assertChatId(id);
-  return readJson(path.join(getChatDir(id), 'metadata.json'), null);
+  const metadata = await readJson(path.join(getChatDir(id), 'metadata.json'), null);
+  if (!metadata) return metadata;
+  const provider = normalizeProviderId(metadata.provider || defaultConfig.provider);
+  return {
+    ...metadata,
+    provider,
+    model: String(metadata.model || getDefaultModelForProvider(provider)).trim(),
+    systemPromptExtra: String(metadata.systemPromptExtra || '').trim(),
+  };
+}
+
+async function writeImportedChat(importedChat = {}) {
+  const importedMetadata = importedChat.metadata || {};
+  const id = /^[a-zA-Z0-9_-]+$/.test(String(importedMetadata.id || ''))
+    ? String(importedMetadata.id)
+    : `${stamp(new Date())}-${crypto.randomUUID().slice(0, 8)}`;
+  const chatDir = getChatDir(id);
+  const provider = normalizeProviderId(importedMetadata.provider || defaultConfig.provider);
+  const now = new Date().toISOString();
+  const metadata = {
+    id,
+    title: normalizeTitle(importedMetadata.title || 'Chat importado'),
+    provider,
+    model: String(importedMetadata.model || getDefaultModelForProvider(provider)).trim(),
+    systemPromptExtra: String(importedMetadata.systemPromptExtra || '').trim(),
+    createdAt: importedMetadata.createdAt || now,
+    updatedAt: now,
+    paths: {
+      memory: path.join(chatDir, 'memory.md'),
+      context: path.join(chatDir, 'context.md'),
+      contextWindow: path.join(chatDir, 'context-window.md'),
+    },
+  };
+
+  await fs.mkdir(path.join(chatDir, 'context-snapshots'), { recursive: true, mode: 0o700 });
+  await writeJson(path.join(chatDir, 'metadata.json'), metadata, 0o600);
+  await writeJson(path.join(chatDir, 'messages.json'), Array.isArray(importedChat.messages) ? importedChat.messages : [], 0o600);
+  await fs.writeFile(metadata.paths.memory, String(importedChat.memory || '# Chat memory\n'), { mode: 0o600 });
+  await fs.writeFile(metadata.paths.context, String(importedChat.contextSummary || '# Context summary\n'), { mode: 0o600 });
+  await fs.writeFile(metadata.paths.contextWindow, String(importedChat.contextWindow || '# Context window\n'), { mode: 0o600 });
 }
 
 async function touchChat(id) {
@@ -380,6 +496,96 @@ function normalizeTools(tools = {}) {
     autoCompact: tools.autoCompact !== false,
     chatTitle: tools.chatTitle !== false,
   };
+}
+
+function normalizeConfig(config = {}) {
+  const provider = normalizeProviderId(config.provider || defaultConfig.provider);
+  const providerSettings = normalizeProviderSettings(config.providerSettings || {});
+
+  if (config.apiKey && !getPrimaryApiKey(providerSettings, 'groq')) {
+    providerSettings.groq.apiKeys = normalizeApiKeyEntries([config.apiKey]);
+  }
+
+  const model = String(config.model || getDefaultModelForProvider(provider)).trim();
+
+  return {
+    ...defaultConfig,
+    ...config,
+    provider,
+    model,
+    language: String(config.language || defaultConfig.language).trim(),
+    userNickname: String(config.userNickname || '').trim(),
+    systemPromptExtra: String(config.systemPromptExtra || '').trim(),
+    tools: normalizeTools(config.tools || defaultConfig.tools),
+    providerSettings,
+    customModels: normalizeCustomModels(config.customModels || {}),
+    apiKey: getPrimaryApiKey(providerSettings, provider),
+    setupComplete: Boolean(config.setupComplete),
+  };
+}
+
+function buildDefaultProviderSettings() {
+  return normalizeProviderSettings({});
+}
+
+function normalizeProviderId(providerId) {
+  const value = String(providerId || '').trim();
+  return isKnownProvider(value) ? value : 'groq';
+}
+
+function normalizeProviderSettings(settings = {}) {
+  const next = {};
+  for (const provider of providerCatalog) {
+    const current = settings[provider.id] || {};
+    const apiKeys = normalizeApiKeyEntries(current.apiKeys || current.apiKey || []);
+    const envKey = provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : '';
+    if (envKey && !apiKeys.some((item) => item.value === envKey)) {
+      apiKeys.push({
+        id: 'env',
+        label: `${provider.label} env`,
+        value: envKey,
+      });
+    }
+    next[provider.id] = {
+      baseUrl: String(current.baseUrl || provider.baseUrl || '').trim(),
+      apiKeys,
+    };
+  }
+  return next;
+}
+
+function normalizeApiKeyEntries(value = []) {
+  const entries = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  return entries
+    .map((entry, index) => {
+      const rawValue = typeof entry === 'string' ? entry : entry?.value;
+      const cleanValue = String(rawValue || '').trim();
+      if (!cleanValue || seen.has(cleanValue)) return null;
+      seen.add(cleanValue);
+      return {
+        id: String((typeof entry === 'object' && entry?.id) || crypto.randomUUID()),
+        label: String((typeof entry === 'object' && entry?.label) || `Key ${index + 1}`).trim(),
+        value: cleanValue,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeCustomModels(customModels = {}) {
+  const next = {};
+  for (const provider of providerCatalog) {
+    const value = customModels[provider.id];
+    next[provider.id] = Array.isArray(value)
+      ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))]
+      : [];
+  }
+  return next;
+}
+
+function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {
+  const provider = normalizeProviderId(providerId);
+  return providerSettings[provider]?.apiKeys?.[0]?.value || '';
 }
 
 function stamp(date) {

@@ -4,12 +4,15 @@
 
 - Painel local em HTML/CSS/JS puro.
 - Servidor Node local.
-- Setup inicial com Groq API key.
+- Setup inicial com provider, API key e modelo padrão.
+- Providers nomeados e provider custom OpenAI-compatible.
+- Ollama com detecção de modelos instalados e pull automático.
 - Chat persistente.
-- Modelo por chat.
+- Provider/modelo por chat.
 - Tool de terminal.
 - Tool de memória de chat.
 - Compactacao e snapshot de contexto.
+- Export/import de dados locais.
 - Install/uninstall simples.
 
 ## Phase 1 - Safety and polish
@@ -23,7 +26,7 @@
 
 ## Phase 2 - Extensibility
 
-- Providers adicionais.
+- Presets adicionais de providers OpenAI-compatible.
 - Skills com manifestos e permissoes.
 - Mais tools locais.
 - Importacao/envio de arquivos.

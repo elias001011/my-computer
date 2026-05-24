@@ -79,6 +79,10 @@ button:disabled {
   opacity: 0.58;
 }
 
+.hidden {
+  display: none !important;
+}
+
 input,
 textarea,
 select {
@@ -459,6 +463,32 @@ pre {
 
 .secret-field input {
   min-width: 0;
+}
+
+.api-key-list {
+  display: grid;
+  gap: 8px;
+}
+
+.api-key-row {
+  display: grid;
+}
+
+.file-button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-button input {
+  display: none;
 }
 
 .danger-zone {

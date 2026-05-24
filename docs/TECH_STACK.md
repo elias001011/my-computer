@@ -15,16 +15,18 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 
 - Node.js 20+.
 - HTTP server nativo de Node.
-- `fetch` nativo para Groq.
+- `fetch` nativo para providers OpenAI-compatible e Anthropic.
 - `child_process.spawn` para a tool de terminal.
 - Arquivos JSON, Markdown e JSONL para persistência local.
 
 ### AI provider
 
-- Groq via endpoint OpenAI-compatible `https://api.groq.com/openai/v1/chat/completions`.
-- Modelo padrão inicial: `llama-3.3-70b-versatile`.
-- O modelo global é apenas default; cada chat salva seu próprio modelo.
-- A lista de modelos fica em `src/server/models.js` e é enviada no bootstrap da UI.
+- Providers nomeados: Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI e Ollama.
+- Provider custom `OpenAI compatível` para qualquer endpoint com formato `/v1/chat/completions`.
+- Modelo padrão inicial: `llama-3.3-70b-versatile` no Groq.
+- O provider/modelo global é apenas default; cada chat salva seu próprio provider e modelo.
+- A lista de providers e modelos fica em `src/server/models.js` e é enviada no bootstrap da UI.
+- `src/server/provider-client.js` centraliza chamadas, rotação de API keys, adaptador Anthropic e pull automático do Ollama.
 
 ## Why not React/Fastify/SQLite yet
 

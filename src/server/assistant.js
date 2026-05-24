@@ -1,5 +1,5 @@
 import { runtimeHome } from './paths.js';
-import { callGroqChat } from './groq.js';
+import { callProviderChat } from './provider-client.js';
 import {
   appendEvent,
   appendMessages,
@@ -49,7 +49,11 @@ export async function sendUserMessage(chatId, content, options = {}) {
     ),
   };
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = { ...config, model: chat.model || config.model };
+  const effectiveConfig = {
+    ...config,
+    provider: chat.provider || config.provider,
+    model: chat.model || config.model,
+  };
   const workingMessages = buildProviderMessages(chat, effectiveConfig, persistentMemory);
   const toolUses = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
@@ -57,8 +61,9 @@ export async function sendUserMessage(chatId, content, options = {}) {
 
   try {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      const assistantMessage = await callGroqChat({
-        apiKey: config.apiKey,
+      const assistantMessage = await callProviderChat({
+        config: effectiveConfig,
+        provider: effectiveConfig.provider,
         model: effectiveConfig.model,
         messages: workingMessages,
         tools: enabledTools,
@@ -89,8 +94,9 @@ export async function sendUserMessage(chatId, content, options = {}) {
     }
 
     if (!finalContent) {
-      const assistantMessage = await callGroqChat({
-        apiKey: config.apiKey,
+      const assistantMessage = await callProviderChat({
+        config: effectiveConfig,
+        provider: effectiveConfig.provider,
         model: effectiveConfig.model,
         messages: workingMessages,
         tools: [],
@@ -117,6 +123,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
 
   const savedAssistantMessage = createMessage('assistant', finalContent, {
     modelUsed: effectiveConfig.model,
+    providerUsed: effectiveConfig.provider,
     toolUses,
   });
   await updateMessage(chatId, userMessage.id, {
@@ -167,12 +174,17 @@ export async function compactChat(chatId) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = { ...config, model: chat.model || config.model };
+  const effectiveConfig = {
+    ...config,
+    provider: chat.provider || config.provider,
+    model: chat.model || config.model,
+  };
   const transcript = renderTranscript(chat.messages, MAX_CONTEXT_SAVE_CHARS);
   const contextSummary = await readContextSummary(chatId);
 
-  const response = await callGroqChat({
-    apiKey: config.apiKey,
+  const response = await callProviderChat({
+    config: effectiveConfig,
+    provider: effectiveConfig.provider,
     model: effectiveConfig.model,
     tools: [],
     temperature: 0.1,
@@ -205,7 +217,11 @@ export async function saveContextWindow(chatId) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = { ...config, model: chat.model || config.model };
+  const effectiveConfig = {
+    ...config,
+    provider: chat.provider || config.provider,
+    model: chat.model || config.model,
+  };
   const content = buildContextWindowMarkdown(chat, effectiveConfig, persistentMemory);
   const path = await saveContextSnapshot(chatId, content);
   await saveCurrentContextWindow(chatId, content);

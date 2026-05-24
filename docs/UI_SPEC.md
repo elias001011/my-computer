@@ -8,9 +8,10 @@ O MVP é uma single-page app branca, minimalista e funcional.
 
 Campos:
 
-- Provider: Groq.
-- Groq API key.
-- Modelo padrão em um seletor.
+- Provider.
+- API key quando o provider exige.
+- Endpoint/base URL quando o provider usa configuração local ou custom.
+- Modelo padrão em um seletor, com opção de modelo personalizado.
 - Idioma da IA, com `Automático` como padrão.
 - Apelido do usuário.
 - System prompt geral.
@@ -35,15 +36,17 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 - Erros de request aparecem na conversa e no painel com botão de retry.
 - Quando uma request falha, o prompt do usuário permanece salvo no histórico com estado `falhou`; retry reaproveita essa mesma mensagem.
 - O modelo ativo aparece no cabeçalho do chat.
-- O usuário pode trocar o modelo do chat durante a conversa.
+- O usuário pode trocar provider e modelo do chat durante a conversa.
 - `Enter` envia a mensagem; `Alt+Enter` insere nova linha.
 
 ## Model selection
 
-- O setup define o modelo padrão.
-- Chat novo usa automaticamente o modelo padrão.
-- O chat guarda o modelo em `metadata.json`.
-- Trocar o modelo durante o chat é permitido e gera evento.
+- O setup define provider e modelo padrão.
+- Chat novo usa automaticamente provider e modelo padrão.
+- O chat guarda provider e modelo em `metadata.json`.
+- Trocar provider/modelo durante o chat é permitido e gera evento.
+- Cada seletor de modelo tem opção `Modelo personalizado`.
+- Em Ollama, modelos instalados aparecem marcados e modelos ainda não instalados acionam pull automático no primeiro uso.
 
 Trocar no meio pode mudar estilo, qualidade de tool calling e limite efetivo de contexto, mas não corrompe o histórico. Para o MVP, a regra é permitir, deixando visível e auditável.
 
@@ -52,19 +55,22 @@ Trocar no meio pode mudar estilo, qualidade de tool calling e limite efetivo de 
 Inclui:
 
 - Apelido.
-- API key da Groq.
+- Provider padrão.
 - Modelo padrão.
 - Idioma.
 - System prompt geral.
+- Menu de providers e APIs, com endpoint/base URL por provider.
+- Múltiplas API keys por provider, usadas em rotação quando uma chamada falha por autenticação, rate limit ou erro temporário.
 - Memória persistente.
 - Toggles de tools.
 - Explicação avançada sobre tools e contexto.
+- Export/import de configurações, chats, memórias e contexto.
 - Botão para encerrar o servidor local, com instrução de como iniciar novamente.
 
 ## Context and memory controls
 
 - `Salvar snapshot` cria snapshot em `context-snapshots/` e atualiza `context-window.md`.
-- `Compactar contexto` atualiza `context.md` usando Groq.
+- `Compactar contexto` atualiza `context.md` usando o provider/modelo do chat.
 - `Memória do chat` edita `memory.md` manualmente.
 - A IA também pode editar a memória via tool `memory_chat`.
 - A IA pode editar memória global via `persistent_memory`.

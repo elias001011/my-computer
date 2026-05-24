@@ -12,10 +12,12 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 
 ## Decisões atuais
 
-- Provider único: Groq.
-- Modelo padrão configurado no setup e nas configurações gerais.
-- Chat novo usa o modelo padrão.
-- Modelo salvo por chat e editável durante a conversa.
+- Providers: Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI, Ollama e OpenAI compatível custom.
+- Provider/modelo padrão configurado no setup e nas configurações gerais.
+- Chat novo usa provider/modelo padrão.
+- Provider/modelo salvo por chat e editável durante a conversa.
+- Múltiplas API keys por provider, com rotação em falhas recuperáveis.
+- Export/import de configurações, chats, memórias e contexto.
 - Runtime central em `~/.my-computer` ou `MY_COMPUTER_HOME`.
 - Painel vanilla: `index.html`, `styles.css`, `app.js`.
 - Tools do MVP: `run_terminal_command`, `memory_chat`, `persistent_memory`, `compact_context` e `rename_chat`.

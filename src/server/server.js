@@ -3,12 +3,15 @@ import http from 'node:http';
 import path from 'node:path';
 import { panelDir, runtimeHome } from './paths.js';
 import { compactChat, saveContextWindow, sendUserMessage } from './assistant.js';
-import { groqModels } from './models.js';
+import { getProviderModels, getProvidersForClient } from './models.js';
+import { listOllamaInstalledModels } from './provider-client.js';
 import {
   appendEvent,
   createChat,
   deleteChat,
   ensureRuntime,
+  exportRuntimeData,
+  importRuntimeData,
   listChats,
   loadConfig,
   readChat,
@@ -57,15 +60,24 @@ async function handleApi(request, response, url) {
 
   if (method === 'GET' && parts[1] === 'bootstrap') {
     const config = await loadConfig();
+    const ollamaInstalledModels = await listOllamaInstalledModels(config);
     let chats = await listChats();
     if (config.setupComplete && chats.length === 0) {
-      await createChat('Novo chat', { model: config.model });
+      await createChat('Novo chat', { provider: config.provider, model: config.model });
       chats = await listChats();
     }
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       config: sanitizeConfig(config),
-      models: groqModels,
+      providers: getProvidersForClient({
+        customModelsByProvider: config.customModels,
+        ollamaInstalledModels,
+      }),
+      models: getProviderModels(config.provider, {
+        customModels: config.customModels?.[config.provider],
+        ollamaInstalledModels,
+      }),
+      ollamaInstalledModels,
       chats,
       activeChat,
       activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
@@ -78,16 +90,56 @@ async function handleApi(request, response, url) {
   if (method === 'PUT' && parts[1] === 'config') {
     const body = await readBody(request);
     const config = await saveConfig({
-      provider: 'groq',
+      provider: body.provider,
       apiKey: body.apiKey,
       model: body.model,
       language: body.language || 'auto',
       userNickname: body.userNickname || '',
       systemPromptExtra: body.systemPromptExtra || '',
       tools: body.tools,
+      providerSettings: body.providerSettings,
+      customModels: body.customModels,
       setupComplete: true,
     });
     sendJson(response, 200, { config: sanitizeConfig(config) });
+    return;
+  }
+
+  if (method === 'GET' && parts[1] === 'providers' && parts[2] === 'ollama' && parts[3] === 'models') {
+    const config = await loadConfig();
+    sendJson(response, 200, { models: await listOllamaInstalledModels(config) });
+    return;
+  }
+
+  if (method === 'GET' && parts[1] === 'export') {
+    sendJson(response, 200, await exportRuntimeData());
+    return;
+  }
+
+  if (method === 'POST' && parts[1] === 'import') {
+    const body = await readBody(request, { limit: 20_000_000 });
+    const imported = await importRuntimeData(body);
+    const config = await loadConfig();
+    const ollamaInstalledModels = await listOllamaInstalledModels(config);
+    const chats = await listChats();
+    const activeChat = chats[0] ? await readChat(chats[0].id) : null;
+    sendJson(response, 200, {
+      imported,
+      config: sanitizeConfig(config),
+      providers: getProvidersForClient({
+        customModelsByProvider: config.customModels,
+        ollamaInstalledModels,
+      }),
+      models: getProviderModels(config.provider, {
+        customModels: config.customModels?.[config.provider],
+        ollamaInstalledModels,
+      }),
+      ollamaInstalledModels,
+      chats,
+      activeChat,
+      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
+      persistentMemory: await readPersistentMemory(),
+    });
     return;
   }
 
@@ -123,7 +175,7 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'POST' && !chatId) {
     const config = await loadConfig();
-    const chat = await createChat('Novo chat', { model: config.model });
+    const chat = await createChat('Novo chat', { provider: config.provider, model: config.model });
     sendJson(response, 201, { chat, chats: await listChats() });
     return;
   }
@@ -132,13 +184,14 @@ async function handleChatsApi(request, response, parts) {
     const body = await readBody(request);
     await updateChatMetadata(chatId, {
       title: body.title,
+      provider: body.provider,
       model: body.model,
       systemPromptExtra: body.systemPromptExtra,
     });
     await appendEvent({
       type: 'chat.metadata.updated',
       chatId,
-      details: { title: body.title, model: body.model },
+      details: { title: body.title, provider: body.provider, model: body.model },
     });
     sendJson(response, 200, {
       chat: await readChat(chatId),
@@ -153,7 +206,7 @@ async function handleChatsApi(request, response, parts) {
     let chats = await listChats();
     if (chats.length === 0) {
       const config = await loadConfig();
-      await createChat('Novo chat', { model: config.model });
+      await createChat('Novo chat', { provider: config.provider, model: config.model });
       chats = await listChats();
     }
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
@@ -232,11 +285,12 @@ async function serveStatic(response, requestPath) {
   }
 }
 
-async function readBody(request) {
+async function readBody(request, options = {}) {
+  const limit = options.limit || 1_000_000;
   let raw = '';
   for await (const chunk of request) {
     raw += chunk.toString();
-    if (raw.length > 1_000_000) {
+    if (raw.length > limit) {
       const error = new Error('Payload muito grande.');
       error.statusCode = 413;
       throw error;

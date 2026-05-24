@@ -1,6 +1,8 @@
 const state = {
   config: null,
+  providers: [],
   models: [],
+  ollamaInstalledModels: [],
   chats: [],
   activeChat: null,
   activeChatEvents: [],
@@ -8,11 +10,14 @@ const state = {
   runtimeHome: '',
   busy: false,
   settingsOpen: false,
+  settingsProvider: '',
   apiKeyVisible: false,
   lastFailedAction: null,
   status: '',
   error: '',
 };
+
+const CUSTOM_MODEL_VALUE = '__custom__';
 
 const app = document.querySelector('#app');
 
@@ -37,6 +42,12 @@ function render() {
 }
 
 function renderSetup() {
+  const providerId = state.config?.provider || 'groq';
+  const provider = getProvider(providerId);
+  const model = state.config?.model || provider.defaultModel;
+  const providerSettings = state.config?.providerSettings?.[providerId] || {};
+  const showCustomModel = !isKnownModel(providerId, model);
+  const showBaseUrl = provider.id === 'openai-compatible' || provider.id === 'ollama';
   app.innerHTML = `
     <main class="setup-screen">
       <section class="setup-panel">
@@ -48,20 +59,28 @@ function renderSetup() {
           <div class="setup-grid">
             <label>
               Provider
-              <select name="provider" disabled>
-                <option value="groq">Groq</option>
+              <select name="provider" id="setup-provider">
+                ${renderProviderOptions(providerId)}
               </select>
             </label>
             <label>
               Modelo padrão
-              <select name="model">
-                ${renderModelOptions(state.config?.model || 'llama-3.3-70b-versatile')}
+              <select name="model" id="setup-model">
+                ${renderModelOptions(providerId, model)}
               </select>
             </label>
           </div>
-          <label>
-            Groq API key
-            <input name="apiKey" type="password" autocomplete="off" placeholder="gsk_..." required />
+          <label class="${showCustomModel ? '' : 'hidden'}" id="setup-custom-model-row">
+            Modelo personalizado
+            <input name="customModel" value="${showCustomModel ? escapeAttr(model) : ''}" placeholder="provider/model ou nome local" />
+          </label>
+          <label class="${showBaseUrl ? '' : 'hidden'}">
+            Endpoint/base URL
+            <input name="baseUrl" value="${escapeAttr(providerSettings.baseUrl || provider.baseUrl || '')}" placeholder="https://api.exemplo.com/v1" ${showBaseUrl ? 'required' : ''} />
+          </label>
+          <label class="${provider.requiresApiKey ? '' : 'hidden'}">
+            ${escapeHtml(provider.label)} API key
+            <input name="apiKey" type="password" autocomplete="off" placeholder="Cole a API key" ${provider.requiresApiKey ? 'required' : ''} />
           </label>
           <label>
             Apelido
@@ -87,16 +106,29 @@ function renderSetup() {
   `;
 
   document.querySelector('#setup-form').addEventListener('submit', saveSetup);
+  document.querySelector('#setup-provider').addEventListener('change', (event) => {
+    state.config.provider = event.target.value;
+    state.config.model = getProvider(event.target.value).defaultModel;
+    renderSetup();
+  });
+  document.querySelector('#setup-model').addEventListener('change', () => {
+    const selected = document.querySelector('#setup-model').value;
+    if (selected === CUSTOM_MODEL_VALUE) {
+      document.querySelector('#setup-custom-model-row').classList.remove('hidden');
+    }
+  });
 }
 
 function renderApp() {
   const chat = state.activeChat;
+  const chatProviderId = chat?.provider || state.config.provider;
+  const chatModel = chat?.model || state.config.model;
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
           <h1>My Computer</h1>
-          <span>Groq · ${escapeHtml(state.config.model || '')}</span>
+          <span>${escapeHtml(providerLabel(state.config.provider))} · ${escapeHtml(state.config.model || '')}</span>
         </div>
         <div class="sidebar-actions">
           <button class="primary" id="new-chat">Novo chat</button>
@@ -112,7 +144,7 @@ function renderApp() {
         <header class="chat-header">
           <div>
             <h2 class="chat-title">${escapeHtml(chat?.title || 'Chat')}</h2>
-            <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(chat.model || state.config.model)}` : 'Sem chat ativo'}</div>
+            <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(providerLabel(chatProviderId))} - ${escapeHtml(chatModel)}` : 'Sem chat ativo'}</div>
           </div>
           <div class="chat-header-actions">
             <button id="save-context" ${!chat || state.busy ? 'disabled' : ''}>Salvar snapshot</button>
@@ -139,11 +171,22 @@ function renderApp() {
               <input id="chat-title-input" value="${escapeAttr(chat?.title || '')}" ${!chat ? 'disabled' : ''} />
             </label>
             <label>
-              Modelo deste chat
-              <select id="chat-model-input" ${!chat ? 'disabled' : ''}>
-                ${renderModelOptions(chat?.model || state.config.model)}
+              Provider deste chat
+              <select id="chat-provider-input" ${!chat ? 'disabled' : ''}>
+                ${renderProviderOptions(chatProviderId)}
               </select>
             </label>
+            <label>
+              Modelo deste chat
+              <select id="chat-model-input" ${!chat ? 'disabled' : ''}>
+                ${renderModelOptions(chatProviderId, chatModel)}
+              </select>
+            </label>
+            <label class="${isKnownModel(chatProviderId, chatModel) ? 'hidden' : ''}" id="chat-custom-model-row">
+              Modelo personalizado
+              <input id="chat-custom-model-input" value="${isKnownModel(chatProviderId, chatModel) ? '' : escapeAttr(chatModel)}" ${!chat ? 'disabled' : ''} placeholder="provider/model ou nome local" />
+            </label>
+            ${chatProviderId === 'ollama' ? '<p class="help-text">Se o modelo local não estiver instalado, o My Computer chama o pull do Ollama antes da primeira resposta.</p>' : ''}
             <label>
               System prompt do chat
               <textarea id="chat-prompt-input" rows="5" ${!chat ? 'disabled' : ''} placeholder="Preferências específicas deste chat.">${escapeHtml(chat?.systemPromptExtra || '')}</textarea>
@@ -181,6 +224,12 @@ function renderApp() {
 }
 
 function renderSettingsModal() {
+  const defaultProvider = state.config.provider || 'groq';
+  const defaultModel = state.config.model || getProvider(defaultProvider).defaultModel;
+  const apiProvider = state.settingsProvider || defaultProvider;
+  const apiProviderInfo = getProvider(apiProvider);
+  const apiSettings = state.config.providerSettings?.[apiProvider] || {};
+  const apiKeys = apiSettings.apiKeys?.length ? apiSettings.apiKeys : [];
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -195,38 +244,83 @@ function renderSettingsModal() {
 
           <div class="modal-body">
             <section class="modal-section">
-              <h3>Identidade e provider</h3>
+              <h3>Identidade e padrão</h3>
               <div class="setup-grid">
                 <label>
                   Apelido
                   <input name="userNickname" value="${escapeAttr(state.config.userNickname || '')}" placeholder="Como a IA deve chamar você" />
                 </label>
                 <label>
-                  Modelo padrão
-                  <select name="model">
-                    ${renderModelOptions(state.config.model)}
+                  Provider padrão
+                  <select name="provider" id="default-provider-input">
+                    ${renderProviderOptions(defaultProvider)}
                   </select>
                 </label>
               </div>
               <div class="setup-grid">
+                <label>
+                  Modelo padrão
+                  <select name="model" id="default-model-input">
+                    ${renderModelOptions(defaultProvider, defaultModel)}
+                  </select>
+                </label>
                 <label>
                   Idioma da IA
                   <select name="language">
                     ${renderLanguageOptions(state.config.language)}
                   </select>
                 </label>
-                <label>
-                  Groq API key
-                  <span class="secret-field">
-                    <input name="apiKey" type="${state.apiKeyVisible ? 'text' : 'password'}" autocomplete="off" value="${escapeAttr(state.config.apiKey || '')}" placeholder="gsk_..." />
-                    <button type="button" id="toggle-api-key">${state.apiKeyVisible ? 'Ocultar' : 'Ver'}</button>
-                  </span>
-                </label>
               </div>
+              <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
+                Modelo personalizado
+                <input name="customModel" id="default-custom-model-input" value="${isKnownModel(defaultProvider, defaultModel) ? '' : escapeAttr(defaultModel)}" placeholder="provider/model ou nome local" />
+              </label>
               <label>
                 System prompt geral
                 <textarea name="systemPromptExtra" rows="5">${escapeHtml(state.config.systemPromptExtra || '')}</textarea>
               </label>
+            </section>
+
+            <section class="modal-section">
+              <h3>Providers e APIs</h3>
+              <p class="help-text">Cada provider guarda seu próprio endpoint e suas próprias keys. Se houver várias keys, o backend tenta a próxima quando uma chamada falha por autenticação, rate limit ou erro temporário.</p>
+              <div class="setup-grid">
+                <label>
+                  Provider para editar
+                  <select id="api-provider-input">
+                    ${renderProviderOptions(apiProvider)}
+                  </select>
+                </label>
+                <label>
+                  Endpoint/base URL
+                  <input id="api-base-url-input" value="${escapeAttr(apiSettings.baseUrl || apiProviderInfo.baseUrl || '')}" placeholder="https://api.exemplo.com/v1" ${apiProviderInfo.id === 'openai-compatible' || apiProviderInfo.id === 'ollama' ? '' : ''} />
+                </label>
+              </div>
+              ${
+                apiProviderInfo.id === 'ollama'
+                  ? '<p class="help-text">Ollama local normalmente não usa API key. O endpoint padrão é http://127.0.0.1:11434/v1.</p>'
+                  : `
+                    <div class="api-key-list">
+                      ${(apiKeys.length ? apiKeys : [{ id: 'empty', label: 'Key 1', value: '' }])
+                        .map((key, index) => renderApiKeyRow(key, index))
+                        .join('')}
+                    </div>
+                    <div class="button-row">
+                      <button type="button" id="add-api-key">Adicionar API key</button>
+                      <button type="button" id="toggle-api-key">${state.apiKeyVisible ? 'Ocultar keys' : 'Ver keys'}</button>
+                    </div>
+                  `
+              }
+              ${
+                apiProviderInfo.id === 'ollama'
+                  ? '<p class="help-text">Modelos instalados aparecem com marca na seleção. Se você usar um modelo novo, ele será puxado pelo Ollama e depois passa a aparecer na lista instalada.</p>'
+                  : ''
+              }
+              ${
+                apiProviderInfo.id === 'openai-compatible'
+                  ? '<p class="help-text">Use este provider para Minimax, Together, Fireworks, servidores próprios ou qualquer API que aceite o formato /v1/chat/completions.</p>'
+                  : ''
+              }
             </section>
 
             <section class="modal-section">
@@ -249,10 +343,22 @@ function renderSettingsModal() {
             <section class="modal-section">
               <h3>Contexto</h3>
               <div class="explain-list">
-                <p><strong>Janela interna do modelo:</strong> limite real do modelo na Groq. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.</p>
+                <p><strong>Janela interna do modelo:</strong> limite real do modelo/provider em uso. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.</p>
                 <p><strong>Salvar snapshot:</strong> salva uma fotografia Markdown do estado atual em context-snapshots e atualiza context-window.md. Não muda o prompt futuro por si só.</p>
                 <p><strong>Compactar contexto:</strong> pede ao modelo para resumir histórico, memória e decisões em context.md. Esse arquivo entra no prompt das próximas mensagens.</p>
                 <p><strong>compact_context:</strong> tool opcional para a própria IA atualizar context.md quando perceber que a conversa está longa.</p>
+              </div>
+            </section>
+
+            <section class="modal-section">
+              <h3>Backup</h3>
+              <p class="help-text">Exporta ou importa configurações, chats, memórias e contexto salvo do runtime local.</p>
+              <div class="button-row">
+                <button type="button" id="export-data">Exportar dados</button>
+                <label class="file-button">
+                  Importar dados
+                  <input type="file" id="import-data" accept="application/json" />
+                </label>
               </div>
             </section>
 
@@ -291,14 +397,16 @@ function renderChatItem(chat) {
   return `
     <button class="chat-item ${active}" data-chat-id="${escapeAttr(chat.id)}">
       <strong>${escapeHtml(chat.title)}</strong>
-      <span class="meta">${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
+      <span class="meta">${escapeHtml(providerLabel(chat.provider || state.config.provider))} · ${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
     </button>
   `;
 }
 
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
-  const modelUsed = message.modelUsed ? `<span class="message-model">${escapeHtml(message.modelUsed)}</span>` : '';
+  const modelUsed = message.modelUsed
+    ? `<span class="message-model">${escapeHtml(message.providerUsed ? `${providerLabel(message.providerUsed)} · ` : '')}${escapeHtml(message.modelUsed)}</span>`
+    : '';
   const status = message.status ? `<span class="message-status ${escapeAttr(message.status)}">${renderMessageStatus(message.status)}</span>` : '';
   const copyButton =
     message.role === 'assistant'
@@ -377,22 +485,44 @@ function renderEvent(event) {
   `;
 }
 
-function renderModelOptions(selectedModel) {
-  const models = state.models?.length
-    ? state.models
-    : [{ id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', kind: 'Produção' }];
+function renderApiKeyRow(key, index) {
+  return `
+    <div class="api-key-row" data-key-index="${index}">
+      <span class="secret-field">
+        <input class="api-key-input" type="${state.apiKeyVisible ? 'text' : 'password'}" autocomplete="off" value="${escapeAttr(key.value || '')}" placeholder="API key ${index + 1}" />
+        <button type="button" class="remove-api-key" data-key-index="${index}">Remover</button>
+      </span>
+    </div>
+  `;
+}
+
+function renderProviderOptions(selectedProvider) {
+  return (state.providers?.length ? state.providers : [{ id: 'groq', label: 'Groq' }])
+    .map((provider) => {
+      const selected = provider.id === selectedProvider ? 'selected' : '';
+      return `<option value="${escapeAttr(provider.id)}" ${selected}>${escapeHtml(provider.label)}</option>`;
+    })
+    .join('');
+}
+
+function renderModelOptions(providerId, selectedModel) {
+  const provider = getProvider(providerId);
+  const models = provider.models?.length
+    ? provider.models
+    : [{ id: provider.defaultModel, label: provider.defaultModel, kind: 'Padrão' }];
   const known = new Set(models.map((model) => model.id));
   const options = models
     .map((model) => {
       const selected = model.id === selectedModel ? 'selected' : '';
-      return `<option value="${escapeAttr(model.id)}" ${selected}>${escapeHtml(model.label)} · ${escapeHtml(model.kind)} · ${escapeHtml(model.id)}</option>`;
+      const installed = provider.id === 'ollama' && model.installed ? '&#10003; ' : '';
+      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)} · ${escapeHtml(model.id)}</option>`;
     })
     .join('');
+  const customSelected = selectedModel && !known.has(selectedModel) ? 'selected' : '';
+  const customLabel = provider.id === 'ollama' ? 'Modelo personalizado ou ainda não instalado' : 'Modelo personalizado';
+  const customOption = `<option value="${CUSTOM_MODEL_VALUE}" ${customSelected}>${escapeHtml(customLabel)}</option>`;
 
-  if (selectedModel && !known.has(selectedModel)) {
-    return `<option value="${escapeAttr(selectedModel)}" selected>${escapeHtml(selectedModel)}</option>${options}`;
-  }
-  return options;
+  return `${options}${customOption}`;
 }
 
 function renderLanguageOptions(selectedLanguage = 'auto') {
@@ -410,6 +540,42 @@ function renderLanguageOptions(selectedLanguage = 'auto') {
     .join('');
 }
 
+function getProvider(providerId) {
+  return (
+    state.providers?.find((provider) => provider.id === providerId) ||
+    state.providers?.[0] || {
+      id: 'groq',
+      label: 'Groq',
+      defaultModel: 'llama-3.3-70b-versatile',
+      requiresApiKey: true,
+      baseUrl: 'https://api.groq.com/openai/v1',
+      models: [{ id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B Versatile', kind: 'Produção' }],
+    }
+  );
+}
+
+function providerLabel(providerId) {
+  return getProvider(providerId).label || providerId || 'Provider';
+}
+
+function isKnownModel(providerId, model) {
+  return Boolean(getProvider(providerId).models?.some((item) => item.id === model));
+}
+
+function getModelValue(modelSelectId, customInputId, providerId) {
+  const selected = document.querySelector(modelSelectId)?.value;
+  if (selected !== CUSTOM_MODEL_VALUE) return selected || getProvider(providerId).defaultModel;
+  return document.querySelector(customInputId)?.value.trim() || getProvider(providerId).defaultModel;
+}
+
+function withCustomModel(customModels, providerId, model) {
+  const next = structuredClone(customModels || {});
+  if (!model || isKnownModel(providerId, model)) return next;
+  const existing = Array.isArray(next[providerId]) ? next[providerId] : [];
+  next[providerId] = [...new Set([...existing, model])];
+  return next;
+}
+
 function bindAppEvents() {
   document.querySelector('#new-chat').addEventListener('click', createNewChat);
   document.querySelector('#open-settings').addEventListener('click', openSettings);
@@ -419,6 +585,8 @@ function bindAppEvents() {
   document.querySelector('#composer').addEventListener('submit', sendMessage);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
   document.querySelector('#save-memory').addEventListener('click', saveMemory);
+  document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
+  document.querySelector('#chat-model-input')?.addEventListener('change', toggleChatCustomModel);
   document.querySelector('#save-chat-settings').addEventListener('click', saveChatSettings);
   document.querySelector('#delete-chat').addEventListener('click', deleteActiveChat);
   document.querySelector('#compact-context').addEventListener('click', compactContext);
@@ -436,7 +604,16 @@ function bindAppEvents() {
     document.querySelector('#general-settings-form').addEventListener('submit', saveGeneralSettings);
     document.querySelector('#close-settings').addEventListener('click', closeSettings);
     document.querySelector('#cancel-settings').addEventListener('click', closeSettings);
-    document.querySelector('#toggle-api-key').addEventListener('click', toggleApiKeyVisibility);
+    document.querySelector('#default-provider-input').addEventListener('change', changeDefaultProviderDraft);
+    document.querySelector('#default-model-input').addEventListener('change', toggleDefaultCustomModel);
+    document.querySelector('#api-provider-input').addEventListener('change', changeApiProviderDraft);
+    document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
+    document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
+    document.querySelectorAll('.remove-api-key').forEach((button) => {
+      button.addEventListener('click', () => removeApiKeyRow(Number(button.dataset.keyIndex)));
+    });
+    document.querySelector('#export-data').addEventListener('click', exportData);
+    document.querySelector('#import-data').addEventListener('change', importData);
     document.querySelector('#shutdown-app').addEventListener('click', shutdownApp);
   }
 }
@@ -444,12 +621,25 @@ function bindAppEvents() {
 async function saveSetup(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const provider = form.get('provider') || 'groq';
+  const model = getModelValue('#setup-model', '[name="customModel"]', provider);
+  const customModels = withCustomModel(state.config.customModels, provider, model);
+  const providerSettings = structuredClone(state.config.providerSettings || {});
+  const providerInfo = getProvider(provider);
+  providerSettings[provider] = {
+    ...(providerSettings[provider] || {}),
+    baseUrl: form.get('baseUrl') || providerInfo.baseUrl || '',
+    apiKeys: form.get('apiKey') ? [{ id: 'setup', label: 'Key 1', value: String(form.get('apiKey')).trim() }] : [],
+  };
+
   await runAction('Salvando configuração...', async () => {
     await api('/api/config', {
       method: 'PUT',
       body: {
-        apiKey: form.get('apiKey'),
-        model: form.get('model'),
+        provider,
+        model,
+        providerSettings,
+        customModels,
         language: form.get('language'),
         userNickname: form.get('userNickname'),
         systemPromptExtra: form.get('systemPromptExtra'),
@@ -457,6 +647,72 @@ async function saveSetup(event) {
     });
     await bootstrap();
   });
+}
+
+function changeChatProviderDraft(event) {
+  if (!state.activeChat) return;
+  const provider = event.target.value;
+  state.activeChat = {
+    ...state.activeChat,
+    provider,
+    model: getProvider(provider).defaultModel,
+  };
+  render();
+}
+
+function toggleChatCustomModel() {
+  const select = document.querySelector('#chat-model-input');
+  const row = document.querySelector('#chat-custom-model-row');
+  if (!select || !row) return;
+  row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
+}
+
+function changeDefaultProviderDraft(event) {
+  syncProviderApiDraft();
+  state.config = {
+    ...state.config,
+    provider: event.target.value,
+    model: getProvider(event.target.value).defaultModel,
+  };
+  state.settingsProvider = event.target.value;
+  render();
+}
+
+function toggleDefaultCustomModel() {
+  const select = document.querySelector('#default-model-input');
+  const row = document.querySelector('#default-custom-model-row');
+  if (!select || !row) return;
+  row.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
+}
+
+function changeApiProviderDraft(event) {
+  syncProviderApiDraft();
+  state.settingsProvider = event.target.value;
+  render();
+}
+
+function addApiKeyRow() {
+  syncProviderApiDraft();
+  const provider = state.settingsProvider || state.config.provider;
+  const settings = state.config.providerSettings?.[provider] || {};
+  settings.apiKeys = [...(settings.apiKeys || []), { id: `draft-${Date.now()}`, label: `Key ${(settings.apiKeys || []).length + 1}`, value: '' }];
+  state.config.providerSettings = {
+    ...(state.config.providerSettings || {}),
+    [provider]: settings,
+  };
+  render();
+}
+
+function removeApiKeyRow(index) {
+  syncProviderApiDraft();
+  const provider = state.settingsProvider || state.config.provider;
+  const settings = state.config.providerSettings?.[provider] || {};
+  settings.apiKeys = (settings.apiKeys || []).filter((_, itemIndex) => itemIndex !== index);
+  state.config.providerSettings = {
+    ...(state.config.providerSettings || {}),
+    [provider]: settings,
+  };
+  render();
 }
 
 async function createNewChat() {
@@ -505,7 +761,7 @@ async function sendMessageContent(content, options = {}) {
   }
 
   await runAction(
-    'Enviando para Groq...',
+    `Enviando para ${providerLabel(state.activeChat.provider || state.config.provider)}...`,
     async () => {
       const data = await api(`/api/chats/${chatId}/messages`, {
         method: 'POST',
@@ -599,13 +855,15 @@ async function saveMemory() {
 
 async function saveChatSettings() {
   const title = document.querySelector('#chat-title-input').value;
-  const model = document.querySelector('#chat-model-input').value;
+  const provider = document.querySelector('#chat-provider-input').value;
+  const model = getModelValue('#chat-model-input', '#chat-custom-model-input', provider);
   const systemPromptExtra = document.querySelector('#chat-prompt-input').value;
   await runAction('Salvando configurações do chat...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}`, {
       method: 'PUT',
       body: {
         title,
+        provider,
         model,
         systemPromptExtra,
       },
@@ -619,7 +877,11 @@ async function saveChatSettings() {
 
 async function saveGeneralSettings(event) {
   event.preventDefault();
+  syncProviderApiDraft();
   const form = new FormData(event.currentTarget);
+  const provider = form.get('provider') || state.config.provider;
+  const model = getModelValue('#default-model-input', '#default-custom-model-input', provider);
+  const customModels = withCustomModel(state.config.customModels, provider, model);
   await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
@@ -631,12 +893,14 @@ async function saveGeneralSettings(event) {
     const configResponse = await api('/api/config', {
       method: 'PUT',
       body: {
-        apiKey: form.get('apiKey'),
-        model: form.get('model'),
+        provider,
+        model,
         language: form.get('language'),
         userNickname: form.get('userNickname'),
         systemPromptExtra: form.get('systemPromptExtra'),
         tools,
+        providerSettings: state.config.providerSettings,
+        customModels,
       },
     });
     const memoryResponse = await api('/api/persistent-memory', {
@@ -647,6 +911,68 @@ async function saveGeneralSettings(event) {
     state.persistentMemory = memoryResponse.persistentMemory;
     state.settingsOpen = false;
     await refreshActiveChatData();
+  });
+}
+
+function syncProviderApiDraft() {
+  if (!state.settingsOpen) return;
+  const provider = state.settingsProvider || state.config.provider;
+  const baseUrlInput = document.querySelector('#api-base-url-input');
+  const apiKeyInputs = [...document.querySelectorAll('.api-key-input')];
+  if (!baseUrlInput && !apiKeyInputs.length) return;
+
+  state.config.providerSettings = {
+    ...(state.config.providerSettings || {}),
+    [provider]: {
+      ...(state.config.providerSettings?.[provider] || {}),
+      baseUrl: baseUrlInput?.value.trim() || getProvider(provider).baseUrl || '',
+      apiKeys: apiKeyInputs
+        .map((input, index) => ({
+          id: `key-${index}`,
+          label: `Key ${index + 1}`,
+          value: input.value.trim(),
+        }))
+        .filter((item) => item.value),
+    },
+  };
+}
+
+async function exportData() {
+  await runAction('Exportando dados...', async () => {
+    const data = await api('/api/export');
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `my-computer-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  });
+}
+
+async function importData(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const confirmed = window.confirm('Importar este backup pode sobrescrever chats com o mesmo id. Continuar?');
+  if (!confirmed) return;
+
+  await runAction('Importando dados...', async () => {
+    const content = await file.text();
+    const payload = JSON.parse(content);
+    const data = await api('/api/import', {
+      method: 'POST',
+      body: payload,
+    });
+    state.config = data.config;
+    state.providers = data.providers || state.providers;
+    state.models = data.models || state.models;
+    state.ollamaInstalledModels = data.ollamaInstalledModels || state.ollamaInstalledModels;
+    state.chats = data.chats;
+    state.activeChat = data.activeChat;
+    state.activeChatEvents = data.activeChatEvents || [];
+    state.persistentMemory = data.persistentMemory || '';
   });
 }
 
@@ -670,7 +996,9 @@ async function saveContext() {
 async function refreshBootstrapData() {
   const data = await api('/api/bootstrap');
   state.config = data.config;
+  state.providers = data.providers || state.providers;
   state.models = data.models;
+  state.ollamaInstalledModels = data.ollamaInstalledModels || [];
   state.chats = data.chats;
   state.persistentMemory = data.persistentMemory;
   if (!state.activeChat && data.activeChat) {
@@ -689,6 +1017,7 @@ async function refreshActiveChatData() {
 
 function openSettings() {
   state.settingsOpen = true;
+  state.settingsProvider = state.settingsProvider || state.config.provider;
   render();
 }
 
@@ -698,6 +1027,7 @@ function closeSettings() {
 }
 
 function toggleApiKeyVisibility() {
+  syncProviderApiDraft();
   state.apiKeyVisible = !state.apiKeyVisible;
   render();
 }

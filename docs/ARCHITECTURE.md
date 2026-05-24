@@ -8,7 +8,7 @@ My Computer roda como um app local simples:
 Browser
   -> src/panel static files
   -> local Node HTTP API
-  -> Groq chat completions
+  -> provider client
   -> local tools
   -> ~/.my-computer runtime
 ```
@@ -21,7 +21,8 @@ O servidor escuta em `127.0.0.1` e tenta portas livres a partir de `8787`.
 - `src/server/server.js` - HTTP server, API JSON e static file serving.
 - `src/server/store.js` - arquivos de config, chats, memória, contexto e eventos.
 - `src/server/assistant.js` - orquestração do chat, contexto, tools e compactação.
-- `src/server/groq.js` - chamada OpenAI-compatible para Groq.
+- `src/server/provider-client.js` - chamadas para providers, rotação de API keys e Ollama.
+- `src/server/models.js` - catálogo de providers e modelos sugeridos.
 - `src/server/tools.js` - definições e execução das tools.
 - `src/cli/mc.js` - comando local para iniciar o painel.
 - `scripts/` - install/uninstall.
@@ -53,8 +54,8 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
 1. O painel carrega `/api/bootstrap`.
 2. Se ainda não existe setup, a UI mostra o formulário inicial.
 3. O usuário cria ou abre um chat.
-4. Chat novo usa o modelo padrão das configurações gerais.
-5. Cada chat salva seu próprio `model`; trocar durante a conversa é permitido e auditável.
+4. Chat novo usa provider e modelo padrão das configurações gerais.
+5. Cada chat salva seu próprio `provider` e `model`; trocar durante a conversa é permitido e auditável.
 6. Ao enviar mensagem, o servidor monta o system prompt com:
    - preferências globais
    - memória persistente
@@ -62,7 +63,7 @@ Por padrão, tudo que é dado do usuário fica em `~/.my-computer`:
    - memória do chat
    - contexto compactado
    - histórico recente
-7. Groq pode responder direto ou chamar tools.
+7. O provider selecionado pode responder direto ou chamar tools.
 8. Cada tool executada é salva no histórico do chat e no event log.
 9. A resposta final é salva em `messages.json`.
 10. A janela atual de contexto é atualizada em `context-window.md`.
@@ -114,13 +115,35 @@ As configurações gerais guardam toggles para:
 
 Quando uma tool é desligada, ela não é enviada ao modelo.
 
+## Providers
+
+O app suporta providers OpenAI-compatible por uma camada comum de `baseUrl + /chat/completions`, incluindo:
+
+- Groq
+- OpenAI
+- OpenRouter
+- Hugging Face Router
+- Gemini OpenAI compatibility
+- xAI
+- Ollama
+- OpenAI compatível customizado
+
+Anthropic usa um adaptador próprio para a Messages API e converte tool calls para o formato interno do app.
+
+As configurações guardam `providerSettings` por provider, com endpoint e múltiplas API keys. Quando há várias keys, o client tenta a próxima em erros de autenticação, rate limit ou falhas temporárias. O provider `openai-compatible` cobre APIs como Minimax, Together, Fireworks e servidores próprios que aceitam o formato OpenAI.
+
+Ollama usa o endpoint local OpenAI-compatible por padrão (`http://127.0.0.1:11434/v1`). Antes de chamar um modelo, o backend verifica `/api/tags`; se o modelo não estiver instalado, chama `/api/pull` com `stream: false`.
+
+## Import/export
+
+`/api/export` gera um JSON com configurações, chats, mensagens, memórias e contexto salvo. `/api/import` importa esse JSON e pode sobrescrever chats com o mesmo id.
+
 ## Shutdown
 
 O painel tem uma ação de encerrar o servidor local. Para iniciar novamente, rode `./install.sh` ou `npm run start:open` na raiz do projeto.
 
 ## Extension points
 
-- Mais providers além de Groq.
 - Confirmação antes de comandos sensíveis.
 - Variáveis de ambiente pelo painel.
 - Skills com permissões.

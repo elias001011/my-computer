@@ -11,14 +11,24 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const store = await import(`../src/server/store.js?test=${Date.now()}`);
   await store.ensureRuntime();
   await store.saveConfig({
-    apiKey: 'test-key',
+    provider: 'openai-compatible',
     model: 'llama-3.3-70b-versatile',
     language: 'auto',
     systemPromptExtra: 'Prefer short answers.',
+    providerSettings: {
+      'openai-compatible': {
+        baseUrl: 'https://example.test/v1',
+        apiKeys: [{ value: 'test-key' }],
+      },
+    },
   });
+  const config = await store.loadConfig();
+  assert.equal(config.provider, 'openai-compatible');
+  assert.equal(config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
 
-  const chat = await store.createChat('Teste');
+  const chat = await store.createChat('Teste', { provider: config.provider, model: config.model });
   assert.equal(chat.title, 'Teste');
+  assert.equal(chat.provider, 'openai-compatible');
   assert.match(chat.paths.memory, /memory\.md$/);
 
   await store.writeMemory(chat.id, '# Memory\n\n- keep this');
@@ -38,6 +48,10 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
 
   const snapshotPath = await store.saveContextSnapshot(chat.id, '# Context');
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
+
+  const exported = await store.exportRuntimeData();
+  assert.equal(exported.chats.length, 1);
+  assert.equal(exported.config.provider, 'openai-compatible');
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);
