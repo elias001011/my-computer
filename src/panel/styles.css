@@ -290,6 +290,11 @@ pre {
   border-color: #c7e5df;
 }
 
+.message.failed .bubble {
+  border-color: #e0b4aa;
+  background: #fff7f4;
+}
+
 .message.assistant .bubble {
   background: var(--bg);
 }
@@ -312,11 +317,34 @@ pre {
   padding: 1px 6px;
 }
 
-.copy-message {
+.message-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.message-status.failed {
+  border-color: #e0b4aa;
+  color: var(--danger);
+}
+
+.copy-message,
+.retry-message {
   min-height: 24px;
   margin-left: auto;
   padding: 0 8px;
   font-size: 12px;
+}
+
+.retry-message {
+  margin-left: 0;
+  color: var(--danger);
+}
+
+.message-error {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .request-error {

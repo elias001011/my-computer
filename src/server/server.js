@@ -181,7 +181,9 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'POST' && chatId && parts[3] === 'messages') {
     const body = await readBody(request);
-    const result = await sendUserMessage(chatId, body.content || '');
+    const result = await sendUserMessage(chatId, body.content || '', {
+      retryMessageId: body.retryMessageId || null,
+    });
     sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
     return;
   }

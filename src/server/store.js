@@ -161,6 +161,33 @@ export async function appendMessages(id, messages) {
   return next;
 }
 
+export async function updateMessage(id, messageId, patch) {
+  assertChatId(id);
+  const chatDir = getChatDir(id);
+  const messagesPath = path.join(chatDir, 'messages.json');
+  const current = await readJson(messagesPath, []);
+  let found = false;
+  const next = current.map((message) => {
+    if (message.id !== messageId) return message;
+    found = true;
+    return {
+      ...message,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  if (!found) {
+    const error = new Error('Mensagem não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  await writeJson(messagesPath, next, 0o600);
+  await touchChat(id);
+  return next.find((message) => message.id === messageId);
+}
+
 export async function updateChatMetadata(id, patch) {
   assertChatId(id);
   const metadata = await readChatMetadata(id);

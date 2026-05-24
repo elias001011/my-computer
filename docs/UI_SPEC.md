@@ -33,6 +33,7 @@ A página não cresce conforme o chat: a área de mensagens rola internamente.
 - `memory_chat` mostra input e resultado em JSON.
 - Cada mensagem da IA tem botão de copiar.
 - Erros de request aparecem na conversa e no painel com botão de retry.
+- Quando uma request falha, o prompt do usuário permanece salvo no histórico com estado `falhou`; retry reaproveita essa mesma mensagem.
 - O modelo ativo aparece no cabeçalho do chat.
 - O usuário pode trocar o modelo do chat durante a conversa.
 - `Enter` envia a mensagem; `Alt+Enter` insere nova linha.

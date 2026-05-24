@@ -25,6 +25,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const updated = await store.readChat(chat.id);
   assert.match(updated.memory, /keep this/);
 
+  const failedMessage = store.createMessage('user', 'retry me', { status: 'failed' });
+  await store.appendMessages(chat.id, [failedMessage]);
+  const retriedMessage = await store.updateMessage(chat.id, failedMessage.id, {
+    status: 'pending',
+    error: null,
+  });
+  assert.equal(retriedMessage.status, 'pending');
+
   await store.writePersistentMemory('# Global\n\n- cross-chat');
   assert.match(await store.readPersistentMemory(), /cross-chat/);
 

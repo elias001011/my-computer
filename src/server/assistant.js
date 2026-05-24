@@ -12,6 +12,7 @@ import {
   saveContextSnapshot,
   saveCurrentContextWindow,
   updateChatMetadata,
+  updateMessage,
   writeMemory,
   writePersistentMemory,
   writeContextSummary,
@@ -29,7 +30,7 @@ const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
 const MAX_TOOL_ROUNDS = 4;
 
-export async function sendUserMessage(chatId, content) {
+export async function sendUserMessage(chatId, content, options = {}) {
   const config = await loadConfig();
   const trimmed = String(content || '').trim();
   if (!trimmed) {
@@ -39,8 +40,14 @@ export async function sendUserMessage(chatId, content) {
   }
 
   const chatBefore = await readChat(chatId);
-  const userMessage = createMessage('user', trimmed);
-  const chat = { ...chatBefore, messages: [...chatBefore.messages, userMessage] };
+  const userMessage = await saveUserMessageForRequest(chatId, chatBefore, trimmed, options.retryMessageId);
+  const chatWithUserMessage = await readChat(chatId);
+  const chat = {
+    ...chatWithUserMessage,
+    messages: chatWithUserMessage.messages.map((message) =>
+      message.id === userMessage.id ? { ...message, status: 'sent', error: undefined } : message,
+    ),
+  };
   const persistentMemory = await readPersistentMemory();
   const effectiveConfig = { ...config, model: chat.model || config.model };
   const workingMessages = buildProviderMessages(chat, effectiveConfig, persistentMemory);
@@ -48,46 +55,60 @@ export async function sendUserMessage(chatId, content) {
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let finalContent = '';
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const assistantMessage = await callGroqChat({
-      apiKey: config.apiKey,
-      model: effectiveConfig.model,
-      messages: workingMessages,
-      tools: enabledTools,
-    });
-
-    const toolCalls = assistantMessage.tool_calls || [];
-    if (!toolCalls.length) {
-      finalContent = assistantMessage.content || '';
-      break;
-    }
-
-    workingMessages.push({
-      role: 'assistant',
-      content: assistantMessage.content || '',
-      tool_calls: toolCalls,
-    });
-
-    for (const toolCall of toolCalls) {
-      const toolUse = await executeToolCall(chatId, toolCall);
-      toolUses.push(toolUse);
-      workingMessages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        name: toolUse.name,
-        content: truncate(JSON.stringify(toolUse.result), 12000),
+  try {
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      const assistantMessage = await callGroqChat({
+        apiKey: config.apiKey,
+        model: effectiveConfig.model,
+        messages: workingMessages,
+        tools: enabledTools,
       });
-    }
-  }
 
-  if (!finalContent) {
-    const assistantMessage = await callGroqChat({
-      apiKey: config.apiKey,
-      model: effectiveConfig.model,
-      messages: workingMessages,
-      tools: [],
+      const toolCalls = assistantMessage.tool_calls || [];
+      if (!toolCalls.length) {
+        finalContent = assistantMessage.content || '';
+        break;
+      }
+
+      workingMessages.push({
+        role: 'assistant',
+        content: assistantMessage.content || '',
+        tool_calls: toolCalls,
+      });
+
+      for (const toolCall of toolCalls) {
+        const toolUse = await executeToolCall(chatId, toolCall);
+        toolUses.push(toolUse);
+        workingMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          name: toolUse.name,
+          content: truncate(JSON.stringify(toolUse.result), 12000),
+        });
+      }
+    }
+
+    if (!finalContent) {
+      const assistantMessage = await callGroqChat({
+        apiKey: config.apiKey,
+        model: effectiveConfig.model,
+        messages: workingMessages,
+        tools: [],
+      });
+      finalContent = assistantMessage.content || 'Terminei a execução das tools, mas não recebi texto final.';
+    }
+  } catch (error) {
+    await updateMessage(chatId, userMessage.id, {
+      status: 'failed',
+      error: error.message || 'Erro ao gerar resposta.',
+      failedAt: new Date().toISOString(),
     });
-    finalContent = assistantMessage.content || 'Terminei a execução das tools, mas não recebi texto final.';
+    await appendEvent({
+      type: 'chat.message.failed',
+      chatId,
+      details: { messageId: userMessage.id, error: error.message },
+    });
+    throw error;
   }
 
   if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat')) {
@@ -98,7 +119,12 @@ export async function sendUserMessage(chatId, content) {
     modelUsed: effectiveConfig.model,
     toolUses,
   });
-  await appendMessages(chatId, [userMessage, savedAssistantMessage]);
+  await updateMessage(chatId, userMessage.id, {
+    status: 'sent',
+    error: null,
+    sentAt: new Date().toISOString(),
+  });
+  await appendMessages(chatId, [savedAssistantMessage]);
 
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
@@ -110,6 +136,31 @@ export async function sendUserMessage(chatId, content) {
     assistantMessage: savedAssistantMessage,
     chat: await readChat(chatId),
   };
+}
+
+async function saveUserMessageForRequest(chatId, chat, content, retryMessageId) {
+  if (retryMessageId) {
+    const existing = chat.messages.find((message) => message.id === retryMessageId && message.role === 'user');
+    if (!existing) {
+      const error = new Error('Mensagem para retry não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return updateMessage(chatId, retryMessageId, {
+      content: existing.content || content,
+      status: 'pending',
+      error: null,
+      retryCount: Number(existing.retryCount || 0) + 1,
+      retriedAt: new Date().toISOString(),
+    });
+  }
+
+  const userMessage = createMessage('user', content, {
+    status: 'pending',
+  });
+  await appendMessages(chatId, [userMessage]);
+  return userMessage;
 }
 
 export async function compactChat(chatId) {
@@ -274,6 +325,7 @@ function selectRecentMessages(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!['user', 'assistant'].includes(message.role)) continue;
+    if (message.status === 'failed') continue;
     const content = renderMessageForModel(message);
     const size = content.length + 20;
     if (selected.length && total + size > MAX_CONTEXT_CHARS) break;

@@ -299,17 +299,29 @@ function renderChatItem(chat) {
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
   const modelUsed = message.modelUsed ? `<span class="message-model">${escapeHtml(message.modelUsed)}</span>` : '';
+  const status = message.status ? `<span class="message-status ${escapeAttr(message.status)}">${renderMessageStatus(message.status)}</span>` : '';
   const copyButton =
     message.role === 'assistant'
       ? `<button class="copy-message" data-message-id="${escapeAttr(message.id)}">Copiar</button>`
       : '';
+  const retryButton =
+    message.role === 'user' && message.status === 'failed'
+      ? `<button class="retry-message" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`
+      : '';
   return `
-    <article class="message ${escapeAttr(message.role)}">
-      <div class="message-label">${label}${modelUsed}${copyButton}</div>
+    <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
+      <div class="message-label">${label}${modelUsed}${status}${retryButton}${copyButton}</div>
       ${(message.toolUses || []).map(renderToolUse).join('')}
       <div class="bubble">${formatContent(message.content)}</div>
+      ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
     </article>
   `;
+}
+
+function renderMessageStatus(status) {
+  if (status === 'pending') return 'enviando';
+  if (status === 'failed') return 'falhou';
+  return '';
 }
 
 function renderErrorBanner() {
@@ -414,6 +426,9 @@ function bindAppEvents() {
   document.querySelectorAll('.copy-message').forEach((button) => {
     button.addEventListener('click', () => copyMessage(button.dataset.messageId));
   });
+  document.querySelectorAll('.retry-message').forEach((button) => {
+    button.addEventListener('click', () => retryMessage(button.dataset.messageId));
+  });
   document.querySelector('#retry-action')?.addEventListener('click', retryLastAction);
   document.querySelector('#retry-action-inline')?.addEventListener('click', retryLastAction);
 
@@ -470,22 +485,34 @@ async function sendMessage(event) {
   await sendMessageContent(content);
 }
 
-async function sendMessageContent(content) {
-  const localMessage = {
-    id: `local-${Date.now()}`,
-    role: 'user',
-    content,
-    createdAt: new Date().toISOString(),
-  };
-  state.activeChat.messages = [...state.activeChat.messages, localMessage];
-
+async function sendMessageContent(content, options = {}) {
   const chatId = state.activeChat.id;
+  if (options.retryMessageId) {
+    state.activeChat.messages = state.activeChat.messages.map((message) =>
+      message.id === options.retryMessageId
+        ? { ...message, status: 'pending', error: null }
+        : message,
+    );
+  } else {
+    const localMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    state.activeChat.messages = [...state.activeChat.messages, localMessage];
+  }
+
   await runAction(
     'Enviando para Groq...',
     async () => {
       const data = await api(`/api/chats/${chatId}/messages`, {
         method: 'POST',
-        body: { content },
+        body: {
+          content,
+          retryMessageId: options.retryMessageId,
+        },
       });
       state.activeChat = data.chat;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
@@ -493,19 +520,32 @@ async function sendMessageContent(content) {
       state.chats = fresh.chats;
       await refreshActiveChatData();
     },
-    () => sendMessageContent(content),
+    () => sendMessageContent(content, options),
   );
   if (state.error && state.activeChat?.id === chatId) {
-    state.activeChat.messages = state.activeChat.messages.filter((message) => message.id !== localMessage.id);
+    await refreshActiveChatData();
     render();
   }
 }
 
 function handleComposerKeydown(event) {
   if (event.key !== 'Enter') return;
-  if (event.altKey) return;
+  if (event.altKey) {
+    event.preventDefault();
+    insertTextAtCursor(event.currentTarget, '\n');
+    return;
+  }
   event.preventDefault();
   event.currentTarget.form.requestSubmit();
+}
+
+function insertTextAtCursor(textarea, text) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
+  const nextPosition = start + text.length;
+  textarea.selectionStart = nextPosition;
+  textarea.selectionEnd = nextPosition;
 }
 
 async function retryLastAction() {
@@ -513,6 +553,12 @@ async function retryLastAction() {
   const retry = state.lastFailedAction;
   state.lastFailedAction = null;
   await retry();
+}
+
+async function retryMessage(messageId) {
+  const message = state.activeChat?.messages?.find((item) => item.id === messageId);
+  if (!message) return;
+  await sendMessageContent(message.content, { retryMessageId: message.id });
 }
 
 async function copyMessage(messageId) {
