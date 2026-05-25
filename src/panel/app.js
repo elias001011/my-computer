@@ -1986,7 +1986,7 @@ function bindAppEvents() {
       button.addEventListener('click', () => {
         captureSettingsDraftFromForm();
         state.settingsSection = button.dataset.settingsSection;
-        render();
+        renderPreservingVisualState();
       });
     });
     document.querySelector('#default-provider-input').addEventListener('change', changeDefaultProviderDraft);
@@ -2058,7 +2058,7 @@ function bindAppEvents() {
   if (state.confirmDialog) {
     document.querySelector('#confirm-cancel')?.addEventListener('click', () => {
       state.confirmDialog = null;
-      render();
+      renderPreservingVisualState();
     });
     document.querySelector('#confirm-discard')?.addEventListener('click', discardPendingDialog);
     document.querySelector('#confirm-save')?.addEventListener('click', () => saveGeneralSettings(null, { closeAfter: true }));
@@ -2082,7 +2082,7 @@ async function saveSetup(event) {
   const model = draft.model || getProvider(provider).defaultModel;
   if (draft.server?.networkEnabled && !String(draft.server?.authPassword || '').trim()) {
     state.error = 'Defina uma senha para abrir o painel na rede local.';
-    render();
+    renderPreservingVisualState();
     return;
   }
 
@@ -2150,7 +2150,7 @@ function openSetupReview() {
   state.setupWizardStarted = false;
   state.setupDraft = buildSetupDraft();
   state.setupStep = 'welcome';
-  render();
+  renderPreservingVisualState();
 }
 
 async function closeSetupReview() {
@@ -2264,7 +2264,7 @@ async function uploadSelectedFiles(event) {
   for (const file of files) {
     if (!isSupportedUpload(file)) {
       state.error = `Formato ainda não compatível: ${file.name}. Envie imagens, vídeo, áudio, PDF, texto, código, JSON, CSV, HTML, XML, YAML ou Markdown.`;
-      render();
+      renderPreservingVisualState();
       continue;
     }
     await runAction(`Anexando ${file.name}...`, async () => {
@@ -2292,12 +2292,12 @@ function openAttachmentViewer(attachmentId) {
     state.activeChat?.messages?.flatMap((message) => message.attachments || []).find((item) => item.id === attachmentId);
   if (!attachment) return;
   state.attachmentViewer = attachment;
-  render();
+  renderPreservingVisualState();
 }
 
 function closeAttachmentViewer() {
   state.attachmentViewer = null;
-  render();
+  renderPreservingVisualState();
 }
 
 function getSupportedUploadAccept() {
@@ -2353,7 +2353,7 @@ function isSupportedUpload(file) {
 
 function removePendingAttachment(attachmentId) {
   state.pendingAttachments = state.pendingAttachments.filter((attachment) => attachment.id !== attachmentId);
-  render();
+  renderPreservingVisualState();
 }
 
 function pasteAttachmentText(attachmentId) {
@@ -2374,7 +2374,7 @@ function changeChatProviderDraft(event) {
     model: getProvider(provider).defaultModel,
   };
   state.chatSettingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function toggleChatCustomModel(prefix = '') {
@@ -2406,7 +2406,7 @@ function changeDefaultProviderDraft(event) {
   };
   state.settingsProvider = event.target.value;
   state.settingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function toggleDefaultCustomModel() {
@@ -2498,7 +2498,7 @@ function toggleSetupApiKeyVisibility() {
 function changeApiProviderDraft(event) {
   syncProviderApiDraft();
   state.settingsProvider = event.target.value;
-  render();
+  renderPreservingVisualState();
 }
 
 function addApiKeyRow() {
@@ -2513,7 +2513,7 @@ function addApiKeyRow() {
     [provider]: settings,
   };
   state.settingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function removeApiKeyRow(index) {
@@ -2528,7 +2528,7 @@ function removeApiKeyRow(index) {
     [provider]: settings,
   };
   state.settingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 async function createNewChat() {
@@ -2560,7 +2560,7 @@ async function sendMessage(event) {
   if (state.chatSettingsDirty || state.modelSettingsDirty) {
     saveComposerDraft();
     state.confirmDialog = { type: 'send-chat-settings' };
-    render();
+    renderPreservingVisualState();
     return;
   }
   await sendMessageFromValues(textarea, content);
@@ -2576,7 +2576,7 @@ async function sendMessageFromComposerDraft() {
 async function sendMessageFromValues(textarea, content) {
   if (state.pendingAttachments.length > 8) {
     state.error = 'Envie no máximo 8 anexos por mensagem neste MVP.';
-    render();
+    renderPreservingVisualState();
     return;
   }
   const activeProvider = state.activeChat.provider || state.config.provider;
@@ -2589,13 +2589,13 @@ async function sendMessageFromValues(textarea, content) {
   );
   if (unsupportedImage) {
     state.error = `O modelo atual não aceita imagens: ${unsupportedImage.name}. Troque para um modelo vision ou marque o modelo personalizado como compatível.`;
-    render();
+    renderPreservingVisualState();
     return;
   }
   const imageAttachments = state.pendingAttachments.filter((attachment) => attachment.kind === 'image');
   if (activeModelMetadata.maxInputImages && imageAttachments.length > activeModelMetadata.maxInputImages) {
     state.error = `O modelo atual aceita até ${activeModelMetadata.maxInputImages} imagem(ns) por mensagem.`;
-    render();
+    renderPreservingVisualState();
     return;
   }
   const oversizedImage = imageAttachments.find(
@@ -2604,7 +2604,7 @@ async function sendMessageFromValues(textarea, content) {
   );
   if (oversizedImage) {
     state.error = `${oversizedImage.name} excede o limite de ${activeModelMetadata.maxFileSizeMB} MB deste modelo.`;
-    render();
+    renderPreservingVisualState();
     return;
   }
   if (textarea) textarea.value = '';
@@ -2625,7 +2625,7 @@ async function sendMessageContent(content, options = {}) {
         : message,
     );
   } else {
-    const localMessage = {
+  const localMessage = {
       id: `local-${Date.now()}`,
       role: 'user',
       content,
@@ -2635,7 +2635,7 @@ async function sendMessageContent(content, options = {}) {
     };
     state.activeChat.messages = [...state.activeChat.messages, localMessage];
   }
-  render();
+  renderPreservingVisualState();
   scrollMessagesToBottom();
 
   await runAction(
@@ -2667,7 +2667,7 @@ async function sendMessageContent(content, options = {}) {
   }
   if (state.error && state.activeChat?.id === chatId) {
     await refreshActiveChatData();
-    render();
+    renderPreservingVisualState();
   }
 }
 
@@ -2793,7 +2793,7 @@ async function copyMessage(messageId) {
   if (!message) return;
   await navigator.clipboard.writeText(message.content || '');
   state.status = 'Mensagem copiada.';
-  render();
+  renderPreservingVisualState();
 }
 
 async function deleteActiveChat() {
@@ -2826,12 +2826,12 @@ async function saveMemory() {
 function openChatContext() {
   state.chatSettingsOpen = false;
   state.chatContextOpen = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function closeChatContext() {
   state.chatContextOpen = false;
-  render();
+  renderPreservingVisualState();
 }
 
 async function saveChatContext(event) {
@@ -2863,22 +2863,22 @@ async function saveChatContext(event) {
 function openModelSettings() {
   state.chatSettingsOpen = false;
   state.modelSettingsOpen = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function closeModelSettings() {
   state.modelSettingsOpen = false;
-  render();
+  renderPreservingVisualState();
 }
 
 function openChatSettings() {
   state.chatSettingsOpen = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function closeChatSettings() {
   state.chatSettingsOpen = false;
-  render();
+  renderPreservingVisualState();
 }
 
 async function openContextEditor() {
@@ -2896,7 +2896,7 @@ async function openContextEditor() {
 function closeContextEditor() {
   state.contextEditorOpen = false;
   state.contextEditor = null;
-  render();
+  renderPreservingVisualState();
 }
 
 async function saveContextEditor(event) {
@@ -3018,7 +3018,7 @@ async function saveGeneralSettings(event, options = {}) {
   );
   if (form.get('networkEnabled') === 'on' && !String(form.get('authPassword') || '').trim()) {
     state.error = 'Defina uma senha para abrir o painel na rede local.';
-    render();
+    renderPreservingVisualState();
     return;
   }
   await runAction('Salvando configurações gerais...', async () => {
@@ -3213,7 +3213,7 @@ function addProviderFallbackRow() {
     ],
   };
   state.settingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 function removeProviderFallbackRow(index) {
@@ -3224,7 +3224,7 @@ function removeProviderFallbackRow(index) {
     fallbacks: (draftConfig.routing?.fallbacks || []).filter((_, itemIndex) => itemIndex !== index),
   };
   state.settingsDirty = true;
-  render();
+  renderPreservingVisualState();
 }
 
 async function exportData() {
@@ -3260,17 +3260,17 @@ async function importData(event) {
       },
     };
     state.importModalOpen = true;
-    render();
+    renderPreservingVisualState();
   } catch (error) {
     state.error = `Backup inválido: ${error.message}`;
-    render();
+    renderPreservingVisualState();
   }
 }
 
 function closeImportModal() {
   state.importModalOpen = false;
   state.importDraft = null;
-  render();
+  renderPreservingVisualState();
 }
 
 async function confirmImportData() {
@@ -3366,19 +3366,19 @@ function openSettings() {
   state.settingsDirty = false;
   state.settingsProvider = state.settingsDraft.config.provider;
   state.settingsSection = state.settingsSection || 'identity';
-  render();
+  renderPreservingVisualState();
 }
 
 function closeSettings() {
   captureSettingsDraftFromForm();
   if (state.settingsDirty) {
     state.confirmDialog = { type: 'close-settings' };
-    render();
+    renderPreservingVisualState();
     return;
   }
   state.settingsOpen = false;
   state.settingsDraft = null;
-  render();
+  renderPreservingVisualState();
 }
 
 function discardPendingDialog() {
@@ -3389,7 +3389,7 @@ function discardPendingDialog() {
     state.settingsDirty = false;
     state.settingsDraft = null;
   }
-  render();
+  renderPreservingVisualState();
 }
 
 async function saveChatSettingsAndSend() {
@@ -3407,7 +3407,7 @@ async function sendPendingMessageWithoutSaving() {
 function toggleApiKeyVisibility() {
   syncProviderApiDraft();
   state.apiKeyVisible = !state.apiKeyVisible;
-  render();
+  renderPreservingVisualState();
 }
 
 async function shutdownApp() {
@@ -3415,7 +3415,7 @@ async function shutdownApp() {
   if (!confirmed) return;
   await api('/api/shutdown', { method: 'POST' });
   state.status = 'My Computer está encerrando. Para iniciar novamente, rode ./install.sh.';
-  render();
+  renderPreservingVisualState();
 }
 
 async function runAction(status, action, retry = null) {
@@ -3458,6 +3458,8 @@ function captureVisualState() {
     settingsScrollTop: document.querySelector('.settings-layout')?.scrollTop || 0,
     modalScrollTop: document.querySelector('.modal-body')?.scrollTop || 0,
     messagesScrollTop: document.querySelector('#messages')?.scrollTop || 0,
+    chatListScrollTop: document.querySelector('.chat-list')?.scrollTop || 0,
+    inspectorScrollTop: document.querySelector('.inspector')?.scrollTop || 0,
     activeElementId: document.activeElement?.id || '',
     selectionStart: document.activeElement?.selectionStart ?? null,
     selectionEnd: document.activeElement?.selectionEnd ?? null,
@@ -3472,6 +3474,10 @@ function restoreVisualState(snapshot) {
   if (modalBody) modalBody.scrollTop = snapshot.modalScrollTop || 0;
   const messages = document.querySelector('#messages');
   if (messages) messages.scrollTop = snapshot.messagesScrollTop || 0;
+  const chatList = document.querySelector('.chat-list');
+  if (chatList) chatList.scrollTop = snapshot.chatListScrollTop || 0;
+  const inspector = document.querySelector('.inspector');
+  if (inspector) inspector.scrollTop = snapshot.inspectorScrollTop || 0;
   if (snapshot.activeElementId) {
     const active = document.getElementById(snapshot.activeElementId);
     if (active && typeof active.focus === 'function') {
@@ -3482,6 +3488,12 @@ function restoreVisualState(snapshot) {
       }
     }
   }
+}
+
+function renderPreservingVisualState() {
+  const visualState = captureVisualState();
+  render();
+  restoreVisualState(visualState);
 }
 
 async function api(path, options = {}) {
