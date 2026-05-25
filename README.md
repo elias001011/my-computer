@@ -58,8 +58,10 @@ Use `./uninstall.sh --help` para ver as opções. Se o servidor estiver rodando,
 - API keys ficam em Configurações gerais > Providers e APIs. Cada provider aceita várias keys e o backend tenta a próxima quando uma falha recuperável acontece.
 - OpenAI compatível custom usa qualquer endpoint com `/v1/chat/completions`; configure `Endpoint/base URL`, modelo e keys no painel.
 - Ollama pode ser instalado, verificado, ter modelos baixados/removidos e ser desinstalado pelo painel. Se `sudo` pedir senha, rode o comando exibido no terminal.
-- Rede local fica em Configurações gerais > Rede local. Quando ligada com senha, o próximo restart escuta em `0.0.0.0` e usa autenticação básica.
-- Search via terminal exige a tool `Pesquisa web` e o toggle `Pesquisa via terminal`.
+- Rede local fica em Configurações gerais > Rede local. Quando ligada com senha, o próximo restart escuta em `0.0.0.0` e usa Basic Auth com senha única, sem usuário por pessoa. A própria UI mostra o endereço LAN detectado, como `http://192.168.x.x:8787`, e um checklist de restart, Wi-Fi e firewall.
+- Pesquisa web fica em Configurações gerais > Tools, com modo `Web nativa`, `Terminal`, `Ambos` ou `Desligado`. A nativa roda no provider; a de terminal usa a tool local e segue aprovação.
+- Se o modelo escrever uma chamada de `web_search` como texto, o backend tenta recuperar como tool real e normaliza `maxResults` antes de executar.
+- A rotatória de providers fica em Configurações gerais > Providers. Quando ativada, o app tenta fallbacks em ordem e registra tentativas, erros e sucesso nos eventos do chat.
 
 ## Atualizar
 
@@ -125,8 +127,8 @@ Metodologia atual:
 - Quando o catálogo conhece limite de imagem do modelo, a UI avisa e o backend bloqueia excesso. Exemplo: Groq Llama 4 Scout aceita até 5 imagens e 20 MB por imagem.
 - Texto, Markdown, JSON, CSV, HTML e código têm texto extraído e enviado ao modelo em uma seção de documentos.
 - HTML é convertido para texto legível antes de ir para o modelo.
-- Formatos sem extração nativa no MVP, como PDF e DOCX, ficam salvos no chat; a IA recebe caminho/metadados e pode acessá-los pelo terminal se a tool estiver ligada.
-- Vídeos têm preview e ficam salvos como referência/caminho. Gemini tem suporte nativo a vídeo via Files API, mas o adapter nativo de vídeo ainda não está implementado neste MVP.
+- PDF tem visualização no painel, mas ainda entra como referência/caminho. DOCX e binários incertos são bloqueados até haver extração confiável.
+- Vídeos e áudios têm preview/player e ficam salvos como referência/caminho. Gemini tem suporte nativo a vídeo via Files API, mas o adapter nativo de vídeo ainda não está implementado neste MVP.
 - Quando o texto extraído é grande, ele é truncado antes de entrar no prompt. O painel deixa isso claro.
 
 ## O que existe no MVP
@@ -140,12 +142,12 @@ Metodologia atual:
 - Chat com histórico persistente.
 - Upload de arquivos com preview e tratamento de imagem/modelo incompatível.
 - Tool `run_terminal_command` para a IA usar o terminal local.
-- Tool `web_search` para pesquisa web transparente. Neste MVP a execução real usa pesquisa via terminal quando esse método está habilitado nas configurações.
+- Tool `web_search` para pesquisa web transparente. Ela tenta busca nativa em OpenAI, Groq, Gemini, Anthropic, xAI e OpenRouter quando configurado; em `Ambos`, usa terminal como fallback.
 - Tool `memory_chat` para a IA ler, anexar ou reescrever a memória Markdown do chat.
 - Tool `persistent_memory` para memória global entre chats.
 - Tool `compact_context` para compactação automática quando habilitada.
 - Tool `rename_chat` para a IA nomear o chat.
-- Toggles globais para ligar/desligar tools, alternar terminal padrão/isolado leve e escolher se tools exigem aprovação pela UI.
+- Toggles globais para ligar/desligar tools, escolher modo de busca, alternar terminal padrão/isolado leve e escolher se tools locais exigem aprovação pela UI.
 - Cache local do prompt em andamento por chat, para não perder texto ao abrir configurações antes de enviar.
 - Compactação automática configurável por limite estimado de contexto e mínimo de mensagens.
 - Editor manual de `context.md` pelo botão de caneta ao lado de compactar contexto.
@@ -153,7 +155,7 @@ Metodologia atual:
 - Checagem e aplicação de update pelo repositório Git local.
 - Eventos filtrados por chat no painel lateral.
 - Botão de copiar respostas da IA e retry para requests com erro.
-- Export/import de configurações, chats, memórias, contexto e anexos.
+- Export/import seletivo de configurações, chats, memórias, contexto, anexos e eventos.
 
 ## Estrutura
 

@@ -28,8 +28,11 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.tools.alwaysAllow, false);
   assert.equal(config.tools.terminalMode, 'standard');
   assert.equal(config.tools.searchTerminal, false);
+  assert.equal(config.tools.searchMode, 'native');
   assert.equal(config.context.autoCompactEnabled, false);
   assert.equal(config.context.autoCompactChars, 24000);
+  assert.equal(config.routing.providerRotationEnabled, false);
+  assert.equal(config.routing.maxProviderPasses, 2);
   assert.equal(config.server.networkEnabled, false);
   assert.equal(config.technicalLevel, 'balanced');
   assert.equal(config.technicalGuidanceEnabled, true);
@@ -37,8 +40,13 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   await store.saveConfig({
     technicalLevel: 'beginner',
     technicalGuidanceEnabled: false,
-    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchTerminal: true },
+    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchMode: 'both' },
     context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
+    routing: {
+      providerRotationEnabled: true,
+      maxProviderPasses: 3,
+      fallbacks: [{ provider: 'gemini', model: 'gemini-2.5-flash' }],
+    },
     server: { networkEnabled: true, authPassword: 'local-pass' },
   });
   const securityConfig = await store.loadConfig();
@@ -46,10 +54,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(securityConfig.technicalGuidanceEnabled, false);
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
+  assert.equal(securityConfig.tools.searchMode, 'both');
   assert.equal(securityConfig.tools.searchTerminal, true);
   assert.equal(securityConfig.context.autoCompactEnabled, true);
   assert.equal(securityConfig.context.autoCompactChars, 32000);
   assert.equal(securityConfig.context.autoCompactMinMessages, 5);
+  assert.equal(securityConfig.routing.providerRotationEnabled, true);
+  assert.equal(securityConfig.routing.maxProviderPasses, 3);
+  assert.deepEqual(securityConfig.routing.fallbacks, [{ provider: 'gemini', model: 'gemini-2.5-flash' }]);
   assert.equal(securityConfig.server.networkEnabled, true);
 
   const chat = await store.createChat('Teste', {
@@ -94,6 +106,25 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(video.kind, 'video');
   assert.equal(video.sendMode, 'reference');
 
+  const pdf = await store.saveAttachment(chat.id, {
+    name: 'manual.pdf',
+    mimeType: 'application/pdf',
+    dataBase64: Buffer.from('%PDF fake bytes').toString('base64'),
+  });
+  assert.equal(pdf.kind, 'pdf');
+  assert.equal(pdf.sendMode, 'reference');
+  assert.match(pdf.extractionNote, /PDF salvo/);
+
+  await assert.rejects(
+    () =>
+      store.saveAttachment(chat.id, {
+        name: 'documento.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        dataBase64: Buffer.from('fake docx bytes').toString('base64'),
+      }),
+    /Formato ainda não compatível/,
+  );
+
   const snapshotPath = await store.saveContextSnapshot(chat.id, '# Context');
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
 
@@ -101,7 +132,21 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
-  assert.equal(exported.chats[0].attachments.length, 2);
+  assert.equal(exported.chats[0].attachments.length, 3);
+
+  await store.writePersistentMemory('# Local\n\n- keep local memory');
+  await store.importRuntimeData(exported, {
+    config: true,
+    persistentMemory: false,
+    chats: true,
+    attachments: false,
+    events: false,
+  });
+  const importedChats = await store.listChats();
+  assert.equal(importedChats.length, 1);
+  const importedChat = await store.readChat(importedChats[0].id);
+  assert.equal(importedChat.attachments.length, 0);
+  assert.match(await store.readPersistentMemory(), /keep local memory/);
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);

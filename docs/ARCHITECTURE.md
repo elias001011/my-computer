@@ -89,7 +89,7 @@ O timeout aceito vai até 900 segundos. No modo `isolated`, o comando roda com `
 
 ### `web_search`
 
-Pesquisa a web quando informação atual ou fontes forem necessárias. Neste MVP, a execução real depende do toggle `searchTerminal` e usa uma busca via terminal contra DuckDuckGo HTML com Python padrão do sistema. O resultado inclui método, query, títulos, URLs e snippets para a IA citar na resposta final.
+Pesquisa a web quando informação atual ou fontes forem necessárias. O executor respeita `tools.searchMode`: `native` usa busca do provider quando implementada, `terminal` usa DuckDuckGo HTML via Python no terminal local, `both` tenta nativo primeiro e cai no terminal, e `off` bloqueia a tool. Antes de executar, o app normaliza `maxResults` mesmo quando o provider devolve string e recupera chamadas que vieram como texto (`<web_search>{...}</web_search>` ou `web_search {...}`) para evitar histórico/tool call inválido. O resultado inclui método, query, títulos, URLs e snippets para a IA citar na resposta final.
 
 ### `memory_chat`
 
@@ -122,8 +122,7 @@ Permite que a IA renomeie o chat atual com um título curto e descritivo, normal
 As configurações gerais guardam toggles para:
 
 - terminal local
-- pesquisa web
-- pesquisa via terminal
+- pesquisa web por `tools.searchMode`: `off`, `native`, `terminal` ou `both`
 - memória do chat
 - memória persistente
 - compactação automática por tool
@@ -132,7 +131,9 @@ As configurações gerais guardam toggles para:
 - método do terminal: `standard` ou `isolated`
 
 Quando uma tool é desligada, ela não é enviada ao modelo.
-Quando `alwaysAllow` está desligado, chamadas de tool viram mensagens pendentes com botões `Permitir` e `Negar`.
+Quando `alwaysAllow` está desligado, tools locais viram uma fila pendente. A UI exibe uma tool por vez; cada decisão é salva por `toolCallId`. Tools negadas retornam `denied_by_user` ao modelo, sem executar.
+
+Busca nativa do provider não pede confirmação local. Busca via terminal usa a mesma permissão de tool local. No modo `both`, o app tenta nativo primeiro e cai no terminal quando configurado.
 
 ## Context compaction
 
@@ -170,6 +171,8 @@ Anthropic usa um adaptador próprio para a Messages API e converte tool calls pa
 
 As configurações guardam `providerSettings` por provider, com endpoint e múltiplas API keys. Quando há várias keys, o client tenta a próxima em erros de autenticação, rate limit ou falhas temporárias. O provider `openai-compatible` cobre APIs como Minimax, Together, Fireworks e servidores próprios que aceitam o formato OpenAI.
 
+`routing.providerRotationEnabled` habilita fallback entre providers/modelos. `routing.fallbacks` guarda a ordem de fallback e `routing.maxProviderPasses` limita quantas voltas podem acontecer. Cada tentativa de provider/key, erro e sucesso é registrada nos eventos do chat sem gravar o valor completo de API key.
+
 Ollama usa o endpoint local OpenAI-compatible por padrão (`http://127.0.0.1:11434/v1`). Antes de chamar um modelo, o backend verifica `/api/tags`; se o modelo não estiver instalado, chama `/api/pull` com `stream: false`.
 Quando o daemon está offline, o backend tenta detectar modelos baixados lendo manifests locais em `~/.ollama/models/manifests` e `/usr/share/ollama/.ollama/models/manifests`.
 O painel também expõe ações para verificar, instalar, puxar modelo, remover modelo e tentar desinstalar o Ollama.
@@ -191,7 +194,7 @@ O frontend mostra apenas parâmetros que o provider provavelmente aceita. O back
 
 ## Import/export
 
-`/api/export` gera um JSON com configurações, chats, mensagens, memórias, contexto salvo e anexos. `/api/import` importa esse JSON e pode sobrescrever chats com o mesmo id.
+`/api/export` gera um JSON com configurações, chats, mensagens, memórias, contexto salvo, anexos e eventos. `/api/import` aceita o JSON completo ou `{ data, options }`, permitindo importar seletivamente configurações, memória persistente, chats, anexos e eventos.
 
 ## Updates
 
@@ -218,8 +221,9 @@ Fluxo:
 3. Texto, Markdown, JSON, CSV, HTML e código passam por extração de texto local.
 4. HTML é reduzido para texto legível, sem scripts/styles.
 5. Imagens ficam salvas e podem ser enviadas como `image_url` base64 para modelos marcados como vision.
-6. Vídeos entram como referência com preview e caminho local.
-7. Formatos sem extração nativa, como PDF/DOCX, entram como referência com caminho local.
+6. Vídeos e áudios entram como referência com preview/player e caminho local.
+7. PDF entra como referência com visualizador no painel.
+8. DOCX e binários incertos são bloqueados até haver extração confiável.
 
 Na chamada ao modelo:
 
@@ -230,7 +234,7 @@ Na chamada ao modelo:
 - cada mensagem aceita até 8 anexos no MVP;
 - limites conhecidos de visão, como quantidade de imagens e tamanho máximo por imagem, são validados antes da chamada ao provider;
 - a IA sempre recebe o caminho local do anexo, então pode usar `run_terminal_command` para inspecionar o arquivo quando a tool estiver habilitada.
-- vídeos não são enviados nativamente para o provider no MVP. Para Gemini, isso exige adapter Files API separado.
+- vídeos e áudios não são enviados nativamente para o provider no MVP. Para Gemini, vídeo nativo exige adapter Files API separado.
 
 ## Network mode
 

@@ -84,4 +84,4 @@ Nem todo endpoint OpenAI-compatible aceita todos os parâmetros. Se um provider 
 
 Alguns providers expõem APIs de lista de modelos, mas poucos expõem capacidades completas de visão, limites e parâmetros. Uma fase futura pode fazer descoberta dinâmica para nomes de modelos e manter o catálogo curado apenas para capacidades.
 
-Busca nativa também depende do adapter. OpenAI, Gemini e Groq têm caminhos próprios para search/grounding em APIs específicas, mas o MVP implementa a tool transparente `web_search` com método via terminal para manter comportamento uniforme entre providers, inclusive Ollama.
+Busca nativa depende do adapter. O app mantém uma tool transparente `web_search`, mas o executor pode usar busca nativa em OpenAI, Groq, Gemini, Anthropic, xAI e OpenRouter. Groq usa `groq/compound` para esse caminho. Ollama e providers sem busca nativa continuam usando fallback via terminal quando `tools.searchMode` estiver em `terminal` ou `both`.

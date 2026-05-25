@@ -86,6 +86,8 @@ Trocar no meio pode mudar estilo, qualidade de tool calling e limite efetivo de 
 
 ## General settings modal
 
+No desktop, usa navegação lateral por seções. No mobile, todas as seções ficam empilhadas na mesma tela para evitar navegação apertada.
+
 Inclui:
 
 - Apelido.
@@ -96,17 +98,19 @@ Inclui:
 - System prompt geral.
 - Menu de providers e APIs, com endpoint/base URL por provider.
 - Múltiplas API keys por provider, usadas em rotação quando uma chamada falha por autenticação, rate limit ou erro temporário.
+- Rotatória opcional entre providers/modelos fallback, com limite de voltas e eventos por tentativa.
 - Orientação e gerenciamento do Ollama quando o provider selecionado para edição é Ollama.
 - Memória persistente.
 - Toggles de tools.
 - Explicação avançada sobre tools e contexto.
-- Método do terminal: padrão ou isolado leve.
-- Aprovação de tools: sempre permitir ou pedir aprovação na UI.
-- Pesquisa web e pesquisa via terminal.
+- Método do terminal por cards grandes: isolamento leve ou sem restrições.
+- Aprovação de tools locais: sempre permitir ou pedir aprovação na UI.
+- Pesquisa web por modo único: web nativa, terminal, ambos ou desligado.
 - Compactação automática com limite estimado e intervalo mínimo.
-- Rede local com senha única e aviso de restart.
+- Rede local com senha única, Basic Auth sem usuário individual, aviso de restart, URLs locais/LAN detectadas e checklist de Wi-Fi/firewall.
 - Atualizações pelo repositório Git local, com checagem, resumo de commits, bloqueio quando há mudanças locais e confirmação antes de aplicar.
-- Export/import de configurações, chats, memórias e contexto.
+- Export/import seletivo de configurações, chats, memórias, contexto, anexos e eventos.
+- Botão para refazer o tour inicial sem apagar dados; o tour é guiado por etapas: provider, perfil, tools/busca e rede.
 - Botão para encerrar o servidor local, com instrução de como iniciar novamente.
 
 ## Context and memory controls
@@ -136,3 +140,19 @@ O botão `Configurações do modelo` abre ajustes técnicos por chat:
 - seed, penalties e reasoning effort quando o provider aceita.
 
 Esses campos são salvos em `metadata.json` do chat. Parâmetros incompatíveis ficam ocultos para reduzir erros de API.
+
+## Save and dirty states
+
+- Botões de salvar ficam laranja quando há alterações pendentes.
+- A UI mostra `Alterações não salvas` perto de cada botão de salvamento afetado.
+- Salvar configurações gerais, chat, prompt/memória ou modelo não fecha automaticamente a tela.
+- Fechar configurações gerais com alterações pendentes abre modal com `Salvar e fechar`, `Descartar` e `Continuar editando`.
+- Enviar mensagem com configurações do chat pendentes abre modal com `Salvar e enviar`, `Enviar sem salvar` e `Cancelar`.
+
+## Attachment viewer
+
+- Clicar em `Visualizar` abre modal do arquivo.
+- Imagem, vídeo, áudio e PDF usam visualizadores nativos do navegador.
+- Texto/código usa o texto extraído no painel.
+- Upload aceita apenas formatos visualizáveis/explicáveis no MVP: imagens, vídeo, áudio, PDF, texto/código, JSON, CSV, HTML, XML, YAML e Markdown.
+- DOCX e binários incertos são bloqueados até haver extração confiável.

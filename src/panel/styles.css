@@ -8,6 +8,8 @@
   --line: #dfdfd8;
   --accent: #0f766e;
   --accent-dark: #115e59;
+  --warn: #c76512;
+  --warn-bg: #fff4e5;
   --danger: #a33a2a;
   --code: #111827;
   --code-bg: #f3f4f6;
@@ -64,6 +66,19 @@ button.primary {
 button.primary:hover {
   border-color: var(--accent-dark);
   background: var(--accent-dark);
+}
+
+button.dirty-save,
+button.primary.dirty-save {
+  border-color: var(--warn);
+  background: var(--warn);
+  color: white;
+}
+
+button.dirty-save:hover,
+button.primary.dirty-save:hover {
+  border-color: #a9550f;
+  background: #a9550f;
 }
 
 button.danger-button {
@@ -156,6 +171,63 @@ pre {
   gap: 10px;
 }
 
+.setup-step-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.setup-step-panel h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.setup-progress {
+  display: flex;
+  gap: 8px;
+}
+
+.setup-progress-item {
+  width: 28px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  color: transparent;
+}
+
+.setup-progress-item.active {
+  background: var(--accent);
+}
+
+.setup-choice-panel {
+  max-width: 840px;
+}
+
+.setup-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.setup-choice {
+  min-height: 132px;
+  padding: 18px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.setup-choice strong {
+  font-size: 18px;
+}
+
+.setup-choice span {
+  color: inherit;
+  opacity: 0.82;
+  line-height: 1.4;
+}
+
 .setup-assist h2 {
   margin: 0;
   font-size: 15px;
@@ -177,7 +249,7 @@ pre {
   height: 100vh;
   height: 100dvh;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 280px minmax(0, 1fr) 320px;
   overflow: hidden;
 }
 
@@ -239,11 +311,33 @@ pre {
 
 .chat-item {
   width: 100%;
-  min-height: 48px;
+  min-height: 56px;
   display: grid;
   align-content: center;
   gap: 2px;
   text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px 12px;
+}
+
+.chat-item strong,
+.chat-item .meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-item strong {
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.chat-item .meta {
+  display: block;
+  white-space: nowrap;
 }
 
 .chat-item.active {
@@ -692,6 +786,39 @@ pre {
   font-weight: 600;
 }
 
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0 14px;
+  max-width: min(820px, 100%);
+}
+
+.source-chips a {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.source-chips span,
+.source-chips small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-chips small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .tool-approval-actions {
   display: flex;
   gap: 8px;
@@ -798,6 +925,10 @@ pre {
   overflow: hidden;
 }
 
+.wide-modal {
+  width: min(1120px, 100%);
+}
+
 .modal form {
   max-height: inherit;
   display: grid;
@@ -844,6 +975,78 @@ pre {
   gap: 22px;
 }
 
+.settings-layout {
+  grid-template-columns: 210px minmax(0, 1fr);
+  align-items: start;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 6px;
+  align-self: start;
+}
+
+.settings-nav-button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.settings-nav-button.active {
+  border-color: #b8d8d2;
+  background: #edf8f5;
+  color: var(--accent-dark);
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+.modal-section.settings-panel {
+  display: none;
+}
+
+.modal-section.settings-panel.active {
+  display: grid;
+}
+
+.settings-subpanel,
+.notice-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.settings-subpanel h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.notice-card strong {
+  color: var(--text);
+}
+
+.notice-card p {
+  margin: 0;
+}
+
+.network-status-card code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.checklist {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .modal-section {
   display: grid;
   gap: 12px;
@@ -866,7 +1069,175 @@ pre {
   color: var(--text);
 }
 
-.toggle-row input {
+.switch-row {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.switch-row > input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch {
+  display: block;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid #c9c9c1;
+  background: #e8e8e2;
+  position: relative;
+  margin-top: 1px;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(23 23 23 / 0.22);
+  transition: transform 0.16s ease;
+}
+
+.switch-row > input[type="checkbox"]:checked + .switch {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.switch-row > input[type="checkbox"]:checked + .switch::after {
+  transform: translateX(18px);
+}
+
+.switch-row > input[type="checkbox"]:focus-visible + .switch {
+  outline: 2px solid #94d3ca;
+  outline-offset: 2px;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.search-mode-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.choice-card {
+  min-height: 104px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  color: var(--text);
+}
+
+.choice-card input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.choice-card:has(input:checked) {
+  border-color: #b8d8d2;
+  background: #edf8f5;
+}
+
+.choice-card span:last-child {
+  display: grid;
+  gap: 4px;
+}
+
+.choice-card small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.choice-icon {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.routing-list {
+  display: grid;
+  gap: 8px;
+}
+
+.routing-fallback-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.dirty-note {
+  color: var(--warn);
+  font-size: 13px;
+  margin-right: auto;
+}
+
+.confirm-backdrop {
+  z-index: 40;
+}
+
+.confirm-modal {
+  width: min(560px, 100%);
+}
+
+.attachment-viewer-modal {
+  width: min(980px, 100%);
+}
+
+.viewer-body {
+  gap: 12px;
+}
+
+.viewer-media,
+.viewer-frame,
+.viewer-text {
+  width: 100%;
+  max-height: min(68vh, 680px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111;
+}
+
+.viewer-media {
+  object-fit: contain;
+}
+
+.viewer-frame {
+  min-height: min(68vh, 680px);
+  background: var(--bg);
+}
+
+.viewer-audio {
+  width: 100%;
+}
+
+.viewer-text {
+  background: var(--code-bg);
+  color: var(--code);
+}
+
+.toggle-row:not(.switch-row) input {
   width: 18px;
   height: 18px;
   margin-top: 2px;
@@ -889,7 +1260,7 @@ pre {
 
 @media (max-width: 1040px) {
   .app-shell {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 240px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) 300px;
   }
 
@@ -908,6 +1279,7 @@ pre {
 
 @media (max-width: 760px) {
   .setup-grid,
+  .setup-choice-grid,
   .app-shell,
   .composer,
   .composer-main {
@@ -1004,5 +1376,25 @@ pre {
 
   .modal {
     max-height: calc(100vh - 20px);
+  }
+
+  .settings-layout,
+  .choice-grid,
+  .search-mode-grid,
+  .routing-fallback-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-nav {
+    display: none;
+  }
+
+  .modal-section.settings-panel,
+  .modal-section.settings-panel.active {
+    display: grid;
+  }
+
+  .choice-card {
+    min-height: auto;
   }
 }

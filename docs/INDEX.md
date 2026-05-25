@@ -10,6 +10,7 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 - [UI Spec](./UI_SPEC.md) - tela atual e comportamento esperado.
 - [Providers](./PROVIDERS.md) - catálogo curado de providers/modelos e limites usados pela UI.
 - [Security](./SECURITY.md) - riscos, proteções atuais e próximas travas.
+- [Terminal isolation plan](./TERMINAL_ISOLATION_PLAN.md) - plano para sandbox pesado de terminal.
 - [Roadmap](./ROADMAP.md) - fases futuras.
 
 ## Decisões atuais
@@ -30,4 +31,6 @@ Estes documentos descrevem o MVP implementado. Quando o comportamento do código
 - Tools podem ser ligadas/desligadas nas configurações gerais e exigem aprovação por padrão.
 - Compactação automática do app é configurável por limite estimado de contexto.
 - Modo rede local exige senha e restart.
+- A UI mostra status de rede, URL local e URLs LAN quando o servidor está escutando em `0.0.0.0`.
+- O isolamento pesado de terminal está apenas planejado; o modo atual é padrão ou isolamento leve.
 - Atualizador via clone Git local: `git fetch`, aviso, confirmação, `git pull --ff-only && npm install` e restart.
