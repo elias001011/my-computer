@@ -23,9 +23,9 @@ export const terminalToolDefinition = {
             'Optional timeout in seconds, from 1 to 900. Use a short timeout for inspection and a longer one for explicit long-running tasks.',
         },
         returnOutput: {
-          type: 'boolean',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
           description:
-            'Whether the app should send this command output back to the model. Use true when you need stdout/stderr to continue; use false for fire-and-forget actions.',
+            'Whether the app should send this command output back to the model. Use true when you need stdout/stderr to continue; use false for fire-and-forget actions. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['command'],
@@ -56,8 +56,8 @@ export const webSearchToolDefinition = {
           description: 'Optional number of results, from 1 to 8. Strings like "5" are accepted.',
         },
         returnOutput: {
-          type: 'boolean',
-          description: 'Usually true. Set false only if you do not need search results back in the next reasoning step.',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true. Set false only if you do not need search results back in the next reasoning step. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['query', 'reason'],
@@ -91,8 +91,8 @@ export const memoryChatToolDefinition = {
           description: 'Short reason for this memory operation.',
         },
         returnOutput: {
-          type: 'boolean',
-          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends.',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['action', 'reason'],
@@ -125,8 +125,8 @@ export const persistentMemoryToolDefinition = {
           description: 'Short reason for this persistent memory operation.',
         },
         returnOutput: {
-          type: 'boolean',
-          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends.',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['action', 'reason'],
@@ -149,8 +149,8 @@ export const compactContextToolDefinition = {
           description: 'Short reason for compacting this chat context now.',
         },
         returnOutput: {
-          type: 'boolean',
-          description: 'Whether the app should send the compaction summary back to the model. Use false when no follow-up reasoning is needed.',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Whether the app should send the compaction summary back to the model. Use false when no follow-up reasoning is needed. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['reason'],
@@ -177,9 +177,9 @@ export const renameChatToolDefinition = {
           description: 'Short reason for renaming the chat.',
         },
         returnOutput: {
-          type: 'boolean',
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
           description:
-            'Whether the app should send the rename result back to the model. Usually false because renaming is a side effect and does not need follow-up.',
+            'Whether the app should send the rename result back to the model. Usually false because renaming is a side effect and does not need follow-up. Strings like "true" or "false" are accepted for compatibility.',
         },
       },
       required: ['title', 'reason'],

@@ -896,8 +896,11 @@ function recoverMalformedToolCall(name, args) {
 }
 
 function normalizeToolInput(name, input = {}) {
-  if (name === 'web_search') return normalizeWebSearchInput(input);
-  return input && typeof input === 'object' ? input : {};
+  const normalizedInput = input && typeof input === 'object' ? { ...input } : {};
+  const returnOutput = normalizeBooleanLike(normalizedInput.returnOutput);
+  if (returnOutput !== undefined) normalizedInput.returnOutput = returnOutput;
+  if (name === 'web_search') return normalizeWebSearchInput(normalizedInput);
+  return normalizedInput;
 }
 
 export function normalizeWebSearchInput(input = {}) {
@@ -945,6 +948,15 @@ function clampInteger(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(Math.max(Math.round(number), min), max);
+}
+
+function normalizeBooleanLike(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'sim'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'nao', 'não'].includes(normalized)) return false;
+  return undefined;
 }
 
 function describeEnabledTools(tools = {}) {

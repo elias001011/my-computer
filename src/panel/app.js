@@ -854,14 +854,16 @@ function renderSearchModeControl(selectedMode, options = {}) {
 function renderNetworkStatusCard() {
   const status = state.networkStatus || {};
   const lanUrls = Array.isArray(status.lanUrls) ? status.lanUrls : [];
+  const primaryLanUrl = lanUrls[0] || '';
+  const extraLanCount = Math.max(0, lanUrls.length - 1);
   return `
     <div class="notice-card network-status-card">
       <strong>Endereços de acesso</strong>
-      <p>Local: <code>${escapeHtml(status.localUrl || 'http://127.0.0.1:8787')}</code></p>
+      <p>Na máquina: <code>${escapeHtml(status.localUrl || 'http://127.0.0.1:8787')}</code></p>
       ${
-        lanUrls.length
-          ? `<p>Outro dispositivo na mesma rede: ${lanUrls.map((url) => `<code>${escapeHtml(url)}</code>`).join(' ')}</p>`
-          : '<p>Outro dispositivo: habilite rede local, salve e reinicie o servidor para aparecer o IP da rede.</p>'
+        primaryLanUrl
+          ? `<p>Em outro dispositivo: <code>${escapeHtml(primaryLanUrl)}</code>${extraLanCount ? `<small class="field-note">+ ${extraLanCount} outro(s) IP(s) detectado(s)</small>` : ''}</p>`
+          : '<p>Em outro dispositivo: habilite rede local, salve e reinicie o servidor para aparecer o IP da rede.</p>'
       }
       <ul class="checklist">
         ${(status.checklist || ['Ligue rede local.', 'Defina senha.', 'Reinicie o servidor.', 'Use a mesma rede Wi-Fi.', 'Verifique firewall.'])
@@ -3426,7 +3428,6 @@ async function runAction(status, action, retry = null) {
   updateStatusUi();
   try {
     await action();
-    state.status = 'Pronto';
   } catch (error) {
     state.error = error.message;
     state.lastFailedAction = retry || (() => runAction(status, action));

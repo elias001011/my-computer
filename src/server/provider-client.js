@@ -130,7 +130,7 @@ export async function callProviderNativeWebSearch({
     const result = await callWithKeyRotation(
       provider,
       runtime,
-      (apiKey) => callNativeSearchForProvider(provider, runtime, apiKey, selectedModel, query, maxResults),
+      (apiKey) => callNativeSearchForProvider(provider, runtime, apiKey, selectedModel, query, maxResults, chatId),
       { chatId, model: selectedModel, operation: 'native_search' },
     );
     await appendProviderEvent(chatId, 'provider.native_search.completed', {
@@ -269,9 +269,9 @@ async function callWithKeyRotation(provider, runtime, request, options = {}) {
   throw lastError || new Error(`Falha ao chamar ${provider.label}.`);
 }
 
-async function callNativeSearchForProvider(provider, runtime, apiKey, model, query, maxResults) {
+async function callNativeSearchForProvider(provider, runtime, apiKey, model, query, maxResults, chatId = null) {
   if (provider.id === 'groq') {
-    return callGroqNativeSearch(provider, runtime, apiKey, query, maxResults);
+    return callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId);
   }
   if (provider.id === 'gemini') {
     return callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults);
@@ -313,30 +313,55 @@ async function callResponsesNativeSearch(provider, runtime, apiKey, model, query
   });
 }
 
-async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults) {
-  const model = 'groq/compound';
-  const body = {
-    model,
-    messages: [{ role: 'user', content: nativeSearchPrompt(query, maxResults) }],
-    compound_custom: {
-      tools: {
-        enabled_tools: ['web_search'],
-      },
-    },
-  };
-  const data = await postJson(getChatCompletionsUrl(runtime.baseUrl), body, {
-    Authorization: `Bearer ${apiKey}`,
-  }, provider);
-  const message = data?.choices?.[0]?.message || {};
-  return normalizeNativeSearchResult({
-    query,
-    method: 'groq-compound-web_search',
-    provider: provider.id,
-    modelUsed: model,
-    content: message.content || '',
-    results: extractGroqSearchResults(message),
-    rawUsage: data.usage,
-  });
+async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId = null) {
+  const candidateModels = ['groq/compound', 'groq/compound-mini'];
+  let lastError = null;
+
+  for (let index = 0; index < candidateModels.length; index += 1) {
+    const model = candidateModels[index];
+    try {
+      const data = await postJson(
+        getChatCompletionsUrl(runtime.baseUrl),
+        {
+          model,
+          messages: [{ role: 'user', content: nativeSearchPrompt(query, maxResults) }],
+          compound_custom: {
+            tools: {
+              enabled_tools: ['web_search'],
+            },
+          },
+        },
+        {
+          Authorization: `Bearer ${apiKey}`,
+          'Groq-Model-Version': 'latest',
+        },
+        provider,
+      );
+      const message = data?.choices?.[0]?.message || {};
+      return normalizeNativeSearchResult({
+        query,
+        method: `${model}-web_search`,
+        provider: provider.id,
+        modelUsed: model,
+        content: message.content || '',
+        results: extractGroqSearchResults(message),
+        rawUsage: data.usage,
+      });
+    } catch (error) {
+      lastError = error;
+      const shouldFallback = isGroqRequestTooLarge(error) && index < candidateModels.length - 1;
+      if (!shouldFallback) throw error;
+      await appendProviderEvent(chatId, 'provider.native_search.fallback', {
+        provider: provider.id,
+        fromModel: model,
+        toModel: candidateModels[index + 1],
+        query,
+        reason: error.message,
+      });
+    }
+  }
+
+  throw lastError || new Error('Falha ao chamar Groq web_search.');
 }
 
 async function callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
@@ -458,6 +483,9 @@ async function callOpenAICompatibleChat({
     'Content-Type': 'application/json',
   };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  if (provider.id === 'groq') {
+    headers['Groq-Model-Version'] = 'latest';
+  }
   if (provider.id === 'openrouter') {
     headers['HTTP-Referer'] = 'http://localhost';
     headers['X-OpenRouter-Title'] = 'My Computer';
@@ -721,6 +749,11 @@ function buildProviderRoutes(config = {}, requestedProvider, requestedModel) {
 
 function nativeSearchSupported(providerId) {
   return ['openai', 'groq', 'gemini', 'anthropic', 'xai', 'openrouter'].includes(providerId);
+}
+
+function isGroqRequestTooLarge(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return error?.statusCode === 413 || message.includes('request entity too large') || message.includes('payload too large');
 }
 
 function nativeSearchPrompt(query, maxResults) {

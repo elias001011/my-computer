@@ -81,3 +81,65 @@ test('bootstrap does not create a ghost chat when no chat exists', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('groq native search retries compound-mini on request-too-large', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url, body, headers: options.headers || {} });
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 413,
+        json: async () => ({ error: 'Request Entity Too Large' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: 'Resumo com fontes',
+              executed_tools: [
+                {
+                  search_results: [{ title: 'Exemplo', url: 'https://example.com', snippet: 'fonte' }],
+                },
+              ],
+            },
+          },
+        ],
+        usage: {},
+      }),
+    };
+  };
+
+  try {
+    const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}`);
+    const result = await providerClient.callProviderNativeWebSearch({
+      config: {
+        provider: 'groq',
+        model: 'llama-3.1-8b-instant',
+        providerSettings: {
+          groq: {
+            baseUrl: 'https://api.groq.com/openai/v1',
+            apiKeys: ['test-key'],
+          },
+        },
+      },
+      provider: 'groq',
+      model: 'llama-3.1-8b-instant',
+      query: 'Últimas notícias do Rio Grande do Sul',
+      maxResults: 5,
+    });
+
+    assert.equal(result.method, 'groq/compound-mini-web_search');
+    assert.equal(calls[0].body.model, 'groq/compound');
+    assert.equal(calls[1].body.model, 'groq/compound-mini');
+    assert.equal(calls[0].headers['Groq-Model-Version'], 'latest');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
