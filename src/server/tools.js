@@ -22,6 +22,11 @@ export const terminalToolDefinition = {
           description:
             'Optional timeout in seconds, from 1 to 900. Use a short timeout for inspection and a longer one for explicit long-running tasks.',
         },
+        returnOutput: {
+          type: 'boolean',
+          description:
+            'Whether the app should send this command output back to the model. Use true when you need stdout/stderr to continue; use false for fire-and-forget actions.',
+        },
       },
       required: ['command'],
       additionalProperties: false,
@@ -47,8 +52,12 @@ export const webSearchToolDefinition = {
           description: 'Short reason for searching.',
         },
         maxResults: {
-          type: 'number',
-          description: 'Optional number of results, from 1 to 8.',
+          anyOf: [{ type: 'number' }, { type: 'string' }],
+          description: 'Optional number of results, from 1 to 8. Strings like "5" are accepted.',
+        },
+        returnOutput: {
+          type: 'boolean',
+          description: 'Usually true. Set false only if you do not need search results back in the next reasoning step.',
         },
       },
       required: ['query', 'reason'],
@@ -81,6 +90,10 @@ export const memoryChatToolDefinition = {
           type: 'string',
           description: 'Short reason for this memory operation.',
         },
+        returnOutput: {
+          type: 'boolean',
+          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends.',
+        },
       },
       required: ['action', 'reason'],
       additionalProperties: false,
@@ -111,6 +124,10 @@ export const persistentMemoryToolDefinition = {
           type: 'string',
           description: 'Short reason for this persistent memory operation.',
         },
+        returnOutput: {
+          type: 'boolean',
+          description: 'Whether the app should send the memory tool result back to the model. Usually true for reads, optional for writes/appends.',
+        },
       },
       required: ['action', 'reason'],
       additionalProperties: false,
@@ -130,6 +147,10 @@ export const compactContextToolDefinition = {
         reason: {
           type: 'string',
           description: 'Short reason for compacting this chat context now.',
+        },
+        returnOutput: {
+          type: 'boolean',
+          description: 'Whether the app should send the compaction summary back to the model. Use false when no follow-up reasoning is needed.',
         },
       },
       required: ['reason'],
@@ -154,6 +175,11 @@ export const renameChatToolDefinition = {
         reason: {
           type: 'string',
           description: 'Short reason for renaming the chat.',
+        },
+        returnOutput: {
+          type: 'boolean',
+          description:
+            'Whether the app should send the rename result back to the model. Usually false because renaming is a side effect and does not need follow-up.',
         },
       },
       required: ['title', 'reason'],

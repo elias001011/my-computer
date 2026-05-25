@@ -21,8 +21,14 @@ export const defaultConfig = Object.freeze({
     chatTitle: true,
     webSearch: true,
     searchTerminal: false,
+    searchMode: 'native',
     alwaysAllow: false,
     terminalMode: 'standard',
+  },
+  routing: {
+    providerRotationEnabled: false,
+    maxProviderPasses: 2,
+    fallbacks: [],
   },
   context: {
     autoCompactEnabled: false,
@@ -94,6 +100,10 @@ export async function saveConfig(patch) {
       ...current.context,
       ...(patch.context || {}),
     }),
+    routing: normalizeRoutingSettings({
+      ...current.routing,
+      ...(patch.routing || {}),
+    }),
     server: normalizeServerSettings({
       ...current.server,
       ...(patch.server || {}),
@@ -130,6 +140,7 @@ export function sanitizeConfig(config) {
     systemPromptExtra: config.systemPromptExtra,
     tools: normalizeTools(config.tools),
     context: normalizeContextSettings(config.context),
+    routing: normalizeRoutingSettings(config.routing),
     server: normalizeServerSettings(config.server),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
@@ -339,6 +350,13 @@ export async function saveAttachment(id, file = {}) {
   const mimeType = String(file.mimeType || file.type || 'application/octet-stream').slice(0, 120);
   const size = Number(file.size || 0);
   const rawBase64 = String(file.dataBase64 || '').replace(/^data:[^;]+;base64,/, '');
+  if (!isSupportedAttachment(mimeType, name)) {
+    const error = new Error(
+      'Formato ainda não compatível. Envie imagens, vídeo, áudio, PDF, texto, código, JSON, CSV, HTML, XML, YAML ou Markdown.',
+    );
+    error.statusCode = 415;
+    throw error;
+  }
   if (!rawBase64) {
     const error = new Error('Arquivo sem conteúdo.');
     error.statusCode = 400;
@@ -503,28 +521,40 @@ export async function exportRuntimeData() {
   };
 }
 
-export async function importRuntimeData(payload = {}) {
+export async function importRuntimeData(payload = {}, options = {}) {
   await ensureRuntime();
-  if (payload.config) {
+  const settings = normalizeImportOptions(options);
+
+  if (settings.config && payload.config) {
     await saveConfig({
       ...payload.config,
       setupComplete: Boolean(payload.config.setupComplete ?? true),
     });
   }
 
-  if (Object.hasOwn(payload, 'persistentMemory')) {
+  if (settings.persistentMemory && Object.hasOwn(payload, 'persistentMemory')) {
     await writePersistentMemory(payload.persistentMemory || '');
   }
 
-  if (Array.isArray(payload.chats)) {
+  if (settings.chats && Array.isArray(payload.chats)) {
     for (const importedChat of payload.chats) {
-      await writeImportedChat(importedChat);
+      await writeImportedChat(importedChat, { attachments: settings.attachments });
     }
+  }
+
+  if (settings.events && Array.isArray(payload.events)) {
+    await importEvents(payload.events);
   }
 
   await appendEvent({
     type: 'runtime.imported',
-    details: { chatCount: Array.isArray(payload.chats) ? payload.chats.length : 0 },
+    details: {
+      chatCount: settings.chats && Array.isArray(payload.chats) ? payload.chats.length : 0,
+      config: settings.config,
+      persistentMemory: settings.persistentMemory,
+      attachments: settings.attachments,
+      events: settings.events,
+    },
   });
 
   return exportRuntimeData();
@@ -567,7 +597,7 @@ async function readChatMetadata(id) {
   };
 }
 
-async function writeImportedChat(importedChat = {}) {
+async function writeImportedChat(importedChat = {}, options = {}) {
   const importedMetadata = importedChat.metadata || {};
   const id = /^[a-zA-Z0-9_-]+$/.test(String(importedMetadata.id || ''))
     ? String(importedMetadata.id)
@@ -600,7 +630,7 @@ async function writeImportedChat(importedChat = {}) {
   await fs.writeFile(metadata.paths.memory, String(importedChat.memory || '# Chat memory\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.context, String(importedChat.contextSummary || '# Context summary\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.contextWindow, String(importedChat.contextWindow || '# Context window\n'), { mode: 0o600 });
-  await importChatAttachments(id, importedChat.attachments || []);
+  await importChatAttachments(id, options.attachments === false ? [] : importedChat.attachments || []);
 }
 
 async function exportChatAttachments(id) {
@@ -692,17 +722,28 @@ function normalizeTitle(title) {
 }
 
 function normalizeTools(tools = {}) {
+  const searchMode = normalizeSearchMode(tools.searchMode, tools);
   return {
     terminal: tools.terminal !== false,
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
     chatTitle: tools.chatTitle !== false,
-    webSearch: tools.webSearch !== false,
-    searchTerminal: tools.webSearch !== false && tools.searchTerminal === true,
+    webSearch: searchMode !== 'off',
+    searchTerminal: searchMode === 'terminal' || searchMode === 'both',
+    searchMode,
     alwaysAllow: tools.alwaysAllow === true,
     terminalMode: tools.terminalMode === 'isolated' ? 'isolated' : 'standard',
   };
+}
+
+function normalizeSearchMode(value, legacyTools = {}) {
+  const mode = String(value || '').trim();
+  if (mode === 'terminal' || mode === 'both') return mode;
+  if (legacyTools.webSearch === false) return 'off';
+  if (legacyTools.searchTerminal === true) return 'terminal';
+  if (['off', 'native', 'terminal', 'both'].includes(mode)) return mode;
+  return 'native';
 }
 
 function normalizeContextSettings(context = {}) {
@@ -710,6 +751,28 @@ function normalizeContextSettings(context = {}) {
     autoCompactEnabled: context.autoCompactEnabled === true,
     autoCompactChars: clampInteger(context.autoCompactChars, 8000, 120000, 24000),
     autoCompactMinMessages: clampInteger(context.autoCompactMinMessages, 2, 80, 12),
+  };
+}
+
+function normalizeRoutingSettings(routing = {}) {
+  const fallbacks = Array.isArray(routing.fallbacks)
+    ? routing.fallbacks
+        .filter((item) => item?.provider)
+        .map((item) => {
+          const provider = normalizeProviderId(item?.provider);
+          const model = String(item?.model || getDefaultModelForProvider(provider)).trim();
+          return { provider, model };
+        })
+        .filter((item, index, items) =>
+          items.findIndex((candidate) => candidate.provider === item.provider && candidate.model === item.model) === index,
+        )
+        .slice(0, 8)
+    : [];
+
+  return {
+    providerRotationEnabled: routing.providerRotationEnabled === true,
+    maxProviderPasses: clampInteger(routing.maxProviderPasses, 1, 5, 2),
+    fallbacks,
   };
 }
 
@@ -748,6 +811,7 @@ function normalizeConfig(config = {}) {
     systemPromptExtra: String(config.systemPromptExtra || '').trim(),
     tools: normalizeTools(config.tools || defaultConfig.tools),
     context: normalizeContextSettings(config.context || defaultConfig.context),
+    routing: normalizeRoutingSettings(config.routing || defaultConfig.routing),
     server: normalizeServerSettings(config.server || defaultConfig.server),
     providerSettings,
     customModels: normalizeCustomModels(config.customModels || {}),
@@ -755,6 +819,33 @@ function normalizeConfig(config = {}) {
     apiKey: getPrimaryApiKey(providerSettings, provider),
     setupComplete: Boolean(config.setupComplete),
   };
+}
+
+function normalizeImportOptions(options = {}) {
+  return {
+    config: options.config !== false,
+    persistentMemory: options.persistentMemory !== false,
+    chats: options.chats !== false,
+    attachments: options.attachments !== false,
+    events: options.events === true,
+  };
+}
+
+async function importEvents(events = []) {
+  const importedAt = new Date().toISOString();
+  const lines = events
+    .filter((event) => event && typeof event === 'object')
+    .slice(0, 10000)
+    .map((event) =>
+      JSON.stringify({
+        ...event,
+        id: crypto.randomUUID(),
+        imported: true,
+        importedAt,
+      }),
+    );
+  if (!lines.length) return;
+  await fs.appendFile(eventsPath, `${lines.join('\n')}\n`, { mode: 0o600 });
 }
 
 function buildDefaultProviderSettings() {
@@ -897,6 +988,8 @@ function getAttachmentsMetadataPath(id) {
 function classifyAttachment(mimeType, name) {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType === 'application/pdf' || /\.pdf$/i.test(name)) return 'pdf';
   if (isTextLike(mimeType, name)) return 'text';
   return 'document';
 }
@@ -904,6 +997,8 @@ function classifyAttachment(mimeType, name) {
 function defaultAttachmentSendMode(mimeType, name, extraction) {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'reference';
+  if (mimeType.startsWith('audio/')) return 'reference';
+  if (mimeType === 'application/pdf' || /\.pdf$/i.test(name)) return 'reference';
   if (extraction.status === 'extracted') return 'text';
   return 'reference';
 }
@@ -915,6 +1010,10 @@ function extractAttachmentText(buffer, file) {
       text: '',
       note: file.mimeType.startsWith('video/')
         ? 'Vídeo salvo no chat. O MVP ainda não envia vídeo nativo para providers; a IA recebe caminho/metadados.'
+        : file.mimeType.startsWith('audio/')
+          ? 'Áudio salvo no chat. O MVP ainda não transcreve áudio; a IA recebe caminho/metadados.'
+          : file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.name)
+            ? 'PDF salvo no chat. O MVP mostra o arquivo na UI, mas ainda não extrai texto de PDF; a IA recebe caminho/metadados.'
         : 'Arquivo salvo no chat. O MVP ainda não extrai texto deste formato.',
     };
   }
@@ -935,6 +1034,13 @@ function extractAttachmentText(buffer, file) {
         ? `Texto extraído e truncado para ${limit} caracteres antes de enviar ao modelo.`
         : 'Texto extraído e enviado ao modelo em uma seção de documentos.',
   };
+}
+
+function isSupportedAttachment(mimeType, name) {
+  const extension = path.extname(name || '').toLowerCase();
+  if (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return true;
+  if (mimeType === 'application/pdf' || extension === '.pdf') return true;
+  return isTextLike(mimeType, name);
 }
 
 function isTextLike(mimeType, name) {

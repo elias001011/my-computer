@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { panelDir, runtimeHome } from './paths.js';
 import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage } from './assistant.js';
@@ -39,7 +40,7 @@ const CONTENT_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-let currentLaunch = { port: null, requestedHost: null };
+let currentLaunch = { port: null, requestedHost: null, actualHost: null };
 
 export async function startServer({ port = Number(process.env.PORT || 8787), host = null } = {}) {
   await ensureRuntime();
@@ -58,9 +59,9 @@ export async function startServer({ port = Number(process.env.PORT || 8787), hos
     handleRequest(request, response).catch((error) => sendError(response, error));
   };
   const { server, actualPort } = await listen(handler, actualHost, port);
-  currentLaunch = { port: actualPort, requestedHost: host };
+  currentLaunch = { port: actualPort, requestedHost: host, actualHost };
   const url = `http://${actualHost === '0.0.0.0' ? '127.0.0.1' : actualHost}:${actualPort}`;
-  return { server, url, runtimeHome };
+  return { server, url, runtimeHome, networkStatus: getNetworkStatus(config) };
 }
 
 async function handleRequest(request, response) {
@@ -81,11 +82,7 @@ async function handleApi(request, response, url) {
   if (method === 'GET' && parts[1] === 'bootstrap') {
     const config = await loadConfig();
     const ollamaInstalledModels = await listOllamaInstalledModels(config);
-    let chats = await listChats();
-    if (config.setupComplete && chats.length === 0) {
-      await createChat('Novo chat', { provider: config.provider, model: config.model });
-      chats = await listChats();
-    }
+    const chats = await listChats();
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       config: sanitizeConfig(config),
@@ -105,7 +102,13 @@ async function handleApi(request, response, url) {
       activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
       persistentMemory: await readPersistentMemory(),
       runtimeHome,
+      networkStatus: getNetworkStatus(config),
     });
+    return;
+  }
+
+  if (method === 'GET' && parts[1] === 'network' && parts[2] === 'status') {
+    sendJson(response, 200, { networkStatus: getNetworkStatus(await loadConfig()) });
     return;
   }
 
@@ -126,6 +129,7 @@ async function handleApi(request, response, url) {
       systemPromptExtra: body.systemPromptExtra || '',
       tools: body.tools,
       context: body.context,
+      routing: body.routing,
       server: body.server,
       providerSettings: body.providerSettings,
       customModels: body.customModels,
@@ -149,7 +153,9 @@ async function handleApi(request, response, url) {
 
   if (method === 'POST' && parts[1] === 'import') {
     const body = await readBody(request, { limit: 20_000_000 });
-    const imported = await importRuntimeData(body);
+    const payload = body?.data && body?.options ? body.data : body;
+    const options = body?.data && body?.options ? body.options : {};
+    const imported = await importRuntimeData(payload, options);
     const config = await loadConfig();
     const ollamaInstalledModels = await listOllamaInstalledModels(config);
     const chats = await listChats();
@@ -172,6 +178,7 @@ async function handleApi(request, response, url) {
       activeChat,
       activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
       persistentMemory: await readPersistentMemory(),
+      networkStatus: getNetworkStatus(config),
     });
     return;
   }
@@ -362,7 +369,9 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'POST' && chatId && parts[3] === 'tool-approvals' && parts[4]) {
     const body = await readBody(request);
-    const result = await continueToolApproval(chatId, parts[4], body.decision || 'approve');
+    const result = await continueToolApproval(chatId, parts[4], body.decision || 'approve', {
+      toolCallId: body.toolCallId || null,
+    });
     sendJson(response, 200, { ...result, chats: await listChats(), activeChatEvents: await readEvents({ chatId }) });
     return;
   }
@@ -570,6 +579,40 @@ function sendError(response, error) {
   });
 }
 
+export function getNetworkStatus(config = {}) {
+  const port = currentLaunch.port || Number(process.env.PORT || 8787);
+  const bindHost =
+    currentLaunch.actualHost ||
+    currentLaunch.requestedHost ||
+    (config.server?.networkEnabled ? '0.0.0.0' : '127.0.0.1');
+  const networkEnabled = config.server?.networkEnabled === true;
+  const localUrl = `http://127.0.0.1:${port}`;
+  const lanUrls = networkEnabled && bindHost === '0.0.0.0' ? getLanAddresses().map((address) => `http://${address}:${port}`) : [];
+  return {
+    port,
+    bindHost,
+    networkEnabled,
+    authRequired: networkEnabled && Boolean(config.server?.authPassword),
+    localUrl,
+    lanUrls,
+    checklist: [
+      networkEnabled ? 'Rede local ligada.' : 'Ligue "Abrir painel para a rede".',
+      config.server?.authPassword ? 'Senha definida.' : 'Defina uma senha.',
+      bindHost === '0.0.0.0' ? 'Servidor reiniciado escutando em 0.0.0.0.' : 'Reinicie o servidor para escutar na rede.',
+      'Use um dispositivo na mesma rede Wi-Fi.',
+      `Abra a porta ${port} no firewall se o acesso falhar.`,
+    ],
+  };
+}
+
+function getLanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((item) => item && item.family === 'IPv4' && !item.internal)
+    .map((item) => item.address)
+    .filter(Boolean);
+}
+
 function isAuthorized(request, auth) {
   const header = request.headers.authorization || '';
   if (!header.startsWith('Basic ')) return false;
@@ -596,7 +639,7 @@ async function listen(handler, host, startPort) {
         server.once('error', reject);
         server.listen(actualPort, host, resolve);
       });
-      return { server, actualPort };
+      return { server, actualPort: server.address()?.port || actualPort };
     } catch (error) {
       server.close();
       if (error.code !== 'EADDRINUSE') throw error;
