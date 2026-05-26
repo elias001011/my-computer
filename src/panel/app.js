@@ -30,6 +30,8 @@ const state = {
   setupDraft: null,
   pendingAttachments: [],
   attachmentViewer: null,
+  messageDetailsOpen: false,
+  messageDetailsMessageId: null,
   importDraft: null,
   importModalOpen: false,
   confirmDialog: null,
@@ -47,6 +49,12 @@ const state = {
 const CUSTOM_MODEL_VALUE = '__custom__';
 
 const app = document.querySelector('#app');
+const themeMediaQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
+
+themeMediaQuery?.addEventListener?.('change', () => {
+  const selectedTheme = state.settingsDraft?.config?.appearance?.theme || state.config?.appearance?.theme;
+  if (selectedTheme === 'system') applyTheme('system');
+});
 
 bootstrap();
 
@@ -54,6 +62,7 @@ async function bootstrap() {
   try {
     const data = await api('/api/bootstrap');
     Object.assign(state, data);
+    applyTheme(state.config?.appearance?.theme);
     render();
   } catch (error) {
     renderError(error);
@@ -61,11 +70,21 @@ async function bootstrap() {
 }
 
 function render() {
+  applyTheme(state.settingsDraft?.config?.appearance?.theme || state.config?.appearance?.theme);
   if (!state.config?.setupComplete || state.setupReviewOpen) {
     renderSetup();
     return;
   }
   renderApp();
+}
+
+function applyTheme(theme = 'light') {
+  const selected = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+  const resolved = selected === 'system'
+    ? window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    : selected;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = selected;
 }
 
 function renderSetup() {
@@ -220,9 +239,17 @@ function renderSetup() {
                 <small>Desligado por padrão. Quando desligado, a IA precisa da sua aprovação na UI antes de executar tools.</small>
               </span>
             </label>
+            <label class="toggle-row switch-row">
+              <input type="checkbox" name="deepInvestigation" ${setupConfig.tools?.deepInvestigation ? 'checked' : ''} />
+              <span class="switch" aria-hidden="true"></span>
+              <span>
+                <strong>Incentivar a IA a fazer investigações mais profundas</strong>
+                <small>Adiciona instruções para inspecionar arquivos, scripts, logs e outputs por mais rodadas antes da resposta final.</small>
+              </span>
+            </label>
             <div class="settings-subpanel">
               <h2>Pesquisa web</h2>
-              <p class="help-text">Busca nativa usa o provider e não pede confirmação. Busca via terminal usa a máquina local.</p>
+            <p class="help-text">Busca nativa usa o provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a máquina local.</p>
               ${renderSearchModeControl(getSearchMode(setupConfig.tools), { setup: true })}
             </div>
           </section>
@@ -393,7 +420,10 @@ function renderApp() {
         </section>
 
         <section class="inspector-section events-section">
-          <h2>Eventos</h2>
+          <div class="section-heading">
+            <h2>Eventos</h2>
+            <button type="button" id="copy-events" class="event-copy-button" ${!state.activeChatEvents.length ? 'disabled' : ''}>Copiar eventos</button>
+          </div>
           <div class="event-list">${state.activeChatEvents.map(renderEvent).join('')}</div>
         </section>
       </aside>
@@ -403,6 +433,7 @@ function renderApp() {
     ${state.chatContextOpen ? renderChatContextModal() : ''}
     ${state.contextEditorOpen ? renderContextEditorModal() : ''}
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
+    ${state.messageDetailsOpen ? renderMessageDetailsModal() : ''}
     ${state.attachmentViewer ? renderAttachmentViewerModal() : ''}
     ${state.importModalOpen ? renderImportModal() : ''}
     ${state.confirmDialog ? renderConfirmDialog() : ''}
@@ -469,6 +500,12 @@ function renderSettingsModal() {
                   </select>
                 </label>
               </div>
+              <label>
+                Tema do painel
+                <select name="theme">
+                  ${renderThemeOptions(draftConfig.appearance?.theme || 'light')}
+                </select>
+              </label>
               <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
                 Modelo personalizado
                 <input name="customModel" id="default-custom-model-input" value="${isKnownModel(defaultProvider, defaultModel) ? '' : escapeAttr(defaultModel)}" placeholder="provider/model ou nome local" />
@@ -538,6 +575,20 @@ function renderSettingsModal() {
               }
               <div class="settings-subpanel">
                 <label class="toggle-row switch-row">
+                  <input type="checkbox" name="modelRotationEnabled" ${draftConfig.routing?.modelRotationEnabled ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Rotatória de modelos</strong>
+                    <small>Antes de trocar API key, tenta outros modelos do mesmo provider. Útil quando um modelo específico cai em rate limit ou falha no meio das tools.</small>
+                  </span>
+                </label>
+                <div class="routing-list">
+                  ${renderModelFallbackRows(draftConfig.routing?.modelFallbacks || [], apiProvider)}
+                </div>
+                <button type="button" id="add-model-fallback">Adicionar modelo alternativo</button>
+              </div>
+              <div class="settings-subpanel">
+                <label class="toggle-row switch-row">
                   <input type="checkbox" name="providerRotationEnabled" ${draftConfig.routing?.providerRotationEnabled ? 'checked' : ''} />
                   <span class="switch" aria-hidden="true"></span>
                   <span>
@@ -561,6 +612,14 @@ function renderSettingsModal() {
               }
             </section>
 
+            <section class="modal-section settings-panel ${activeSection === 'modelIndex' ? 'active' : ''}" data-section="modelIndex">
+              <h3>Índice de modelos</h3>
+              <p class="help-text">Revisado para o fim de maio de 2026. Modelos marcados como índice são informativos ou dependem de outra API, enquanto os selecionáveis entram nas rotatórias e no seletor do chat.</p>
+              <div class="model-index-list">
+                ${renderModelIndex(draftConfig)}
+              </div>
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'memory' ? 'active' : ''}" data-section="memory">
               <h3>Memória persistente</h3>
               <p class="help-text">Entra no prompt de todos os chats. A IA pode ler, anexar ou reescrever este Markdown quando a tool estiver ligada.</p>
@@ -579,11 +638,12 @@ function renderSettingsModal() {
               </label>
               <div class="settings-subpanel">
                 <h4>Pesquisa web</h4>
-                <p class="help-text">Busca nativa roda no servidor do provider e não pede confirmação. Busca via terminal usa a tool local e segue permissão.</p>
+                <p class="help-text">Busca nativa roda no servidor do provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a tool local e segue permissão.</p>
                 ${renderSearchModeControl(getSearchMode(draftConfig.tools))}
               </div>
               <div class="toggle-list">
                 ${renderToolToggle('terminal', 'Terminal local', 'Permite que a IA execute comandos no terminal por run_terminal_command.')}
+                ${renderToolToggle('deepInvestigation', 'Incentivar a IA a fazer investigações mais profundas', 'Quando ligado, injeta instruções para usar mais rodadas de tools, seguir referências e olhar outputs antes da resposta final.')}
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
                 ${renderToolToggle('autoCompact', 'Tool de compactar contexto', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
@@ -594,6 +654,17 @@ function renderSettingsModal() {
                 <div class="choice-grid">
                   ${renderTerminalModeCards(draftConfig.tools?.terminalMode || 'standard')}
                 </div>
+              </div>
+              <div class="settings-subpanel">
+                <h4>Sudo no My Computer</h4>
+                <p class="help-text">O app executa comandos como seu usuário. Para permitir sudo sem digitar senha no navegador, configure uma regra NOPASSWD limitada aos comandos que você aceita delegar.</p>
+                <pre>${escapeHtml([
+                  '# Exemplo seguro: crie um arquivo dedicado com sudo visudo -f /etc/sudoers.d/my-computer',
+                  '# Troque elias pelo seu usuário e limite os binários ao que faz sentido no seu caso.',
+                  'elias ALL=(root) NOPASSWD: /usr/bin/systemctl status *, /usr/bin/journalctl *, /usr/bin/apt-get update',
+                  '',
+                  '# Evite liberar ALL sem senha. O app mostrará stdout/stderr no histórico da execução.',
+                ].join('\n'))}</pre>
               </div>
               <p class="help-text">O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.</p>
             </section>
@@ -699,6 +770,7 @@ function renderSettingsNav(activeSection) {
   const sections = [
     ['identity', 'Identidade'],
     ['providers', 'Providers'],
+    ['modelIndex', 'Modelos'],
     ['memory', 'Memória'],
     ['tools', 'Tools'],
     ['context', 'Contexto'],
@@ -795,6 +867,7 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
     draft.tools = {
       ...(draft.tools || {}),
       alwaysAllow: form.get('alwaysAllowTools') === 'on',
+      deepInvestigation: form.get('deepInvestigation') === 'on',
       searchMode,
       webSearch: searchMode !== 'off',
       searchTerminal: searchMode === 'terminal' || searchMode === 'both',
@@ -813,7 +886,7 @@ function renderSearchModeOptions(selectedMode) {
   const options = [
     ['native', 'Web nativa', 'Busca interna do provider, sem confirmação local.'],
     ['terminal', 'Terminal', 'Usa terminal local e pede permissão quando necessário.'],
-    ['both', 'Ambos', 'Tenta web nativa primeiro e cai no terminal quando precisar.'],
+    ['both', 'Ambos', 'Tenta web nativa primeiro e cai no terminal se a busca falhar ou vier vazia.'],
   ];
   return options
     .map(
@@ -902,6 +975,7 @@ function renderRoutingFallbackRows(fallbacks = []) {
       (fallback, index) => {
         const provider = fallback.provider || '';
         const model = fallback.model || (provider ? getProvider(provider).defaultModel : '');
+        const showCustomModel = Boolean(model) && !isKnownModel(provider, model);
         return `
           <div class="routing-fallback-row" data-fallback-index="${index}">
             <label>
@@ -913,13 +987,96 @@ function renderRoutingFallbackRows(fallbacks = []) {
             </label>
             <label>
               Modelo
-              <input class="fallback-model" value="${escapeAttr(model)}" placeholder="modelo do fallback" />
+              <select class="fallback-model">
+                ${renderModelOptions(provider || state.config.provider, model || getProvider(provider || state.config.provider).defaultModel)}
+              </select>
+            </label>
+            <label class="fallback-custom-model-row ${showCustomModel ? '' : 'hidden'}">
+              Modelo personalizado
+              <input class="fallback-custom-model-input" value="${showCustomModel ? escapeAttr(model) : ''}" placeholder="provider/model ou nome local" />
             </label>
             <button type="button" class="remove-provider-fallback danger-button" data-fallback-index="${index}">Remover</button>
           </div>
         `;
       },
     )
+    .join('');
+}
+
+function renderModelIndex(config = {}) {
+  return (state.providers || [])
+    .map((provider) => `
+      <section class="model-index-provider">
+        <div class="model-index-provider-header">
+          <div>
+            <h4>${escapeHtml(provider.label)}</h4>
+            <p>${escapeHtml(provider.catalogSummary || 'Catálogo do provider')}</p>
+          </div>
+          <span>${escapeHtml(provider.catalogMode || 'static')}</span>
+        </div>
+        <div class="model-index-grid">
+          ${(provider.models || []).map((model) => renderModelIndexCard(provider, model, config)).join('')}
+        </div>
+      </section>
+    `)
+    .join('');
+}
+
+function renderModelIndexCard(provider, model, config = {}) {
+  const chips = [
+    model.selectable === false ? 'índice' : 'selecionável',
+    model.kind,
+    model.contextTokens ? `${formatCompactNumber(model.contextTokens)} ctx` : '',
+    model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} saída` : '',
+    model.supportsImages ? 'visão' : 'texto',
+    model.supportsReasoning ? 'raciocínio' : '',
+    provider.id === 'ollama' && model.installed ? 'instalado' : '',
+  ].filter(Boolean);
+  return `
+    <article class="model-index-card">
+      <div>
+        <strong>${escapeHtml(model.label || model.id)}</strong>
+        <code>${escapeHtml(model.id)}</code>
+      </div>
+      <div class="model-chip-row">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join('')}</div>
+      ${model.reasoningEfforts?.length ? `<p>Raciocínio: ${escapeHtml(model.reasoningEfforts.join(', '))}</p>` : ''}
+      ${model.maxInputImages || model.maxFileSizeMB ? `<p>Imagem: ${escapeHtml([model.maxInputImages ? `${model.maxInputImages} imagem(ns)` : '', model.maxFileSizeMB ? `${model.maxFileSizeMB} MB` : ''].filter(Boolean).join(', '))}</p>` : ''}
+      ${model.description ? `<p>${escapeHtml(model.description)}</p>` : ''}
+      ${model.apiNotes ? `<p><strong>API:</strong> ${escapeHtml(model.apiNotes)}</p>` : ''}
+    </article>
+  `;
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0);
+  if (number >= 1000000) return `${Math.round(number / 100000) / 10}M`;
+  if (number >= 1000) return `${Math.round(number / 1000)}k`;
+  return String(number);
+}
+
+function renderModelFallbackRows(fallbacks = [], providerId = '') {
+  const provider = providerId || state.settingsProvider || state.config?.provider || 'groq';
+  const rows = fallbacks.filter((fallback) => fallback.provider === provider);
+  return (rows.length ? rows : [{ provider, model: '' }])
+    .map((fallback, index) => {
+      const model = fallback.model || '';
+      const showCustomModel = Boolean(model) && !isKnownModel(provider, model);
+      return `
+        <div class="model-fallback-row" data-provider="${escapeAttr(provider)}" data-model-fallback-index="${index}">
+          <label>
+            Modelo alternativo em ${escapeHtml(providerLabel(provider))}
+            <select class="model-fallback-model">
+              ${renderModelOptions(provider, model || getProvider(provider).defaultModel)}
+            </select>
+          </label>
+          <label class="fallback-custom-model-row ${showCustomModel ? '' : 'hidden'}">
+            Modelo personalizado
+            <input class="model-fallback-custom-input" value="${showCustomModel ? escapeAttr(model) : ''}" placeholder="provider/model ou nome local" />
+          </label>
+          <button type="button" class="remove-model-fallback danger-button" data-model-fallback-index="${index}">Remover</button>
+        </div>
+      `;
+    })
     .join('');
 }
 
@@ -1060,7 +1217,7 @@ function renderModelSettingsModal() {
   const providerId = chat?.provider || state.config.provider;
   const modelId = chat?.model || state.config.model;
   const settings = chat?.modelSettings || {};
-  const support = getModelSettingSupport(providerId);
+  const support = getModelSettingSupport(providerId, modelId);
   const metadata = getModelMetadata(providerId, modelId);
   const maxOutputLimit = metadata.maxOutputTokens || 300000;
   return `
@@ -1077,6 +1234,7 @@ function renderModelSettingsModal() {
           <div class="modal-body">
             <section class="modal-section">
               <p class="help-text">Esses parâmetros valem só para este chat. Campos não compatíveis com o provider ficam ocultos para reduzir erro de API.</p>
+              ${metadata.apiNotes ? `<div class="notice-card"><strong>Nota do modelo</strong><p>${escapeHtml(metadata.apiNotes)}</p></div>` : ''}
               <div class="explain-list compact-explain">
                 <p><strong>Temperatura:</strong> aumenta ou reduz variação/criatividade. Valores baixos tendem a ser mais previsíveis.</p>
                 <p><strong>Top P:</strong> limita a amostragem por probabilidade acumulada. Use junto com temperatura só quando souber o motivo.</p>
@@ -1101,7 +1259,7 @@ function renderModelSettingsModal() {
                     <label>
                       Esforço de raciocínio
                       <select name="reasoningEffort">
-                        ${['', 'none', 'low', 'medium', 'high', 'xhigh']
+                        ${['', ...(support.reasoningEfforts || ['none', 'low', 'medium', 'high', 'xhigh'])]
                           .map((value) => `<option value="${escapeAttr(value)}" ${settings.reasoningEffort === value ? 'selected' : ''}>${escapeHtml(value || 'Padrão do provider')}</option>`)
                           .join('')}
                       </select>
@@ -1272,26 +1430,26 @@ function renderModelNumberInput(name, label, value, min, max, step, enabled) {
 function renderOllamaSetup(model) {
   const status = state.ollamaStatus;
   const installedModels = status?.models?.length ? status.models : state.ollamaInstalledModels || [];
+  const isInstalled = status?.installed === true;
   const statusText = status
     ? status.installed
       ? `Ollama encontrado${status.version ? `: ${status.version}` : ''}. Modelos locais: ${installedModels.length || 0}.`
       : 'Ollama ainda não foi encontrado no sistema.'
     : 'Verifique o Ollama antes de salvar se quiser usar IA local.';
   const installed = installedModels.includes(model) || installedModels.includes(`${model}:latest`);
+  const installCommand = status?.installCommand || 'curl -fsSL https://ollama.com/install.sh | sh';
   return `
     <section class="setup-assist">
       <h2>Ollama local</h2>
       <p>${escapeHtml(statusText)}</p>
-      <p>O navegador pede ao servidor local para instalar/verificar. Em Linux, a instalação oficial pode pedir sudo; se isso acontecer, o painel mostra o comando para rodar no terminal.</p>
-      <p>Ao instalar o Ollama pelo painel, o My Computer tenta baixar automaticamente o modelo selecionado. Modelos já baixados aparecem com marca na lista.</p>
+      <p>Instale pelo terminal usando o comando oficial abaixo e depois clique em verificar. O painel só baixa/remove modelos quando detectar o Ollama instalado.</p>
       <div class="button-row">
         <button type="button" id="check-ollama">Verificar Ollama</button>
-        <button type="button" id="install-ollama">Instalar Ollama</button>
-        <button type="button" id="pull-ollama-model">${installed ? 'Modelo instalado' : 'Baixar modelo selecionado'}</button>
-        <button type="button" id="uninstall-ollama" class="danger-button">Desinstalar Ollama</button>
+        ${isInstalled ? `<button type="button" id="pull-ollama-model">${installed ? 'Modelo instalado' : 'Baixar modelo selecionado'}</button>` : ''}
       </div>
+      ${!isInstalled ? `<pre>${escapeHtml(installCommand)}</pre>` : ''}
       ${
-        installedModels.length
+        isInstalled && installedModels.length
           ? `
             <div class="ollama-model-list">
               ${installedModels
@@ -1306,16 +1464,17 @@ function renderOllamaSetup(model) {
                 .join('')}
             </div>
           `
-          : '<p class="help-text">Nenhum modelo local encontrado ainda.</p>'
+          : isInstalled ? '<p class="help-text">Nenhum modelo local encontrado ainda.</p>' : '<p class="help-text">Quando a verificação encontrar o Ollama, esta área mostra botões para baixar o modelo escolhido e remover modelos locais.</p>'
       }
-      ${status?.installCommand ? `<pre>${escapeHtml(status.installCommand)}</pre>` : ''}
     </section>
   `;
 }
 
 function renderToolToggle(name, title, description) {
   const config = state.settingsDraft?.config || state.config;
-  const checked = config.tools?.[name] !== false ? 'checked' : '';
+  const checked = name === 'deepInvestigation'
+    ? config.tools?.[name] === true ? 'checked' : ''
+    : config.tools?.[name] !== false ? 'checked' : '';
   return `
     <label class="toggle-row switch-row" id="tool-${escapeAttr(name)}-row">
       <input type="checkbox" id="tool-${escapeAttr(name)}" name="tool_${escapeAttr(name)}" ${checked} />
@@ -1338,6 +1497,65 @@ function renderChatItem(chat) {
   `;
 }
 
+function getMessageContinuationGroupId(message) {
+  return message?.continuationGroupId || message?.sourceUserMessageId || message?.id || null;
+}
+
+function getAssistantAttemptsForMessage(message) {
+  if (!state.activeChat?.messages?.length || message?.role !== 'assistant') return [];
+  const groupId = getMessageContinuationGroupId(message);
+  return state.activeChat.messages
+    .filter((item) => item.role === 'assistant' && getMessageContinuationGroupId(item) === groupId)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function getSourceUserMessageForAttempt(message) {
+  if (!state.activeChat?.messages?.length) return null;
+  if (message?.role === 'user') return message;
+  const groupId = message?.sourceUserMessageId || message?.continuationGroupId || null;
+  const direct = groupId ? state.activeChat.messages.find((item) => item.id === groupId && item.role === 'user') : null;
+  if (direct) return direct;
+  const index = state.activeChat.messages.findIndex((item) => item.id === message?.id);
+  if (index === -1) return null;
+  for (let currentIndex = index - 1; currentIndex >= 0; currentIndex -= 1) {
+    const candidate = state.activeChat.messages[currentIndex];
+    if (candidate.role === 'user') return candidate;
+  }
+  return null;
+}
+
+function shouldShowMessageDetails(message) {
+  if (message?.role !== 'assistant') return false;
+  const attempts = getAssistantAttemptsForMessage(message);
+  return Boolean(
+    attempts.length > 1 ||
+      (Array.isArray(message.toolUses) && message.toolUses.length) ||
+      (Array.isArray(message.executionTrace) && message.executionTrace.length) ||
+      ['failed', 'incomplete', 'needs_tool_approval', 'running_tools'].includes(message.status) ||
+      message.continuationAvailable,
+  );
+}
+
+function renderAttemptBadge(message) {
+  const attempts = getAssistantAttemptsForMessage(message);
+  if (attempts.length <= 1) return '';
+  const index = attempts.findIndex((item) => item.id === message.id);
+  if (index === -1) return '';
+  return `<span class="message-attempt">${index + 1}/${attempts.length}</span>`;
+}
+
+function renderMessageActions(message) {
+  const actions = [];
+  if (message.role === 'assistant' && ['failed', 'incomplete'].includes(message.status)) {
+    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`);
+    actions.push(`<button type="button" class="continue-message primary" data-message-id="${escapeAttr(message.id)}">Continuar</button>`);
+  } else if (message.role === 'user' && message.status === 'failed') {
+    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`);
+  }
+  if (!actions.length) return '';
+  return `<div class="message-actions">${actions.join('')}</div>`;
+}
+
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
   const modelUsed = message.modelUsed
@@ -1345,22 +1563,23 @@ function renderMessage(message) {
     : '';
   const statusLabel = renderMessageStatus(message.status);
   const status = statusLabel ? `<span class="message-status ${escapeAttr(message.status)}">${statusLabel}</span>` : '';
+  const attemptBadge = renderAttemptBadge(message);
   const copyButton =
     message.role === 'assistant'
       ? `<button class="copy-message" data-message-id="${escapeAttr(message.id)}">Copiar</button>`
       : '';
-  const retryButton =
-    message.role === 'user' && message.status === 'failed'
-      ? `<button class="retry-message" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`
-      : '';
+  const detailsButton = shouldShowMessageDetails(message)
+    ? `<button type="button" class="open-message-details" data-message-id="${escapeAttr(message.id)}">Ver detalhes</button>`
+    : '';
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
-      <div class="message-label">${label}${modelUsed}${status}${retryButton}${copyButton}</div>
-      ${(message.toolUses || []).map((toolUse) => renderToolUse(toolUse, message)).join('')}
+      <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
+      ${renderExecutionHistory(message)}
       <div class="bubble">${formatContent(message.content, message.role)}</div>
+      ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
+      ${renderMessageActions(message)}
       ${renderMessageSources(message)}
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
-      ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
     </article>
   `;
 }
@@ -1404,6 +1623,7 @@ function formatSourceHost(url) {
 function renderMessageStatus(status) {
   if (status === 'pending') return 'enviando';
   if (status === 'failed') return 'falhou';
+  if (status === 'incomplete') return 'incompleto';
   if (status === 'needs_tool_approval') return 'aguardando aprovação';
   if (status === 'running_tools') return 'executando tools';
   if (status === 'tool_denied') return 'tool negada';
@@ -1440,6 +1660,65 @@ function renderContextEventCards() {
       `,
     )
     .join('');
+}
+
+function renderExecutionHistory(message) {
+  if (message.role !== 'assistant') return '';
+  const trace = Array.isArray(message.executionTrace) ? message.executionTrace : [];
+  const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
+  if (!trace.length && !toolUses.length) return '';
+  const traceToolIds = new Set(trace.map((entry) => entry.toolUse?.id).filter(Boolean));
+  const extraToolUses = toolUses.filter((toolUse) => !traceToolIds.has(toolUse.id));
+  const toolCount = toolUses.length || trace.filter((entry) => entry.type === 'tool_result').length;
+  const modelSteps = trace.filter((entry) => entry.type === 'assistant_output').length;
+  const shouldOpen =
+    ['needs_tool_approval', 'running_tools', 'failed', 'incomplete'].includes(message.status) ||
+    toolUses.some((toolUse) => toolUse.status === 'pending_approval') ||
+    message.continuationAvailable;
+  return `
+    <details class="execution-history" ${shouldOpen ? 'open' : ''}>
+      <summary class="execution-summary">
+        <span>Histórico da execução</span>
+        <span>${escapeHtml(String(toolCount))} tool(s) · ${escapeHtml(String(modelSteps))} saída(s) da IA</span>
+      </summary>
+      <div class="execution-body">
+        ${trace.map((entry) => renderExecutionTraceEntry(entry, message)).join('')}
+        ${extraToolUses.map((toolUse) => renderToolUse(toolUse, message)).join('')}
+      </div>
+    </details>
+  `;
+}
+
+function renderExecutionTraceEntry(entry, message) {
+  if (entry.type === 'tool_result') {
+    return renderToolUse(entry.toolUse || {}, message);
+  }
+  if (entry.type !== 'assistant_output') return '';
+  const title = entry.phase === 'final' ? 'Resposta final do modelo' : 'Saída intermediária da IA';
+  const toolCalls = Array.isArray(entry.toolCalls) ? entry.toolCalls : [];
+  return `
+    <div class="trace-entry model-trace">
+      <div class="trace-title">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml([entry.provider && providerLabel(entry.provider), entry.model, entry.round ? `rodada ${entry.round}` : ''].filter(Boolean).join(' · '))}</span>
+      </div>
+      ${entry.content ? `<div><div class="message-label">Output</div><pre>${escapeHtml(entry.content)}</pre></div>` : ''}
+      ${
+        toolCalls.length
+          ? `<div class="trace-tool-calls">${toolCalls
+              .map(
+                (toolCall) => `
+                  <div>
+                    <div class="message-label">Tool solicitada: ${escapeHtml(toolCall.name)}</div>
+                    <pre>${escapeHtml(JSON.stringify(toolCall.input || {}, null, 2))}</pre>
+                  </div>
+                `,
+              )
+              .join('')}</div>`
+          : ''
+      }
+    </div>
+  `;
 }
 
 function renderToolUse(toolUse, message = null) {
@@ -1559,10 +1838,103 @@ function renderPending() {
 }
 
 function renderEvent(event) {
+  const details = event.details && Object.keys(event.details || {}).length
+    ? `<details class="event-details"><summary>${escapeHtml(formatEventDetails(event.details)) || 'Detalhes'}</summary><pre>${escapeHtml(JSON.stringify(event.details, null, 2))}</pre></details>`
+    : '';
   return `
     <div class="event-item">
       <strong>${escapeHtml(event.type)}</strong><br />
       ${escapeHtml(new Date(event.createdAt).toLocaleString())}
+      ${details}
+    </div>
+  `;
+}
+
+function renderMessageDetailsModal() {
+  const selectedMessage = state.activeChat?.messages?.find((message) => message.id === state.messageDetailsMessageId);
+  if (!selectedMessage || selectedMessage.role !== 'assistant') return '';
+  const attempts = getAssistantAttemptsForMessage(selectedMessage);
+  const selectedAttempt = attempts.find((attempt) => attempt.id === selectedMessage.id) || attempts[attempts.length - 1] || selectedMessage;
+  const sourceUserMessage = getSourceUserMessageForAttempt(selectedAttempt);
+  const groupId = getMessageContinuationGroupId(selectedAttempt);
+  const sourceUserMessageId = sourceUserMessage?.id || null;
+  const startedAt = new Date(sourceUserMessage?.createdAt || selectedAttempt.createdAt).getTime();
+  const finishedAt = new Date(selectedAttempt.updatedAt || selectedAttempt.completedAt || selectedAttempt.interruptedAt || selectedAttempt.failedAt || selectedAttempt.createdAt).getTime();
+  const relatedEvents = (state.activeChatEvents || []).filter((event) => {
+    const eventTime = new Date(event.createdAt).getTime();
+    if (event.chatId !== state.activeChat?.id) return false;
+    const details = event.details || {};
+    if (details.messageId === selectedAttempt.id) return true;
+    if (sourceUserMessageId && details.messageId === sourceUserMessageId) return true;
+    if (details.groupId && details.groupId === groupId) return true;
+    if (sourceUserMessageId && details.sourceUserMessageId === sourceUserMessageId) return true;
+    if (details.retryOfMessageId === selectedAttempt.id || details.continuedFromMessageId === selectedAttempt.id) return true;
+    if (!Number.isFinite(eventTime)) return false;
+    return eventTime >= startedAt - 1000 && eventTime <= finishedAt + 3000;
+  });
+  const selectedIndex = attempts.findIndex((attempt) => attempt.id === selectedAttempt.id);
+  const selectedStatus = renderMessageStatus(selectedAttempt.status) || 'concluído';
+  return `
+    <div class="modal-backdrop details-backdrop" role="presentation">
+      <section class="modal wide-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="message-details-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="message-details-title">Detalhes da execução</h2>
+            <p>${escapeHtml(sourceUserMessage ? sourceUserMessage.content.slice(0, 240) : 'Histórico desta tentativa')}${sourceUserMessage && sourceUserMessage.content.length > 240 ? '…' : ''}</p>
+          </div>
+          <button type="button" id="close-message-details" aria-label="Fechar">×</button>
+        </header>
+
+        <div class="modal-body message-details-layout">
+          <aside class="message-details-sidebar">
+            <section class="details-panel">
+              <h3>Tentativas</h3>
+              <div class="attempt-selector-list">
+                ${attempts
+                  .map(
+                    (attempt, index) => `
+                      <button type="button" class="attempt-selector ${attempt.id === selectedAttempt.id ? 'active' : ''}" data-message-id="${escapeAttr(attempt.id)}">
+                        <strong>${index + 1}/${attempts.length}</strong>
+                        <span>${escapeHtml(renderMessageStatus(attempt.status) || 'concluído')}</span>
+                      </button>
+                    `,
+                  )
+                  .join('')}
+              </div>
+            </section>
+
+            ${sourceUserMessage ? `
+              <section class="details-panel">
+                <h3>Prompt original</h3>
+                <div class="bubble user">${formatContent(sourceUserMessage.content, 'user')}</div>
+                ${sourceUserMessage.attachments?.length ? `<div class="message-attachments">${sourceUserMessage.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
+              </section>
+            ` : ''}
+          </aside>
+
+          <section class="message-details-main">
+            <article class="details-panel">
+              <div class="message-label">
+                <span>Saída selecionada</span>
+                <span class="message-attempt">${escapeHtml(String((selectedIndex >= 0 ? selectedIndex + 1 : attempts.length) || 1))}/${escapeHtml(String(Math.max(attempts.length, 1)))}</span>
+                ${selectedAttempt.providerUsed ? `<span class="message-model">${escapeHtml(providerLabel(selectedAttempt.providerUsed))}${selectedAttempt.modelUsed ? ` · ${escapeHtml(selectedAttempt.modelUsed)}` : ''}</span>` : ''}
+                <span class="message-status ${escapeAttr(selectedAttempt.status || '')}">${escapeHtml(selectedStatus)}</span>
+                ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
+              </div>
+              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">${formatContent(selectedAttempt.content, 'assistant')}</div>
+              ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
+              ${renderMessageSources(selectedAttempt)}
+              ${renderExecutionHistory(selectedAttempt)}
+            </article>
+
+            <article class="details-panel">
+              <h3>Eventos relacionados</h3>
+              <p class="help-text">Os eventos abaixo pertencem a esta tentativa e ao prompt que a originou.</p>
+              ${relatedEvents.length ? `<div class="event-list details-event-list">${relatedEvents.map(renderEvent).join('')}</div>` : '<p class="help-text">Nenhum evento relacionado encontrado ainda.</p>'}
+            </article>
+          </section>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -1623,18 +1995,34 @@ function renderProviderOptions(selectedProvider) {
     .join('');
 }
 
+function renderThemeOptions(selectedTheme = 'light') {
+  const themes = [
+    ['light', 'Claro'],
+    ['dark', 'Escuro'],
+    ['system', 'Sistema'],
+  ];
+  return themes
+    .map(([value, label]) => {
+      const selected = selectedTheme === value ? 'selected' : '';
+      return `<option value="${escapeAttr(value)}" ${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join('');
+}
+
 function renderModelOptions(providerId, selectedModel) {
   const provider = getProvider(providerId);
-  const models = provider.models?.length
-    ? provider.models
+  const models = getSelectableModels(providerId);
+  const selectableModels = models.length
+    ? models
     : [{ id: provider.defaultModel, label: provider.defaultModel, kind: 'Padrão' }];
-  const known = new Set(models.map((model) => model.id));
-  const options = models
+  const known = new Set(selectableModels.map((model) => model.id));
+  const options = selectableModels
     .map((model) => {
       const selected = model.id === selectedModel ? 'selected' : '';
       const installed = provider.id === 'ollama' && model.installed ? '&#10003; ' : '';
       const vision = model.supportsImages ? ' · visão' : '';
-      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)}${vision} · ${escapeHtml(model.id)}</option>`;
+      const reasoning = model.supportsReasoning ? ' · raciocínio' : '';
+      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)}${vision}${reasoning} · ${escapeHtml(model.id)}</option>`;
     })
     .join('');
   const customSelected = selectedModel && !known.has(selectedModel) ? 'selected' : '';
@@ -1694,7 +2082,11 @@ function providerLabel(providerId) {
 }
 
 function isKnownModel(providerId, model) {
-  return Boolean(getProvider(providerId).models?.some((item) => item.id === model));
+  return Boolean(getSelectableModels(providerId).some((item) => item.id === model));
+}
+
+function getSelectableModels(providerId) {
+  return (getProvider(providerId).models || []).filter((item) => item.selectable !== false);
 }
 
 function modelSupportsImages(providerId, model) {
@@ -1715,16 +2107,20 @@ function getModelMetadata(providerId, model) {
   return getProvider(providerId).models?.find((item) => item.id === model) || {};
 }
 
-function getModelSettingSupport(providerId) {
+function getModelSettingSupport(providerId, modelId = '') {
+  const metadata = getModelMetadata(providerId, modelId);
+  const reasoningEfforts = Array.isArray(metadata.reasoningEfforts) ? metadata.reasoningEfforts : null;
   if (providerId === 'anthropic') {
+    const samplingAllowed = modelId !== 'claude-opus-4-7';
     return {
-      temperature: true,
-      topP: true,
+      temperature: samplingAllowed,
+      topP: samplingAllowed,
       maxTokens: true,
       stop: true,
       penalties: false,
       seed: false,
       reasoningEffort: false,
+      reasoningEfforts: null,
     };
   }
 
@@ -1736,7 +2132,8 @@ function getModelSettingSupport(providerId) {
       stop: true,
       penalties: false,
       seed: false,
-      reasoningEffort: false,
+      reasoningEffort: Boolean(metadata.supportsReasoning),
+      reasoningEfforts,
     };
   }
 
@@ -1748,7 +2145,8 @@ function getModelSettingSupport(providerId) {
       stop: true,
       penalties: false,
       seed: true,
-      reasoningEffort: false,
+      reasoningEffort: Boolean(metadata.supportsReasoning),
+      reasoningEfforts,
     };
   }
 
@@ -1760,7 +2158,21 @@ function getModelSettingSupport(providerId) {
       stop: true,
       penalties: false,
       seed: false,
-      reasoningEffort: false,
+      reasoningEffort: Boolean(metadata.supportsReasoning),
+      reasoningEfforts,
+    };
+  }
+
+  if (providerId === 'openai' || providerId === 'openrouter' || providerId === 'xai') {
+    return {
+      temperature: true,
+      topP: true,
+      maxTokens: true,
+      stop: true,
+      penalties: true,
+      seed: true,
+      reasoningEffort: Boolean(metadata.supportsReasoning),
+      reasoningEfforts,
     };
   }
 
@@ -1772,6 +2184,7 @@ function getModelSettingSupport(providerId) {
     penalties: true,
     seed: true,
     reasoningEffort: true,
+    reasoningEfforts,
   };
 }
 
@@ -1964,14 +2377,25 @@ function bindAppEvents() {
   document.querySelectorAll('.copy-message').forEach((button) => {
     button.addEventListener('click', () => copyMessage(button.dataset.messageId));
   });
+  document.querySelectorAll('.open-message-details').forEach((button) => {
+    button.addEventListener('click', () => openMessageDetails(button.dataset.messageId));
+  });
   document.querySelectorAll('.retry-message').forEach((button) => {
     button.addEventListener('click', () => retryMessage(button.dataset.messageId));
+  });
+  document.querySelectorAll('.continue-message').forEach((button) => {
+    button.addEventListener('click', () => continueMessage(button.dataset.messageId));
   });
   document.querySelectorAll('.approve-tool').forEach((button) => {
     button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'approve', button.dataset.toolCallId, button));
   });
   document.querySelectorAll('.deny-tool').forEach((button) => {
     button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'deny', button.dataset.toolCallId, button));
+  });
+  document.querySelector('#copy-events')?.addEventListener('click', copyEvents);
+  document.querySelector('#close-message-details')?.addEventListener('click', closeMessageDetails);
+  document.querySelectorAll('.attempt-selector').forEach((button) => {
+    button.addEventListener('click', () => openMessageDetails(button.dataset.messageId));
   });
   document.querySelector('#retry-action')?.addEventListener('click', retryLastAction);
   document.querySelector('#retry-action-inline')?.addEventListener('click', retryLastAction);
@@ -1997,12 +2421,28 @@ function bindAppEvents() {
     document.querySelector('#api-provider-input').addEventListener('change', changeApiProviderDraft);
     document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
     document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
+    document.querySelector('#add-model-fallback')?.addEventListener('click', addModelFallbackRow);
     document.querySelector('#add-provider-fallback')?.addEventListener('click', addProviderFallbackRow);
+    document.querySelectorAll('.fallback-provider').forEach((select) => {
+      select.addEventListener('change', () => {
+        captureSettingsDraftFromForm();
+        renderPreservingVisualState();
+      });
+    });
+    document.querySelectorAll('.fallback-model').forEach((select) => {
+      select.addEventListener('change', () => {
+        captureSettingsDraftFromForm();
+        renderPreservingVisualState();
+      });
+    });
     document.querySelectorAll('.remove-api-key').forEach((button) => {
       button.addEventListener('click', () => removeApiKeyRow(Number(button.dataset.keyIndex)));
     });
     document.querySelectorAll('.remove-provider-fallback').forEach((button) => {
       button.addEventListener('click', () => removeProviderFallbackRow(Number(button.dataset.fallbackIndex)));
+    });
+    document.querySelectorAll('.remove-model-fallback').forEach((button) => {
+      button.addEventListener('click', () => removeModelFallbackRow(Number(button.dataset.modelFallbackIndex)));
     });
     document.querySelector('#export-data').addEventListener('click', exportData);
     document.querySelector('#import-data').addEventListener('change', importData);
@@ -2496,7 +2936,7 @@ function toggleSetupApiKeyVisibility() {
 }
 
 function changeApiProviderDraft(event) {
-  syncProviderApiDraft();
+  captureSettingsDraftFromForm();
   state.settingsProvider = event.target.value;
   renderPreservingVisualState();
 }
@@ -2537,6 +2977,8 @@ async function createNewChat() {
     state.chats = data.chats;
     state.activeChat = data.chat;
     state.activeChatEvents = [];
+    state.messageDetailsOpen = false;
+    state.messageDetailsMessageId = null;
     state.chatSettingsDraft = null;
     state.chatSettingsDirty = false;
   });
@@ -2547,6 +2989,8 @@ async function loadChat(chatId) {
     const data = await api(`/api/chats/${chatId}`);
     state.activeChat = data.chat;
     state.activeChatEvents = data.activeChatEvents || [];
+    state.messageDetailsOpen = false;
+    state.messageDetailsMessageId = null;
     state.chatSettingsDraft = null;
     state.chatSettingsDirty = false;
   });
@@ -2618,14 +3062,9 @@ async function sendMessageFromValues(textarea, content) {
 async function sendMessageContent(content, options = {}) {
   const chatId = state.activeChat.id;
   const attachments = options.attachments || [];
-  if (options.retryMessageId) {
-    state.activeChat.messages = state.activeChat.messages.map((message) =>
-      message.id === options.retryMessageId
-        ? { ...message, status: 'pending', error: null }
-        : message,
-    );
-  } else {
-  const localMessage = {
+  const isContinuationRequest = Boolean(options.retryMessageId || options.continueMessageId);
+  if (!isContinuationRequest) {
+    const localMessage = {
       id: `local-${Date.now()}`,
       role: 'user',
       content,
@@ -2649,6 +3088,7 @@ async function sendMessageContent(content, options = {}) {
           body: {
             content,
             retryMessageId: options.retryMessageId,
+            continueMessageId: options.continueMessageId,
             attachmentIds: attachments.map((attachment) => attachment.id),
           },
         });
@@ -2659,6 +3099,15 @@ async function sendMessageContent(content, options = {}) {
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
       const fresh = await api('/api/chats');
       state.chats = fresh.chats;
+      if (data.assistantStatus === 'failed') {
+        state.status = 'A IA falhou antes de concluir. Use Tentar novamente ou Continuar.';
+      } else if (data.assistantStatus === 'incomplete') {
+        state.status = 'A IA parou antes do final. Use Continuar para retomar.';
+      } else if (data.awaitingApproval) {
+        state.status = 'A IA pediu aprovação de tool.';
+      } else {
+        state.status = 'Resposta recebida.';
+      }
     },
     () => sendMessageContent(content, options),
   );
@@ -2693,6 +3142,14 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
       state.activeChat = data.chat;
       state.chats = data.chats || state.chats;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+      const updatedMessage = state.activeChat?.messages?.find((message) => message.id === messageId);
+      if (updatedMessage?.status === 'failed') {
+        state.status = 'A tool aprovada falhou antes de concluir.';
+      } else if (updatedMessage?.status === 'incomplete') {
+        state.status = 'A tool aprovada parou antes do final. Use Continuar.';
+      } else if (updatedMessage?.status === 'sent') {
+        state.status = 'A tool aprovada foi concluída.';
+      }
     });
   } finally {
     state.toolDecisionInFlight.delete(decisionKey);
@@ -2785,15 +3242,55 @@ async function retryLastAction() {
 async function retryMessage(messageId) {
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
-  await sendMessageContent(message.content, { retryMessageId: message.id });
+  const sourceMessage = message.role === 'assistant' ? getSourceUserMessageForAttempt(message) : message;
+  if (!sourceMessage) return;
+  await sendMessageContent('', { retryMessageId: sourceMessage.id });
+}
+
+async function continueMessage(messageId) {
+  const message = state.activeChat?.messages?.find((item) => item.id === messageId);
+  if (!message) return;
+  if (message.role !== 'assistant') return;
+  await sendMessageContent('', { continueMessageId: message.id });
 }
 
 async function copyMessage(messageId) {
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
-  await navigator.clipboard.writeText(message.content || '');
-  state.status = 'Mensagem copiada.';
+  try {
+    await navigator.clipboard.writeText(message.content || '');
+    state.status = 'Mensagem copiada.';
+    renderPreservingVisualState();
+  } catch (error) {
+    state.error = error.message || 'Falha ao copiar mensagem.';
+    renderPreservingVisualState();
+  }
+}
+
+function openMessageDetails(messageId) {
+  if (!messageId) return;
+  state.messageDetailsOpen = true;
+  state.messageDetailsMessageId = messageId;
   renderPreservingVisualState();
+}
+
+function closeMessageDetails() {
+  state.messageDetailsOpen = false;
+  state.messageDetailsMessageId = null;
+  renderPreservingVisualState();
+}
+
+async function copyEvents() {
+  const events = Array.isArray(state.activeChatEvents) ? state.activeChatEvents : [];
+  if (!events.length) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(events, null, 2));
+    state.status = 'Eventos copiados.';
+    renderPreservingVisualState();
+  } catch (error) {
+    state.error = error.message || 'Falha ao copiar eventos.';
+    renderPreservingVisualState();
+  }
 }
 
 async function deleteActiveChat() {
@@ -2808,6 +3305,8 @@ async function deleteActiveChat() {
     state.chats = data.chats;
     state.activeChat = data.activeChat;
     state.activeChatEvents = data.activeChatEvents || [];
+    state.messageDetailsOpen = false;
+    state.messageDetailsMessageId = null;
   });
 }
 
@@ -3021,9 +3520,10 @@ async function saveGeneralSettings(event, options = {}) {
     renderPreservingVisualState();
     return;
   }
-  await runAction('Salvando configurações gerais...', async () => {
+    await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
+      deepInvestigation: form.get('tool_deepInvestigation') === 'on',
       searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || 'native' : 'off',
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
@@ -3047,6 +3547,9 @@ async function saveGeneralSettings(event, options = {}) {
         technicalLevel: form.get('technicalLevel'),
         technicalGuidanceEnabled: form.get('technicalGuidanceEnabled') === 'on',
         systemPromptExtra: form.get('systemPromptExtra'),
+        appearance: {
+          theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
+        },
         tools,
         context: {
           autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
@@ -3054,6 +3557,8 @@ async function saveGeneralSettings(event, options = {}) {
           autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
         },
         routing: {
+          modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
+          modelFallbacks: readModelFallbackRows(),
           providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
           maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
           fallbacks: readRoutingFallbackRows(),
@@ -3072,6 +3577,10 @@ async function saveGeneralSettings(event, options = {}) {
       body: { content: form.get('persistentMemory') },
     });
     state.config = configResponse.config;
+    state.providers = configResponse.providers || state.providers;
+    state.models = configResponse.models || state.models;
+    state.ollamaInstalledModels = configResponse.ollamaInstalledModels || state.ollamaInstalledModels;
+    state.networkStatus = configResponse.networkStatus || state.networkStatus;
     state.persistentMemory = memoryResponse.persistentMemory;
     state.settingsDirty = false;
     state.settingsDraft = buildSettingsDraft();
@@ -3108,7 +3617,14 @@ function syncProviderApiDraft() {
   };
 }
 
-function markSettingsDirty() {
+function markSettingsDirty(event) {
+  if (event?.target?.name === 'theme') {
+    captureSettingsDraftFromForm();
+    state.settingsDirty = true;
+    updateDirtyIndicators();
+    renderPreservingVisualState();
+    return;
+  }
   state.settingsDirty = true;
   captureSettingsDraftFromForm();
   updateDirtyIndicators();
@@ -3146,10 +3662,15 @@ function captureSettingsDraftFromForm() {
   draftConfig.technicalLevel = form.get('technicalLevel') || draftConfig.technicalLevel || 'balanced';
   draftConfig.technicalGuidanceEnabled = form.get('technicalGuidanceEnabled') === 'on';
   draftConfig.systemPromptExtra = form.get('systemPromptExtra') || '';
+  draftConfig.appearance = {
+    ...(draftConfig.appearance || {}),
+    theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
+  };
   const searchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
   draftConfig.tools = {
     ...(draftConfig.tools || {}),
     terminal: form.get('tool_terminal') === 'on',
+    deepInvestigation: form.get('tool_deepInvestigation') === 'on',
     chatMemory: form.get('tool_chatMemory') === 'on',
     persistentMemory: form.get('tool_persistentMemory') === 'on',
     autoCompact: form.get('tool_autoCompact') === 'on',
@@ -3166,6 +3687,8 @@ function captureSettingsDraftFromForm() {
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
   };
   draftConfig.routing = {
+    modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
+    modelFallbacks: readModelFallbackRows(),
     providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
     maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
     fallbacks: readRoutingFallbackRows(),
@@ -3189,9 +3712,29 @@ function readRoutingFallbackRows() {
   return [...document.querySelectorAll('.routing-fallback-row')]
     .map((row) => ({
       provider: row.querySelector('.fallback-provider')?.value || '',
-      model: row.querySelector('.fallback-model')?.value.trim() || '',
+      model:
+        row.querySelector('.fallback-model')?.value === CUSTOM_MODEL_VALUE
+          ? row.querySelector('.fallback-custom-model-input')?.value.trim() || ''
+          : row.querySelector('.fallback-model')?.value.trim() || '',
     }))
     .filter((item) => item.provider && item.model);
+}
+
+function readModelFallbackRows() {
+  const visibleProvider = state.settingsProvider || state.settingsDraft?.config?.provider || state.config.provider;
+  const existing = (state.settingsDraft?.config?.routing?.modelFallbacks || state.config.routing?.modelFallbacks || []).filter(
+    (item) => item.provider !== visibleProvider,
+  );
+  const visible = [...document.querySelectorAll('.model-fallback-row')]
+    .map((row) => ({
+      provider: row.dataset.provider || visibleProvider,
+      model:
+        row.querySelector('.model-fallback-model')?.value === CUSTOM_MODEL_VALUE
+          ? row.querySelector('.model-fallback-custom-input')?.value.trim() || ''
+          : row.querySelector('.model-fallback-model')?.value.trim() || '',
+    }))
+    .filter((item) => item.provider && item.model);
+  return [...existing, ...visible];
 }
 
 function buildSettingsDraft() {
@@ -3209,8 +3752,47 @@ function addProviderFallbackRow() {
     ...(draftConfig.routing || {}),
     fallbacks: [
       ...(draftConfig.routing?.fallbacks || []),
-      { provider: fallbackProvider, model: getProvider(fallbackProvider).defaultModel },
+      {
+        provider: fallbackProvider,
+        model: getSelectableModels(fallbackProvider)[0]?.id || getProvider(fallbackProvider).defaultModel,
+      },
     ],
+  };
+  state.settingsDirty = true;
+  renderPreservingVisualState();
+}
+
+function addModelFallbackRow() {
+  captureSettingsDraftFromForm();
+  const draftConfig = state.settingsDraft.config;
+  const provider = state.settingsProvider || draftConfig.provider;
+  const existing = draftConfig.routing?.modelFallbacks || [];
+  draftConfig.routing = {
+    ...(draftConfig.routing || {}),
+    modelFallbacks: [
+      ...existing,
+      {
+        provider,
+        model:
+          getSelectableModels(provider).find((model) => model.id !== draftConfig.model)?.id ||
+          getSelectableModels(provider)[0]?.id ||
+          getProvider(provider).defaultModel,
+      },
+    ],
+  };
+  state.settingsDirty = true;
+  renderPreservingVisualState();
+}
+
+function removeModelFallbackRow(index) {
+  captureSettingsDraftFromForm();
+  const draftConfig = state.settingsDraft.config;
+  const provider = state.settingsProvider || draftConfig.provider;
+  const providerRows = (draftConfig.routing?.modelFallbacks || []).filter((item) => item.provider === provider);
+  const target = providerRows[index];
+  draftConfig.routing = {
+    ...(draftConfig.routing || {}),
+    modelFallbacks: (draftConfig.routing?.modelFallbacks || []).filter((item) => item !== target),
   };
   state.settingsDirty = true;
   renderPreservingVisualState();

@@ -1,36 +1,30 @@
 # Docs
 
-Estes documentos descrevem o MVP implementado. Quando o comportamento do código mudar, atualize os docs no mesmo PR/commit.
+Este diretorio documenta o MVP real do projeto em 26/05/2026.
 
-## Mapa
+Se voce so quiser colocar o sistema para rodar, leia primeiro o [README](../README.md).
 
-- [Architecture](./ARCHITECTURE.md) - estrutura local, fluxo de dados e storage.
-- [Technology Stack](./TECH_STACK.md) - escolhas técnicas reais do MVP.
-- [Infraestrutura explicada](./INFRAESTRUTURA_EXPLICADA.md) - guia longo do fluxo interno, tools, contexto e limitações.
-- [UI Spec](./UI_SPEC.md) - tela atual e comportamento esperado.
-- [Providers](./PROVIDERS.md) - catálogo curado de providers/modelos e limites usados pela UI.
-- [Security](./SECURITY.md) - riscos, proteções atuais e próximas travas.
-- [Terminal isolation plan](./TERMINAL_ISOLATION_PLAN.md) - plano para sandbox pesado de terminal.
-- [Roadmap](./ROADMAP.md) - fases futuras.
+## Ordem recomendada
 
-## Decisões atuais
+1. [README](../README.md) - instalacao, setup, providers, Ollama, rede local e atualizacoes.
+2. [Providers](./PROVIDERS.md) - catalogo de modelos, rotatorias e o que e selecionavel ou apenas indice.
+3. [UI Spec](./UI_SPEC.md) - como o painel se comporta e quais telas existem.
+4. [Architecture](./ARCHITECTURE.md) - fluxo de dados, runtime e tools.
+5. [Security](./SECURITY.md) - riscos, sudo, rede e limites de seguranca.
+6. [Technology Stack](./TECH_STACK.md) - dependencias reais e porque o MVP continua simples.
+7. [Infraestrutura explicada](./INFRAESTRUTURA_EXPLICADA.md) - explicacao mais didatica do fluxo interno.
 
-- Providers: Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI, Ollama e OpenAI compatível custom.
-- Provider/modelo padrão configurado no setup e nas configurações gerais.
-- Nível técnico do usuário configurado no setup e nas configurações gerais, com toggle para remover essa instrução do prompt.
-- Chat novo usa provider/modelo padrão.
-- Provider/modelo salvo por chat e editável durante a conversa.
-- Múltiplas API keys por provider, com rotação em falhas recuperáveis.
-- Setup inicial também aceita múltiplas API keys.
-- Configurações técnicas de modelo são salvas por chat.
-- Export/import de configurações, chats, memórias e contexto.
-- Anexos por chat com extração simples de texto, preview de imagem/vídeo, limite de 20 MB por arquivo, até 8 anexos por mensagem e bloqueio de imagem para modelos sem vision.
-- Runtime central em `~/.my-computer` ou `MY_COMPUTER_HOME`.
-- Painel vanilla: `index.html`, `styles.css`, `app.js`.
-- Tools do MVP: `run_terminal_command`, `web_search`, `memory_chat`, `persistent_memory`, `compact_context` e `rename_chat`.
-- Tools podem ser ligadas/desligadas nas configurações gerais e exigem aprovação por padrão.
-- Compactação automática do app é configurável por limite estimado de contexto.
-- Modo rede local exige senha e restart.
-- A UI mostra status de rede, URL local e URLs LAN quando o servidor está escutando em `0.0.0.0`.
-- O isolamento pesado de terminal está apenas planejado; o modo atual é padrão ou isolamento leve.
-- Atualizador via clone Git local: `git fetch`, aviso, confirmação, `git pull --ff-only && npm install` e restart.
+## O que esta aqui
+
+- `ARCHITECTURE.md` explica como Browser, servidor, providers e runtime conversam.
+- `PROVIDERS.md` explica o indice de modelos e como lidar com providers dinamicos.
+- `UI_SPEC.md` descreve as telas, o modal de configuracao e o painel de modelo.
+- `SECURITY.md` mostra os limites de seguranca reais e o que nao confiar cegamente.
+- `TECH_STACK.md` resume a stack usada no MVP.
+- `INFRAESTRUTURA_EXPLICADA.md` e o guia didatico do fluxo interno.
+- `ROADMAP.md` e `TERMINAL_ISOLATION_PLAN.md` ficam como planejamento futuro.
+
+## Regra simples
+
+Quando o codigo mudar, os docs devem mudar no mesmo PR.
+Se o painel mostrar um campo novo, um warning novo ou um catalogo novo, atualize este mapa e o documento correspondente.

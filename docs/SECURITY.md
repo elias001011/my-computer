@@ -1,53 +1,77 @@
 # Security
 
-## Current stance
+Atualizado em 26/05/2026.
 
-O MVP é local-first e escuta em `127.0.0.1`.
-Não exponha o painel na internet.
+## Posicao do projeto
 
-## Current protections
+- O MVP e local-first.
+- O painel escuta em `127.0.0.1` por padrao.
+- Nao exponha o app para a internet sem entender o risco.
 
-- Runtime central em `~/.my-computer` com permissões restritas quando criado pelo app.
-- API keys salvas localmente em `config.json`, separadas por provider.
+## Protecoes ja presentes
+
+- Runtime em `~/.my-computer`.
+- API keys salvas localmente em `config.json`.
 - Eventos importantes gravados em `events.jsonl`.
-- Comandos de terminal possuem timeout.
-- Output de terminal possui limite de tamanho.
-- Tools exigem aprovação na UI por padrão, a menos que `Sempre permitir qualquer tool` esteja ligado.
-- Tools podem ser desligadas nas configurações gerais e deixam de ser enviadas ao modelo.
-- O terminal isolado usa `HOME` e diretório de trabalho dentro do runtime do My Computer.
-- Abrir para rede local exige senha e usa autenticação básica no próximo restart.
-- Rotação de API keys evita ficar preso em uma key rate-limited, mas não substitui autenticação nem controle de gasto.
-- Anexos ficam dentro da pasta do chat e são servidos apenas por endpoints locais com ids validados.
-- Imagens só são enviadas ao modelo quando o modelo está marcado como compatível.
-- Limites de anexos e de imagem conhecidos são validados na UI e no backend.
-- Atualizador bloqueia aplicação quando o worktree Git tem mudanças locais.
-- Nível técnico baixo instrui a IA a confirmar mais ações, mas isso é uma camada de prompt, não uma garantia de segurança.
+- Comandos de terminal com timeout e limite de saida.
+- Tools locais pedem aprovacao na UI por padrao.
+- As tools podem ser desligadas por configuracao.
+- O terminal isolado usa `HOME` e `cwd` dentro do runtime do app.
+- Modo de rede local usa Basic Auth com senha unica.
+- O updater bloqueia aplicacao quando o worktree Git esta sujo.
+- O catalogo de modelos tenta bloquear chamadas claramente incompativeis antes de chegar na API.
 
-## Current risks
+## Riscos conhecidos
 
-- Se `Sempre permitir qualquer tool` estiver ligado, `run_terminal_command` executa comandos sem confirmação manual.
-- O terminal isolado é contenção leve, não sandbox forte. Comandos ainda podem tocar caminhos absolutos da máquina.
-- API keys ficam em texto claro no runtime local e também entram no arquivo exportado.
-- Múltiplas API keys aumentam conveniência, mas também aumentam o impacto de vazamento do `config.json` ou de um export.
-- Sem modo rede, o painel local não exige autenticação. Com modo rede, há Basic Auth simples com senha única.
-- Não existe allowlist ou denylist de comandos.
-- Outputs de tools podem conter segredos se o comando imprimir segredos.
-- Endpoints OpenAI-compatible customizados são confiados pelo usuário; um endpoint malicioso pode receber prompt, memórias e tool outputs.
-- Anexos exportados entram em base64 no arquivo de backup. Esse arquivo pode conter documentos sensíveis.
-- A extração de texto do MVP é simples e não isola conteúdo malicioso dentro de HTML além de remover scripts/styles como texto.
-- A instalação/desinstalação de Ollama pelo painel pode falhar quando `sudo` pedir senha; o comando exibido deve ser tratado como comando administrativo.
-- Ajustes técnicos de modelo, como max tokens alto, podem elevar custo ou causar erro de rate limit no provider.
-- A search tool via terminal usa rede pública e pode revelar queries ao motor de busca usado.
-- O atualizador executa `git pull --ff-only && npm install`. Use apenas com remotes confiáveis.
-- Um pacote novo trazido por update pode executar scripts de instalação do npm, como em qualquer projeto Node.
+- `Sempre permitir qualquer tool` faz `run_terminal_command` rodar sem confirmacao manual.
+- O terminal isolado e isolamento leve, nao sandbox forte.
+- API keys ficam em texto claro no runtime local e tambem podem ir para export.
+- Endpoint OpenAI-compatible custom pode ver prompt, memarias e tool outputs.
+- Anexos exportados podem conter dados sensiveis.
+- Search via terminal pode vazar a query para o motor de busca usado.
+- Parametros tecnicos errados podem quebrar chamada, elevar custo ou gerar rate limit.
+- Ollama install/remove pode pedir `sudo`.
 
-## Near-term hardening
+## Como usar sudo de forma sensata
 
-- Classificação de risco antes de pedir aprovação de comandos destrutivos.
-- Classificação de risco antes de executar terminal.
+Se o app pedir `sudo`, voce tem duas opcoes seguras:
+
+1. Rodar o comando manualmente no terminal e digitar a senha.
+2. Criar uma regra limitada em `/etc/sudoers.d/my-computer`.
+
+Exemplo de regra limitada para comandos de servico do Ollama:
+
+```sudoers
+elias ALL=(root) NOPASSWD: /usr/bin/systemctl start ollama, /usr/bin/systemctl stop ollama, /usr/bin/systemctl restart ollama, /usr/bin/systemctl enable ollama, /usr/bin/systemctl disable ollama, /usr/bin/systemctl status ollama
+```
+
+Boas praticas:
+
+- Troque `elias` pelo seu usuario.
+- Libere so os comandos que voce quer permitir.
+- Evite `NOPASSWD: ALL`.
+- Use `visudo` para validar a regra antes de salvar.
+- Se o app pedir uma acao que voce nao reconhece, pare e confira o comando antes.
+
+## Network mode
+
+- Sem modo rede, o painel local nao exige autenticao.
+- Com modo rede, o painel usa Basic Auth simples com senha unica.
+- O acesso remoto continua sendo uma decisao de risco do usuario.
+- Use senha forte e rede confiavel.
+
+## Memoria e anexos
+
+- Memoria persistente e memoria de chat podem armazenar informacao sensivel.
+- O arquivo exportado pode incluir chats, anexos e memorias.
+- O app faz extracao simples de texto, nao analise de malware.
+- HTML tem scripts removidos do texto extraido, mas isso nao e sandbox completa.
+
+## Caminho de hardening futuro
+
+- Classificacao de risco antes de executar comandos locais.
 - Mascaramento de segredos em logs e UI.
-- Proteção melhor para API keys.
-- Criptografia ou storage protegido para secrets locais.
-- Usuários, permissões, HTTPS e rotação de senha para acesso remoto.
-- Permissões mais granulares por tool.
-- Parsers dedicados e sandbox para PDF/DOCX/OCR.
+- Protecao melhor para API keys.
+- Criptografia para secrets locais.
+- Permissoes mais granulares por tool.
+- Parsers dedicados e sandbox real para arquivos complexos.

@@ -143,3 +143,131 @@ test('groq native search retries compound-mini on request-too-large', async () =
     global.fetch = originalFetch;
   }
 });
+
+test('chat rotation tries alternate model before alternate api key', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url, body, headers: options.headers || {} });
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 429,
+        json: async () => ({ error: { message: 'rate limit on this model' } }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'ok on fallback model' } }],
+      }),
+    };
+  };
+
+  try {
+    const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}-rotation`);
+    const result = await providerClient.callProviderChat({
+      config: {
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        providerSettings: {
+          groq: {
+            baseUrl: 'https://api.groq.com/openai/v1',
+            apiKeys: [{ value: 'key-one' }, { value: 'key-two' }],
+          },
+        },
+        routing: {
+          modelRotationEnabled: true,
+          modelFallbacks: [{ provider: 'groq', model: 'openai/gpt-oss-120b' }],
+          providerRotationEnabled: false,
+        },
+      },
+      messages: [{ role: 'user', content: 'oi' }],
+      tools: [],
+    });
+
+    assert.equal(result.modelUsed, 'openai/gpt-oss-120b');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].body.model, 'llama-3.3-70b-versatile');
+    assert.equal(calls[1].body.model, 'openai/gpt-oss-120b');
+    assert.equal(calls[0].headers.Authorization, 'Bearer key-one');
+    assert.equal(calls[1].headers.Authorization, 'Bearer key-one');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('continue reuses the same prompt and creates a second assistant attempt', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-continue-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url, body });
+    const isFirstCall = calls.length === 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: isFirstCall ? 'Saída parcial' : 'Saída final',
+            },
+            finish_reason: isFirstCall ? 'length' : 'stop',
+          },
+        ],
+        usage: {},
+      }),
+    };
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-continue-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-continue-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+
+    const chat = await store.createChat('Continue test', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const first = await assistant.sendUserMessage(chat.id, 'Faça um rascunho.');
+    assert.equal(first.assistantStatus, 'incomplete');
+    assert.equal(first.assistantMessage.status, 'incomplete');
+    assert.equal(first.assistantMessage.continuationAvailable, true);
+
+    const second = await assistant.sendUserMessage(chat.id, '', {
+      continueMessageId: first.assistantMessage.id,
+    });
+    assert.equal(second.assistantStatus, 'sent');
+    assert.equal(second.assistantMessage.status, 'sent');
+    assert.equal(second.assistantMessage.continuedFromMessageId, first.assistantMessage.id);
+    assert.equal(second.assistantMessage.attemptIndex, 2);
+
+    const reloadedChat = await store.readChat(chat.id);
+    const assistantAttempts = reloadedChat.messages.filter((message) => message.role === 'assistant');
+    assert.equal(assistantAttempts.length, 2);
+    assert.equal(assistantAttempts[0].status, 'incomplete');
+    assert.equal(assistantAttempts[1].status, 'sent');
+    assert.equal(assistantAttempts[0].continuationGroupId, assistantAttempts[1].continuationGroupId);
+    assert.equal(calls.length, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

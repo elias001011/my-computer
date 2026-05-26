@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { getProvider } from './models.js';
+import { getModelMetadata, getProvider } from './models.js';
 import { appendEvent } from './store.js';
 
 const rotationCursors = new Map();
+const modelRotationCursors = new Map();
 const OLLAMA_TAGS_PATH = '/api/tags';
 const OLLAMA_PULL_PATH = '/api/pull';
 
@@ -24,26 +25,23 @@ export async function callProviderChat({
 
   for (const route of routes) {
     const provider = getProvider(route.provider);
-    const selectedModel = String(route.model || provider.defaultModel).trim();
     const runtime = resolveProviderRuntime(config, provider);
-    await appendProviderEvent(chatId, 'provider.request.started', {
+    const models = route.models?.length ? route.models : [String(route.model || provider.defaultModel).trim()];
+    await appendProviderEvent(chatId, 'provider.route.started', {
       provider: provider.id,
-      model: selectedModel,
+      models,
       source: route.source,
       pass: route.pass,
     });
 
     try {
-      if (provider.id === 'ollama') {
-        await ensureOllamaModel(selectedModel, runtime.baseUrl);
-      }
-
       const message =
         provider.adapter === 'anthropic'
-          ? await callWithKeyRotation(
+          ? await callWithModelAndKeyRotation(
               provider,
               runtime,
-              (apiKey) =>
+              models,
+              (apiKey, selectedModel) =>
                 callAnthropicChat({
                   provider,
                   runtime,
@@ -55,13 +53,17 @@ export async function callProviderChat({
                   maxTokens,
                   modelSettings,
                 }),
-              { chatId, model: selectedModel, operation: 'chat' },
+              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true },
             )
-          : await callWithKeyRotation(
+          : await callWithModelAndKeyRotation(
               provider,
               runtime,
-              (apiKey) =>
-                callOpenAICompatibleChat({
+              models,
+              async (apiKey, selectedModel) => {
+                if (provider.id === 'ollama') {
+                  await ensureOllamaModel(selectedModel, runtime.baseUrl);
+                }
+                return callOpenAICompatibleChat({
                   provider,
                   runtime,
                   apiKey,
@@ -71,26 +73,27 @@ export async function callProviderChat({
                   temperature,
                   maxTokens,
                   modelSettings,
-                }),
-              { chatId, model: selectedModel, operation: 'chat' },
+                });
+              },
+              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true },
             );
 
-      await appendProviderEvent(chatId, 'provider.request.completed', {
+      await appendProviderEvent(chatId, 'provider.route.completed', {
         provider: provider.id,
-        model: selectedModel,
+        model: message.modelUsed,
         source: route.source,
         pass: route.pass,
       });
       return {
         ...message,
         providerUsed: provider.id,
-        modelUsed: selectedModel,
+        modelUsed: message.modelUsed || models[0],
       };
     } catch (error) {
       lastError = error;
-      await appendProviderEvent(chatId, 'provider.request.failed', {
+      await appendProviderEvent(chatId, 'provider.route.failed', {
         provider: provider.id,
-        model: selectedModel,
+        models,
         source: route.source,
         pass: route.pass,
         error: error.message,
@@ -269,6 +272,113 @@ async function callWithKeyRotation(provider, runtime, request, options = {}) {
   throw lastError || new Error(`Falha ao chamar ${provider.label}.`);
 }
 
+async function callWithModelAndKeyRotation(provider, runtime, models, request, options = {}) {
+  const apiKeys = runtime.apiKeys.length ? runtime.apiKeys : [''];
+  const keyCursor = rotationCursors.get(provider.id) || 0;
+  const orderedKeys = rotate(apiKeys, keyCursor);
+  const uniqueModels = [...new Set((models || []).map((item) => String(item || '').trim()).filter(Boolean))];
+  const baseModels = uniqueModels.length ? uniqueModels : [provider.defaultModel];
+  const modelCursorKey = `${provider.id}:${options.operation || 'chat'}`;
+  const modelCursor = modelRotationCursors.get(modelCursorKey) || 0;
+  const orderedModels = options.modelRotationEnabled ? rotate(baseModels, modelCursor) : [baseModels[0]];
+  let lastError = null;
+
+  for (let keyAttemptIndex = 0; keyAttemptIndex < orderedKeys.length; keyAttemptIndex += 1) {
+    const apiKey = orderedKeys[keyAttemptIndex];
+    const keyIndex = apiKeys.indexOf(apiKey);
+    const displayKeyIndex = keyIndex >= 0 ? keyIndex + 1 : keyAttemptIndex + 1;
+
+    for (let modelAttemptIndex = 0; modelAttemptIndex < orderedModels.length; modelAttemptIndex += 1) {
+      const selectedModel = orderedModels[modelAttemptIndex];
+      await appendProviderEvent(options.chatId, 'provider.request.started', {
+        provider: provider.id,
+        model: selectedModel,
+        operation: options.operation || 'chat',
+        source: options.source || null,
+        pass: options.pass || null,
+        keyIndex: displayKeyIndex,
+        keyCount: apiKeys.length,
+        modelIndex: modelAttemptIndex + 1,
+        modelCount: orderedModels.length,
+      });
+      await appendProviderEvent(options.chatId, 'provider.key_attempt.started', {
+        provider: provider.id,
+        model: selectedModel,
+        operation: options.operation || 'chat',
+        keyIndex: displayKeyIndex,
+        keyCount: apiKeys.length,
+      });
+
+      try {
+        const message = await request(apiKey, selectedModel);
+        const nextKeyCursor = (apiKeys.indexOf(apiKey) + 1) % apiKeys.length;
+        rotationCursors.set(provider.id, nextKeyCursor);
+        const nextModelCursor = (baseModels.indexOf(selectedModel) + 1) % baseModels.length;
+        modelRotationCursors.set(modelCursorKey, nextModelCursor);
+        await appendProviderEvent(options.chatId, 'provider.key_attempt.completed', {
+          provider: provider.id,
+          model: selectedModel,
+          operation: options.operation || 'chat',
+          keyIndex: displayKeyIndex,
+        });
+        await appendProviderEvent(options.chatId, 'provider.request.completed', {
+          provider: provider.id,
+          model: selectedModel,
+          operation: options.operation || 'chat',
+          source: options.source || null,
+          pass: options.pass || null,
+        });
+        return {
+          ...message,
+          modelUsed: selectedModel,
+        };
+      } catch (error) {
+        lastError = error;
+        await appendProviderEvent(options.chatId, 'provider.key_attempt.failed', {
+          provider: provider.id,
+          model: selectedModel,
+          operation: options.operation || 'chat',
+          keyIndex: displayKeyIndex,
+          statusCode: error.statusCode || null,
+          error: error.message,
+        });
+        await appendProviderEvent(options.chatId, 'provider.request.failed', {
+          provider: provider.id,
+          model: selectedModel,
+          operation: options.operation || 'chat',
+          source: options.source || null,
+          pass: options.pass || null,
+          statusCode: error.statusCode || null,
+          error: error.message,
+        });
+
+        const canTryAnotherModel =
+          options.modelRotationEnabled &&
+          orderedModels.length > 1 &&
+          modelAttemptIndex < orderedModels.length - 1 &&
+          !isAuthError(error) &&
+          shouldTryNextModel(error);
+        if (canTryAnotherModel) {
+          await appendProviderEvent(options.chatId, 'provider.model_attempt.fallback', {
+            provider: provider.id,
+            fromModel: selectedModel,
+            toModel: orderedModels[modelAttemptIndex + 1],
+            operation: options.operation || 'chat',
+            reason: error.message,
+            statusCode: error.statusCode || null,
+          });
+          continue;
+        }
+        break;
+      }
+    }
+
+    if (orderedKeys.length <= 1 || !shouldTryNextKey(lastError)) break;
+  }
+
+  throw lastError || new Error(`Falha ao chamar ${provider.label}.`);
+}
+
 async function callNativeSearchForProvider(provider, runtime, apiKey, model, query, maxResults, chatId = null) {
   if (provider.id === 'groq') {
     return callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId);
@@ -386,11 +496,12 @@ async function callGeminiNativeSearch(provider, runtime, apiKey, model, query, m
 }
 
 async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
+  const searchTool = buildAnthropicWebSearchTool(model, maxResults);
   const body = {
     model,
     max_tokens: 2048,
     messages: [{ role: 'user', content: nativeSearchPrompt(query, maxResults) }],
-    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: Math.max(1, Math.min(Number(maxResults || 5), 8)) }],
+    tools: [searchTool],
   };
   const data = await postJson(`${stripTrailingSlash(runtime.baseUrl)}/messages`, body, {
     'x-api-key': apiKey,
@@ -399,7 +510,7 @@ async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query
   const blocks = Array.isArray(data.content) ? data.content : [];
   return normalizeNativeSearchResult({
     query,
-    method: 'anthropic-web_search_20250305',
+    method: searchTool.type,
     provider: provider.id,
     modelUsed: model,
     content: blocks.filter((block) => block.type === 'text').map((block) => block.text).filter(Boolean).join('\n\n'),
@@ -514,7 +625,11 @@ async function callOpenAICompatibleChat({
     throw error;
   }
 
-  return message;
+  return {
+    ...message,
+    finishReason: data?.choices?.[0]?.finish_reason || null,
+    usage: data.usage || null,
+  };
 }
 
 async function callAnthropicChat({
@@ -535,10 +650,12 @@ async function callAnthropicChat({
     system,
     messages: anthropicMessages,
   };
-  if (modelSettings.topP !== undefined) {
-    body.top_p = Number(modelSettings.topP);
-  } else {
-    body.temperature = Number(modelSettings.temperature ?? temperature);
+  if (model !== 'claude-opus-4-7') {
+    if (modelSettings.topP !== undefined) {
+      body.top_p = Number(modelSettings.topP);
+    } else {
+      body.temperature = Number(modelSettings.temperature ?? temperature);
+    }
   }
   if (modelSettings.stop?.length) body.stop_sequences = modelSettings.stop;
 
@@ -590,6 +707,8 @@ async function callAnthropicChat({
     role: 'assistant',
     content: text,
     tool_calls: toolCalls,
+    finishReason: data.stop_reason || null,
+    usage: data.usage || null,
   };
 }
 
@@ -742,9 +861,20 @@ function buildProviderRoutes(config = {}, requestedProvider, requestedModel) {
     : 1;
   const routes = [];
   for (let pass = 1; pass <= passes; pass += 1) {
-    for (const route of unique) routes.push({ ...route, pass });
+    for (const route of unique) routes.push({ ...route, models: buildRouteModels(config, route.provider, route.model), pass });
   }
   return routes;
+}
+
+function buildRouteModels(config = {}, providerId, primaryModel) {
+  const models = [String(primaryModel || getProvider(providerId).defaultModel).trim()];
+  if (config.routing?.modelRotationEnabled) {
+    for (const fallback of config.routing.modelFallbacks || []) {
+      if (getProvider(fallback.provider).id !== providerId) continue;
+      models.push(String(fallback.model || '').trim());
+    }
+  }
+  return [...new Set(models.filter(Boolean))];
 }
 
 function nativeSearchSupported(providerId) {
@@ -800,6 +930,8 @@ function extractResponsesText(data = {}) {
 function extractResponsesSources(data = {}) {
   const output = Array.isArray(data.output) ? data.output : [];
   const sources = [];
+  if (Array.isArray(data.sources)) sources.push(...data.sources);
+  if (Array.isArray(data.citations)) sources.push(...data.citations);
   for (const item of output) {
     if (Array.isArray(item.action?.sources)) sources.push(...item.action.sources);
     if (Array.isArray(item.sources)) sources.push(...item.sources);
@@ -812,8 +944,8 @@ function extractResponsesSources(data = {}) {
     }
   }
   return sources.map((source) => ({
-    title: source.title || source.url,
-    url: source.url,
+    title: source.title || source.url || source.uri,
+    url: source.url || source.uri,
     snippet: source.snippet || source.text || '',
   }));
 }
@@ -885,9 +1017,16 @@ async function appendProviderEvent(chatId, type, details = {}) {
 }
 
 function applyOpenAICompatibleModelSettings(body, provider, modelSettings = {}, defaults = {}) {
-  body.temperature = Number(modelSettings.temperature ?? defaults.temperature ?? 0.2);
+  const modelId = String(body.model || '').trim();
+  const metadata = getModelMetadata(provider.id, modelId);
+  const reasoningEffort = String(modelSettings.reasoningEffort || '').trim();
+  const suppressSamplingParams = provider.id === 'openai' && Boolean(metadata.supportsReasoning) && reasoningEffort && reasoningEffort !== 'none';
+
+  if (!suppressSamplingParams) {
+    body.temperature = Number(modelSettings.temperature ?? defaults.temperature ?? 0.2);
+    if (modelSettings.topP !== undefined) body.top_p = Number(modelSettings.topP);
+  }
   body.max_tokens = Number(modelSettings.maxTokens || defaults.maxTokens || 2048);
-  if (modelSettings.topP !== undefined) body.top_p = Number(modelSettings.topP);
   if (modelSettings.stop?.length) body.stop = modelSettings.stop;
 
   if (['openai', 'openrouter', 'xai', 'openai-compatible'].includes(provider.id)) {
@@ -896,8 +1035,8 @@ function applyOpenAICompatibleModelSettings(body, provider, modelSettings = {}, 
     if (modelSettings.seed !== undefined) body.seed = Number(modelSettings.seed);
   }
 
-  if (['openai', 'openrouter', 'xai', 'openai-compatible'].includes(provider.id) && modelSettings.reasoningEffort) {
-    body.reasoning_effort = modelSettings.reasoningEffort;
+  if (supportsReasoningEffortParameter(provider.id, modelId) && reasoningEffort) {
+    body.reasoning_effort = reasoningEffort;
   }
 
   if (provider.id === 'ollama' && modelSettings.seed !== undefined) {
@@ -941,6 +1080,32 @@ function shouldTryNextKey(error) {
   const status = Number(error.statusCode || 0);
   if (!status) return true;
   return [401, 403, 408, 409, 425, 429].includes(status) || status >= 500;
+}
+
+function shouldTryNextModel(error) {
+  const status = Number(error?.statusCode || 0);
+  if (!status) return true;
+  return [400, 404, 408, 409, 413, 422, 425, 429].includes(status) || status >= 500;
+}
+
+function isAuthError(error) {
+  return [401, 403].includes(Number(error?.statusCode || 0));
+}
+
+function supportsReasoningEffortParameter(providerId, model) {
+  const metadata = getModelMetadata(providerId, model);
+  if (metadata.supportsReasoning) return true;
+  return providerId === 'openai-compatible';
+}
+
+function buildAnthropicWebSearchTool(model, maxResults) {
+  const latestModels = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6'];
+  const type = latestModels.includes(String(model || '')) ? 'web_search_20260209' : 'web_search_20250305';
+  return {
+    type,
+    name: 'web_search',
+    max_uses: Math.max(1, Math.min(Number(maxResults || 5), 8)),
+  };
 }
 
 function parseToolArguments(value) {

@@ -27,10 +27,13 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
   assert.equal(config.tools.alwaysAllow, false);
   assert.equal(config.tools.terminalMode, 'standard');
+  assert.equal(config.tools.deepInvestigation, false);
   assert.equal(config.tools.searchTerminal, false);
   assert.equal(config.tools.searchMode, 'native');
   assert.equal(config.context.autoCompactEnabled, false);
   assert.equal(config.context.autoCompactChars, 24000);
+  assert.equal(config.routing.modelRotationEnabled, false);
+  assert.deepEqual(config.routing.modelFallbacks, []);
   assert.equal(config.routing.providerRotationEnabled, false);
   assert.equal(config.routing.maxProviderPasses, 2);
   assert.equal(config.server.networkEnabled, false);
@@ -40,9 +43,11 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   await store.saveConfig({
     technicalLevel: 'beginner',
     technicalGuidanceEnabled: false,
-    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchMode: 'both' },
+    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchMode: 'both', deepInvestigation: true },
     context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
     routing: {
+      modelRotationEnabled: true,
+      modelFallbacks: [{ provider: 'groq', model: 'openai/gpt-oss-120b' }],
       providerRotationEnabled: true,
       maxProviderPasses: 3,
       fallbacks: [{ provider: 'gemini', model: 'gemini-2.5-flash' }],
@@ -54,11 +59,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(securityConfig.technicalGuidanceEnabled, false);
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
+  assert.equal(securityConfig.tools.deepInvestigation, true);
   assert.equal(securityConfig.tools.searchMode, 'both');
   assert.equal(securityConfig.tools.searchTerminal, true);
   assert.equal(securityConfig.context.autoCompactEnabled, true);
   assert.equal(securityConfig.context.autoCompactChars, 32000);
   assert.equal(securityConfig.context.autoCompactMinMessages, 5);
+  assert.equal(securityConfig.routing.modelRotationEnabled, true);
+  assert.deepEqual(securityConfig.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(securityConfig.routing.providerRotationEnabled, true);
   assert.equal(securityConfig.routing.maxProviderPasses, 3);
   assert.deepEqual(securityConfig.routing.fallbacks, [{ provider: 'gemini', model: 'gemini-2.5-flash' }]);

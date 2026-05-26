@@ -33,33 +33,33 @@ import {
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
 const MAX_TOOL_ROUNDS = 4;
+const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 8;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
+const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
 
 export async function sendUserMessage(chatId, content, options = {}) {
   const config = await loadConfig();
   const trimmed = String(content || '').trim();
-  if (!trimmed) {
+  if (!trimmed && !options.retryMessageId && !options.continueMessageId) {
     const error = new Error('Mensagem vazia.');
     error.statusCode = 400;
     throw error;
   }
 
   const chatBefore = await readChat(chatId);
-  const selectedAttachments = await resolveMessageAttachments(chatBefore, options);
-  const userMessage = await saveUserMessageForRequest(
-    chatId,
-    chatBefore,
-    trimmed,
-    options.retryMessageId,
-    selectedAttachments,
-  );
-  const chatWithUserMessage = await readChat(chatId);
-  const chat = {
-    ...chatWithUserMessage,
-    messages: chatWithUserMessage.messages.map((message) =>
-      message.id === userMessage.id ? { ...message, status: 'sent', error: undefined } : message,
-    ),
-  };
+  const requestSource = resolveRequestSourceMessage(chatBefore, options);
+  const selectedAttachments = requestSource?.sourceUserMessage?.attachments || (await resolveMessageAttachments(chatBefore, options));
+  const userMessage = requestSource?.sourceUserMessage
+    ? await saveUserMessageForRequest(chatId, chatBefore, trimmed || requestSource.sourceUserMessage.content || '', requestSource.sourceUserMessage.id, selectedAttachments)
+    : await saveUserMessageForRequest(chatId, chatBefore, trimmed, options.retryMessageId, selectedAttachments);
+  if (userMessage.status !== 'sent') {
+    await updateMessage(chatId, userMessage.id, {
+      status: 'sent',
+      error: null,
+      sentAt: new Date().toISOString(),
+    });
+  }
+  const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
   const effectiveConfig = {
     ...config,
@@ -68,16 +68,31 @@ export async function sendUserMessage(chatId, content, options = {}) {
     modelSettings: chat.modelSettings || {},
   };
   const toolUses = [];
+  const executionTrace = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
-  let finalContent = '';
   let providerUsed = effectiveConfig.provider;
   let modelUsed = effectiveConfig.model;
+  const continuationGroupId = getMessageContinuationGroupId(userMessage);
+  const attemptIndex = getNextAssistantAttemptIndex(chat.messages, continuationGroupId);
+  const continuationReason = requestSource?.continuationReason || 'initial';
+  const continuationMode = requestSource?.continuationMode || 'initial';
+  const sourceAssistantMessage = requestSource?.sourceAssistantMessage || null;
+  const retryOfMessageId = continuationMode === 'retry' ? sourceAssistantMessage?.id || null : null;
+  const continuedFromMessageId = continuationMode === 'continue' ? sourceAssistantMessage?.id || null : null;
+  const titleSeed = trimmed || userMessage.content || '';
+  let assistantOutcome = null;
 
   try {
     const workingMessages = await buildProviderMessages(chat, effectiveConfig, persistentMemory, {
       strictImageSupportForMessageId: userMessage.id,
     });
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    if (continuationMode === 'continue') {
+      workingMessages.push({
+        role: 'user',
+        content: buildContinuationPrompt(userMessage, sourceAssistantMessage),
+      });
+    }
+    for (let round = 0; round < getMaxToolRounds(effectiveConfig); round += 1) {
       const assistantMessage = await callProviderChat({
         config: effectiveConfig,
         provider: effectiveConfig.provider,
@@ -91,8 +106,18 @@ export async function sendUserMessage(chatId, content, options = {}) {
       modelUsed = assistantMessage.modelUsed || modelUsed;
 
       const toolCalls = normalizeAssistantToolCalls(assistantMessage.tool_calls || [], assistantMessage.content, effectiveConfig.tools);
+      if (toolCalls.length || assistantMessage.content) {
+        executionTrace.push(createAssistantTraceEntry(assistantMessage, toolCalls, round + 1, 'tool_round'));
+      }
       if (!toolCalls.length) {
-        finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '');
+        const finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '');
+        assistantOutcome = {
+          status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
+          content: finalContent || (isIncompleteFinishReason(assistantMessage.finishReason) ? 'A resposta foi interrompida antes de concluir.' : 'Terminei a execução, mas não recebi texto final.'),
+          finishReason: assistantMessage.finishReason || null,
+          continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
+          error: null,
+        };
         break;
       }
 
@@ -108,23 +133,37 @@ export async function sendUserMessage(chatId, content, options = {}) {
         for (const toolCall of safeToolCalls) {
           const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
           toolUses.push(toolUse);
+          executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
           if (toolUse.name === 'web_search' && toolUse.result?.error && toolUse.result?.method === 'native') {
-            finalContent = renderToolFailureMessage(toolUse);
+            assistantOutcome = {
+              status: 'incomplete',
+              content: renderToolFailureMessage(toolUse),
+              finishReason: assistantMessage.finishReason || null,
+              continuationAvailable: true,
+              error: toolUse.result?.error || 'Falha na busca web nativa.',
+            };
             break;
           }
         }
-        if (finalContent) break;
+        if (assistantOutcome) break;
         if (!approvalToolCalls.length) continue;
 
         if (chatBefore.title === 'Novo chat' && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
-          await updateChatMetadata(chatId, { title: trimmed });
+          await updateChatMetadata(chatId, { title: titleSeed });
         }
         const pendingAssistantMessage = createToolApprovalMessage(assistantMessage, toolCalls, workingMessages, effectiveConfig, {
           preapprovedToolUses: safeToolCalls.map((toolCall) => toolUses.find((toolUse) => toolUse.id === toolCall.id)).filter(Boolean),
           approvalToolCalls,
+          executionTrace,
           providerUsed,
           modelUsed,
+          sourceUserMessage: userMessage,
+          continuationGroupId,
+          attemptIndex,
+          continuationReason,
+          retryOfMessageId,
+          continuedFromMessageId,
         });
         await appendMessages(chatId, [pendingAssistantMessage]);
         await updateMessage(chatId, userMessage.id, {
@@ -137,12 +176,18 @@ export async function sendUserMessage(chatId, content, options = {}) {
           chatId,
           details: {
             messageId: pendingAssistantMessage.id,
+            sourceUserMessageId: userMessage.id,
+            groupId: continuationGroupId,
+            attemptIndex,
+            continuationReason,
+            retryOfMessageId,
+            continuedFromMessageId,
             toolCount: approvalToolCalls.length,
             tools: approvalToolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
           },
         });
-        return {
-          userMessage,
+      return {
+        userMessage,
           assistantMessage: pendingAssistantMessage,
           awaitingApproval: true,
           chat: await readChat(chatId),
@@ -152,20 +197,33 @@ export async function sendUserMessage(chatId, content, options = {}) {
       for (const toolCall of toolCalls) {
         const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
         toolUses.push(toolUse);
+        executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
         if (toolUse.name === 'web_search' && toolUse.result?.error && toolUse.result?.method === 'native') {
-          finalContent = renderToolFailureMessage(toolUse);
+          assistantOutcome = {
+            status: 'incomplete',
+            content: renderToolFailureMessage(toolUse),
+            finishReason: assistantMessage.finishReason || null,
+            continuationAvailable: true,
+            error: toolUse.result?.error || 'Falha na busca web nativa.',
+          };
           break;
         }
       }
-      if (finalContent) break;
+      if (assistantOutcome) break;
       if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
-        finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'Ação executada.';
+        assistantOutcome = {
+          status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
+          content: sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'Ação executada.',
+          finishReason: assistantMessage.finishReason || null,
+          continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
+          error: null,
+        };
         break;
       }
     }
 
-    if (!finalContent) {
+    if (!assistantOutcome) {
       try {
         const assistantMessage = await callProviderChat({
           config: effectiveConfig,
@@ -178,55 +236,102 @@ export async function sendUserMessage(chatId, content, options = {}) {
         });
         providerUsed = assistantMessage.providerUsed || providerUsed;
         modelUsed = assistantMessage.modelUsed || modelUsed;
-        finalContent =
-          sanitizeAssistantToolLikeText(assistantMessage.content || '') ||
-          'Terminei a execução das tools, mas não recebi texto final.';
+        executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
+        const finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '');
+        assistantOutcome = {
+          status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
+          content: finalContent || 'Terminei a execução das tools, mas não recebi texto final.',
+          finishReason: assistantMessage.finishReason || null,
+          continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
+          error: null,
+        };
       } catch (error) {
         const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
-        if (!searchToolUse) throw error;
-        finalContent = renderWebSearchFallbackAnswer(searchToolUse, error.message);
+        if (searchToolUse) {
+          assistantOutcome = {
+            status: 'incomplete',
+            content: renderWebSearchFallbackAnswer(searchToolUse, error.message),
+            finishReason: null,
+            continuationAvailable: true,
+            error: error.message,
+          };
+        } else {
+          assistantOutcome = {
+            status: 'failed',
+            content: 'A execução falhou antes de concluir. Use Tentar novamente para recomeçar ou Continuar para retomar do último estado útil.',
+            finishReason: null,
+            continuationAvailable: true,
+            error: error.message || 'Erro ao gerar resposta.',
+          };
+        }
       }
     }
   } catch (error) {
-    await updateMessage(chatId, userMessage.id, {
+    assistantOutcome = assistantOutcome || {
       status: 'failed',
+      content: 'A execução falhou antes de concluir. Use Tentar novamente para recomeçar ou Continuar para retomar do último estado útil.',
+      finishReason: null,
+      continuationAvailable: true,
       error: error.message || 'Erro ao gerar resposta.',
-      failedAt: new Date().toISOString(),
-    });
-    await appendEvent({
-      type: 'chat.message.failed',
-      chatId,
-      details: { messageId: userMessage.id, error: error.message },
-    });
-    throw error;
+    };
   }
 
-  if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat')) {
-    await updateChatMetadata(chatId, { title: trimmed });
+  if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat') && titleSeed) {
+    await updateChatMetadata(chatId, { title: titleSeed });
   }
 
-  const savedAssistantMessage = createMessage('assistant', finalContent, {
-    modelUsed,
+  const savedAssistantMessage = buildAssistantAttemptMessage({
+    sourceUserMessage: userMessage,
+    content: assistantOutcome.content,
+    status: assistantOutcome.status,
     providerUsed,
+    modelUsed,
     toolUses,
-  });
-  await updateMessage(chatId, userMessage.id, {
-    status: 'sent',
-    error: null,
-    sentAt: new Date().toISOString(),
+    executionTrace: executionTrace.length ? executionTrace : [],
+    finishReason: assistantOutcome.finishReason,
+    error: assistantOutcome.error,
+    continuationAvailable: assistantOutcome.continuationAvailable,
+    continuationReason,
+    continuationGroupId,
+    attemptIndex,
+    retryOfMessageId,
+    continuedFromMessageId,
   });
   await appendMessages(chatId, [savedAssistantMessage]);
+  await appendEvent({
+    type:
+      assistantOutcome.status === 'sent'
+        ? 'chat.message.completed'
+        : assistantOutcome.status === 'incomplete'
+          ? 'chat.message.incomplete'
+          : 'chat.message.failed',
+    chatId,
+    details: {
+      messageId: savedAssistantMessage.id,
+      sourceUserMessageId: userMessage.id,
+      groupId: continuationGroupId,
+      attemptIndex,
+      status: assistantOutcome.status,
+      continuationReason,
+      retryOfMessageId,
+      continuedFromMessageId,
+      toolCount: toolUses.length,
+      finishReason: assistantOutcome.finishReason || null,
+      continuationAvailable: assistantOutcome.continuationAvailable,
+    },
+  });
 
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
   const autoCompact = await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
-  await appendEvent({ type: 'chat.message.completed', chatId, details: { toolCount: toolUses.length } });
 
   return {
     userMessage,
     assistantMessage: savedAssistantMessage,
     autoCompact,
+    continuationAvailable: assistantOutcome.continuationAvailable,
+    assistantStatus: assistantOutcome.status,
     chat: await readChat(chatId),
   };
 }
@@ -308,13 +413,31 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
   const workingMessages = pendingState.providerMessages || [];
   const toolCalls = pendingState.toolCalls || approvalToolCalls;
   const toolUses = [...(pendingState.preapprovedToolUses || [])];
+  const executionTrace = [...(pendingState.executionTrace || [])];
+  let providerUsed = pendingMessage.providerUsed || effectiveConfig.provider;
+  let modelUsed = pendingMessage.modelUsed || effectiveConfig.model;
+  const sourceUserMessage =
+    currentChat.messages.find((message) => message.id === pendingState.sourceUserMessageId && message.role === 'user') ||
+    findPreviousUserMessage(currentChat.messages, pendingMessage);
+  const continuationGroupId = pendingState.continuationGroupId || getMessageContinuationGroupId(sourceUserMessage);
+  const attemptIndex = Number(pendingState.attemptIndex || pendingMessage.attemptIndex || 1);
 
   await updateMessage(chatId, messageId, {
     status: 'running_tools',
     content: pendingMessage.content || 'Executando tools aprovadas e registrando negativas...',
     toolUses: interimToolUses,
   });
-  await appendEvent({ type: 'tool.approval.completed', chatId, details: { messageId, toolCount: approvalToolCalls.length } });
+  await appendEvent({
+    type: 'tool.approval.completed',
+    chatId,
+    details: {
+      messageId,
+      sourceUserMessageId: sourceUserMessage?.id || null,
+      groupId: continuationGroupId,
+      attemptIndex,
+      toolCount: approvalToolCalls.length,
+    },
+  });
 
   for (const toolCall of toolCalls) {
     if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
@@ -323,100 +446,432 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
         ? await executeToolCall(chatId, toolCall, effectiveConfig)
         : createDeniedToolUse(toolCall);
     toolUses.push(toolUse);
+    executionTrace.push(createToolTraceEntry(toolUse));
     appendToolResultForModel(workingMessages, toolCall, toolUse);
   }
 
   const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
   if (!toolOutputsRequested) {
+    const hasToolErrors = toolUses.some((toolUse) => toolUse.status !== 'denied' && toolUse.result?.error);
+    const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
+    const finalContent =
+      finalStatus === 'incomplete'
+        ? sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'A execução foi interrompida antes do final.'
+        : sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'Ação de tool concluída.';
+    const finalTimestamp = new Date().toISOString();
     await updateMessage(chatId, messageId, {
-      status: 'sent',
-      content: sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'Ação de tool concluída.',
+      status: finalStatus,
+      content: finalContent,
       toolUses,
+      executionTrace: executionTrace.length ? executionTrace : null,
       pendingToolApproval: null,
       modelUsed: pendingMessage.modelUsed || effectiveConfig.model,
       providerUsed: pendingMessage.providerUsed || effectiveConfig.provider,
+      finishReason: pendingMessage.finishReason || null,
+      continuationAvailable: finalStatus !== 'sent',
+      error: hasToolErrors ? 'Uma das tools aprovadas falhou.' : null,
+      completedAt: finalStatus === 'sent' ? finalTimestamp : undefined,
+      failedAt: finalStatus === 'failed' ? finalTimestamp : undefined,
+      interruptedAt: finalStatus === 'incomplete' ? finalTimestamp : undefined,
     });
-    await appendEvent({ type: 'chat.message.completed', chatId, details: { approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length, skippedFollowup: true } });
+    await appendEvent({
+      type: finalStatus === 'sent' ? 'chat.message.completed' : 'chat.message.incomplete',
+      chatId,
+      details: {
+        messageId,
+        sourceUserMessageId: sourceUserMessage?.id || null,
+        groupId: continuationGroupId,
+        attemptIndex,
+        approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
+        skippedFollowup: true,
+        status: finalStatus,
+      },
+    });
+    const updatedChat = await readChat(chatId);
+    const latestPersistentMemory = await readPersistentMemory();
+    await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
+    await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
     return { chat: await readChat(chatId) };
   }
 
-  const assistantMessage = await callProviderChat({
-    config: effectiveConfig,
-    provider: effectiveConfig.provider,
-    model: effectiveConfig.model,
-    messages: workingMessages,
-    tools: [],
-    modelSettings: effectiveConfig.modelSettings,
-    chatId,
-  });
-  const finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'Tools executadas, mas o provider não retornou texto final.';
+  let finalStatus = 'sent';
+  let finalContent = '';
+  let finalError = null;
+  let finalFinishReason = null;
+
+  try {
+    const assistantMessage = await callProviderChat({
+      config: effectiveConfig,
+      provider: effectiveConfig.provider,
+      model: effectiveConfig.model,
+      messages: workingMessages,
+      tools: [],
+      modelSettings: effectiveConfig.modelSettings,
+      chatId,
+    });
+    finalFinishReason = assistantMessage.finishReason || null;
+    finalStatus = isIncompleteFinishReason(finalFinishReason) ? 'incomplete' : 'sent';
+    finalContent =
+      sanitizeAssistantToolLikeText(assistantMessage.content || '') ||
+      (finalStatus === 'incomplete'
+        ? 'Tools executadas, mas o provider interrompeu a resposta antes do final.'
+        : 'Tools executadas, mas o provider não retornou texto final.');
+    providerUsed = assistantMessage.providerUsed || effectiveConfig.provider;
+    modelUsed = assistantMessage.modelUsed || effectiveConfig.model;
+    executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
+  } catch (error) {
+    const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
+    if (searchToolUse) {
+      finalStatus = 'incomplete';
+      finalContent = renderWebSearchFallbackAnswer(searchToolUse, error.message);
+      finalError = error.message;
+    } else {
+      finalStatus = 'failed';
+      finalContent = sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'A execução falhou antes de concluir.';
+      finalError = error.message || 'Erro ao finalizar a resposta.';
+    }
+  }
+
+  const finalTimestamp = new Date().toISOString();
   await updateMessage(chatId, messageId, {
-    status: 'sent',
+    status: finalStatus,
     content: finalContent,
     toolUses,
+    executionTrace: executionTrace.length ? executionTrace : null,
     pendingToolApproval: null,
-    modelUsed: assistantMessage.modelUsed || effectiveConfig.model,
-    providerUsed: assistantMessage.providerUsed || effectiveConfig.provider,
+    modelUsed: modelUsed || effectiveConfig.model,
+    providerUsed: providerUsed || effectiveConfig.provider,
+    finishReason: finalFinishReason,
+    continuationAvailable: finalStatus !== 'sent',
+    error: finalError,
+    completedAt: finalStatus === 'sent' ? finalTimestamp : undefined,
+    failedAt: finalStatus === 'failed' ? finalTimestamp : undefined,
+    interruptedAt: finalStatus === 'incomplete' ? finalTimestamp : undefined,
   });
 
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
   await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
-  await appendEvent({ type: 'chat.message.completed', chatId, details: { approvedToolCount: toolUses.length } });
+  await appendEvent({
+    type: finalStatus === 'sent' ? 'chat.message.completed' : finalStatus === 'incomplete' ? 'chat.message.incomplete' : 'chat.message.failed',
+    chatId,
+    details: {
+      messageId,
+      sourceUserMessageId: sourceUserMessage?.id || null,
+      groupId: continuationGroupId,
+      attemptIndex,
+      status: finalStatus,
+      approvedToolCount: toolUses.length,
+      finishReason: finalFinishReason,
+      error: finalError,
+    },
+  });
   return { chat: await readChat(chatId) };
 }
 
 function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages, config, options = {}) {
   const preapprovedToolUses = options.preapprovedToolUses || [];
   const approvalToolCalls = options.approvalToolCalls || toolCalls;
+  const sourceUserMessage = options.sourceUserMessage || null;
+  const toolUses = [
+    ...preapprovedToolUses,
+    ...approvalToolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.function?.name || 'unknown_tool',
+      input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
+      status: 'pending_approval',
+      approvalRequired: true,
+      result: { action: 'pending_approval' },
+      createdAt: new Date().toISOString(),
+    })),
+  ];
   return createMessage(
     'assistant',
     sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'A IA solicitou uma tool e está aguardando aprovação.',
     {
       status: 'needs_tool_approval',
+      sourceUserMessageId: sourceUserMessage?.id || null,
+      continuationGroupId: options.continuationGroupId || getMessageContinuationGroupId(sourceUserMessage),
+      attemptIndex: options.attemptIndex || 1,
+      continuationReason: options.continuationReason || 'initial',
+      continuationAvailable: true,
+      retryOfMessageId: options.retryOfMessageId || null,
+      continuedFromMessageId: options.continuedFromMessageId || null,
       modelUsed: options.modelUsed || assistantMessage.modelUsed || config.model,
       providerUsed: options.providerUsed || assistantMessage.providerUsed || config.provider,
-      toolUses: [
-        ...preapprovedToolUses,
-        ...approvalToolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          name: toolCall.function?.name || 'unknown_tool',
-          input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
-          status: 'pending_approval',
-          approvalRequired: true,
-          result: { action: 'pending_approval' },
-          createdAt: new Date().toISOString(),
-        })),
-      ],
+      toolUses,
       pendingToolApproval: {
         toolCalls,
         approvalToolCalls,
         providerMessages,
         preapprovedToolUses,
+        executionTrace: options.executionTrace || [],
         decisions: {},
+        sourceUserMessageId: sourceUserMessage?.id || null,
+        continuationGroupId: options.continuationGroupId || getMessageContinuationGroupId(sourceUserMessage),
+        attemptIndex: options.attemptIndex || 1,
+        continuationReason: options.continuationReason || 'initial',
+        retryOfMessageId: options.retryOfMessageId || null,
+        continuedFromMessageId: options.continuedFromMessageId || null,
       },
+      executionTrace: options.executionTrace?.length ? options.executionTrace : undefined,
     },
   );
 }
 
+function createAssistantTraceEntry(assistantMessage, toolCalls = [], round = 1, phase = 'tool_round') {
+  return {
+    type: 'assistant_output',
+    phase,
+    round,
+    provider: assistantMessage.providerUsed || null,
+    model: assistantMessage.modelUsed || null,
+    content: truncate(sanitizeAssistantToolLikeText(assistantMessage.content || ''), 12000),
+    toolCalls: toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      name: toolCall.function?.name || 'unknown_tool',
+      input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
+    })),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createToolTraceEntry(toolUse) {
+  return {
+    type: 'tool_result',
+    toolUse,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function getMaxToolRounds(config = {}) {
+  return config.tools?.deepInvestigation ? MAX_DEEP_INVESTIGATION_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+}
+
+function getMessageContinuationGroupId(message = {}) {
+  return message.continuationGroupId || message.sourceUserMessageId || message.id || null;
+}
+
+function findPreviousUserMessage(messages = [], referenceMessage = null) {
+  if (!referenceMessage) return null;
+  const index = messages.findIndex((message) => message.id === referenceMessage.id);
+  if (index === -1) return null;
+  for (let currentIndex = index - 1; currentIndex >= 0; currentIndex -= 1) {
+    const candidate = messages[currentIndex];
+    if (candidate?.role === 'user') return candidate;
+  }
+  return null;
+}
+
+function resolveRetrySourceMessage(chat, retryMessageId) {
+  if (!retryMessageId) return null;
+  const directMessage = chat.messages.find((message) => message.id === retryMessageId);
+  if (!directMessage) return null;
+  if (directMessage.role === 'user') {
+    return {
+      sourceUserMessage: directMessage,
+      sourceAssistantMessage: null,
+      continuationReason: 'retry',
+      continuationMode: 'retry',
+    };
+  }
+
+  if (directMessage.role === 'assistant') {
+    const sourceUserMessage =
+      chat.messages.find((message) => message.id === directMessage.sourceUserMessageId && message.role === 'user') ||
+      findPreviousUserMessage(chat.messages, directMessage);
+    if (!sourceUserMessage) return null;
+    return {
+      sourceUserMessage,
+      sourceAssistantMessage: directMessage,
+      continuationReason: 'retry',
+      continuationMode: 'retry',
+    };
+  }
+
+  return null;
+}
+
+function resolveContinuationTargetMessage(chat, continueMessageId) {
+  if (!continueMessageId) return null;
+  const targetMessage = chat.messages.find((message) => message.id === continueMessageId && message.role === 'assistant');
+  if (!targetMessage) return null;
+  const sourceUserMessage =
+    chat.messages.find((message) => message.id === targetMessage.sourceUserMessageId && message.role === 'user') ||
+    findPreviousUserMessage(chat.messages, targetMessage);
+  if (!sourceUserMessage) return null;
+  return {
+    sourceUserMessage,
+    sourceAssistantMessage: targetMessage,
+    continuationReason: 'continue',
+    continuationMode: 'continue',
+  };
+}
+
+function resolveRequestSourceMessage(chat, options = {}) {
+  if (options.continueMessageId) return resolveContinuationTargetMessage(chat, options.continueMessageId);
+  if (options.retryMessageId) return resolveRetrySourceMessage(chat, options.retryMessageId);
+  return null;
+}
+
+function getAssistantAttempts(messages = [], groupId) {
+  if (!groupId) return [];
+  return messages
+    .filter((message) => message.role === 'assistant' && getMessageContinuationGroupId(message) === groupId)
+    .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+}
+
+function getNextAssistantAttemptIndex(messages = [], groupId) {
+  return getAssistantAttempts(messages, groupId).length + 1;
+}
+
+function isIncompleteFinishReason(finishReason) {
+  return INCOMPLETE_FINISH_REASONS.has(String(finishReason || '').trim().toLowerCase());
+}
+
+function getLatestAssistantOutputContent(message = {}) {
+  const trace = Array.isArray(message.executionTrace) ? [...message.executionTrace].reverse() : [];
+  for (const entry of trace) {
+    if (entry.type === 'assistant_output' && String(entry.content || '').trim()) {
+      return sanitizeAssistantToolLikeText(entry.content || '');
+    }
+  }
+  return sanitizeAssistantToolLikeText(message.content || '');
+}
+
+function summarizeAssistantAttempt(message = {}, options = {}) {
+  const lines = [];
+  const content = getLatestAssistantOutputContent(message);
+  const maxChars = Number(options.maxChars || 6000);
+  if (content) {
+    lines.push('## Saída parcial');
+    lines.push(truncate(content, 3000));
+  }
+  if (message.finishReason) {
+    lines.push('');
+    lines.push(`Motivo do término: ${message.finishReason}`);
+  }
+  if (message.error) {
+    lines.push(`Erro: ${message.error}`);
+  }
+
+  const trace = Array.isArray(message.executionTrace) ? message.executionTrace : [];
+  const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
+  if (trace.length || toolUses.length) {
+    lines.push('');
+    lines.push('## Histórico da execução');
+    for (const entry of trace) {
+      if (entry.type === 'assistant_output') {
+        const meta = [entry.phase, entry.round ? `rodada ${entry.round}` : null].filter(Boolean).join(' · ');
+        lines.push(`- IA${meta ? ` (${meta})` : ''}: ${truncate(entry.content || 'sem texto', 1200)}`);
+        for (const toolCall of Array.isArray(entry.toolCalls) ? entry.toolCalls : []) {
+          lines.push(`  - Tool solicitada: ${toolCall.name} ${truncate(JSON.stringify(toolCall.input || {}, null, 2), 800)}`);
+        }
+        continue;
+      }
+      if (entry.type === 'tool_result') {
+        const toolUse = entry.toolUse || {};
+        const toolName = toolUse.name || 'unknown_tool';
+        const resultPreview = truncate(JSON.stringify(toolUse.result || {}, null, 2), 1200);
+        lines.push(`- Tool ${toolName}: ${resultPreview}`);
+      }
+    }
+    if (!trace.length) {
+      for (const toolUse of toolUses) {
+        const toolName = toolUse.name || 'unknown_tool';
+        const resultPreview = truncate(JSON.stringify(toolUse.result || {}, null, 2), 1200);
+        lines.push(`- Tool ${toolName}: ${resultPreview}`);
+      }
+    }
+  }
+
+  return truncate(lines.join('\n'), maxChars);
+}
+
+function buildContinuationPrompt(sourceUserMessage, sourceAssistantMessage) {
+  return [
+    'Você já estava executando essa tarefa e a resposta anterior não chegou ao final.',
+    'Continue a partir do ponto em que parou, sem repetir etapas já concluídas.',
+    'O pedido original já está no histórico do chat; foque só em avançar o trabalho.',
+    '',
+    '## Última saída parcial',
+    getLatestAssistantOutputContent(sourceAssistantMessage) || 'Nenhuma saída parcial foi registrada.',
+    '',
+    '## Histórico imediato da execução',
+    summarizeAssistantAttempt(sourceAssistantMessage, { maxChars: 12000 }) || 'Sem histórico adicional.',
+    '',
+    'Se precisar, use tools novas. Preserve o estado já obtido e produza a próxima etapa útil.',
+  ].join('\n');
+}
+
+function buildAssistantAttemptMessage({
+  sourceUserMessage,
+  content,
+  status,
+  providerUsed,
+  modelUsed,
+  toolUses = [],
+  executionTrace = [],
+  finishReason = null,
+  error = null,
+  continuationAvailable = false,
+  continuationReason = 'initial',
+  continuationGroupId = null,
+  attemptIndex = 1,
+  retryOfMessageId = null,
+  continuedFromMessageId = null,
+  pendingToolApproval = null,
+}) {
+  const safeContent = sanitizeAssistantToolLikeText(content || '');
+  const timestamp = new Date().toISOString();
+  const groupId = continuationGroupId || getMessageContinuationGroupId(sourceUserMessage);
+  const completed = status !== 'needs_tool_approval';
+  return createMessage('assistant', safeContent, {
+    status,
+    sourceUserMessageId: sourceUserMessage?.id || null,
+    continuationGroupId: groupId,
+    attemptIndex,
+    continuationReason,
+    continuationAvailable: Boolean(continuationAvailable),
+    retryOfMessageId: retryOfMessageId || null,
+    continuedFromMessageId: continuedFromMessageId || null,
+    providerUsed: providerUsed || null,
+    modelUsed: modelUsed || null,
+    toolUses,
+    executionTrace: executionTrace.length ? executionTrace : undefined,
+    pendingToolApproval,
+    finishReason: finishReason || null,
+    error: error ? String(error) : null,
+    completedAt: completed ? timestamp : undefined,
+    failedAt: status === 'failed' ? timestamp : undefined,
+    interruptedAt: status === 'incomplete' ? timestamp : undefined,
+  });
+}
+
 async function saveUserMessageForRequest(chatId, chat, content, retryMessageId, attachments = []) {
   if (retryMessageId) {
-    const existing = chat.messages.find((message) => message.id === retryMessageId && message.role === 'user');
+    const source = resolveRetrySourceMessage(chat, retryMessageId);
+    const existing = source?.sourceUserMessage;
     if (!existing) {
       const error = new Error('Mensagem para retry não encontrada.');
       error.statusCode = 404;
       throw error;
     }
 
-    return updateMessage(chatId, retryMessageId, {
-      content: existing.content || content,
-      attachments: existing.attachments || [],
-      status: 'pending',
-      error: null,
-      retryCount: Number(existing.retryCount || 0) + 1,
-      retriedAt: new Date().toISOString(),
-    });
+    if (existing.status === 'failed' || existing.status === 'pending' || existing.status === 'incomplete') {
+      return updateMessage(chatId, existing.id, {
+        content: existing.content || content,
+        attachments: existing.attachments || [],
+        status: 'sent',
+        error: null,
+        retryCount: Number(existing.retryCount || 0) + 1,
+        retriedAt: new Date().toISOString(),
+        sentAt: new Date().toISOString(),
+      });
+    }
+
+    return existing;
   }
 
   const userMessage = createMessage('user', content, {
@@ -595,9 +1050,18 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     buildTechnicalLevelInstruction(config),
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
     'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
+    'If you cannot finish cleanly, do not pretend the answer is complete. Stop with the best partial state you have; the UI will keep that attempt and expose a Continue action.',
     config.tools?.terminal
-      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. Do not retry a failing or rate-limited command repeatedly.'
+      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
+    config.tools?.deepInvestigation
+      ? [
+          'Deep investigation mode is enabled. For requests about the user machine, code, installed software, configuration, logs, scripts, provider behavior, or anything that can be inspected locally, investigate before answering.',
+          'Prefer several read-only tool calls across multiple rounds when the first result is incomplete: locate entry points, inspect referenced files/scripts/configs, and follow the chain until you understand the mechanism.',
+          'Do not ask the user to run commands that you can run with available tools. Keep risky or system-changing commands separate from inspection and explain them before choosing them.',
+          'If a tool produces useful stdout/stderr or search results, use that output in the next reasoning step before giving the final answer.',
+        ].join('\n')
+      : '',
     config.tools?.terminalMode === 'isolated'
       ? 'Terminal mode is soft-isolated: commands run from a My Computer sandbox HOME. This is not a full VM/container isolation; absolute paths can still touch the host.'
       : 'Terminal mode is standard: commands run on the user machine with the normal user environment.',
@@ -606,7 +1070,7 @@ function buildSystemPrompt(chat, config, persistentMemory) {
       : 'The user disabled automatic tool execution. The app may ask the user to approve a tool before it actually runs.',
     'For every tool call, set returnOutput to true only when you need the tool result to continue reasoning. Use returnOutput false for pure side effects such as rename_chat, successful memory writes, or compacting when you do not need the summary.',
     getSearchMode(config.tools) !== 'off'
-      ? `Use web_search when current or source-backed information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means local terminal search, and both means native first with terminal fallback. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.`
+      ? `Use web_search when current or source-backed information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means local terminal search, and both means native first with terminal fallback when the native search fails or returns no results. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.`
       : 'Web search is disabled by user settings.',
     getSearchMode(config.tools) === 'native'
       ? 'Terminal-backed search is disabled; web_search will not execute local terminal commands in this mode.'
@@ -689,7 +1153,7 @@ async function selectRecentMessages(chat, config, options = {}) {
   for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
     const message = chat.messages[index];
     if (!['user', 'assistant'].includes(message.role)) continue;
-    if (message.status === 'failed') continue;
+    if (message.status === 'failed' || message.status === 'incomplete') continue;
     const rendered = await renderProviderMessage(chat, message, config, options);
     const size = estimateMessageSize(rendered.content) + 20;
     if (selected.length && total + size > MAX_CONTEXT_CHARS) break;
@@ -772,6 +1236,8 @@ async function executeToolCall(chatId, toolCall, config = {}) {
       exitCode: result.exitCode,
       timedOut: result.timedOut,
       durationMs: result.durationMs,
+      stdoutPreview: truncate(result.stdout || '', 2000),
+      stderrPreview: truncate(result.stderr || '', 2000),
     },
   });
 
@@ -1099,9 +1565,10 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
   }
 
   let nativeError = null;
+  let nativeResult = null;
   if (searchMode === 'native' || searchMode === 'both') {
     try {
-      const nativeResult = await callProviderNativeWebSearch({
+      nativeResult = await callProviderNativeWebSearch({
         config,
         provider: config.provider,
         model: config.model,
@@ -1118,13 +1585,25 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
           method: nativeResult.method,
         },
       });
-      return {
-        id: toolCallId,
-        name: 'web_search',
-        input,
-        result: nativeResult,
-        createdAt: new Date().toISOString(),
-      };
+      if (nativeResult.results?.length || searchMode !== 'both') {
+        return {
+          id: toolCallId,
+          name: 'web_search',
+          input,
+          result: nativeResult,
+          createdAt: new Date().toISOString(),
+        };
+      }
+      await appendEvent({
+        type: 'tool.web_search.native_empty',
+        chatId,
+        details: {
+          query,
+          provider: config.provider,
+          method: nativeResult.method,
+          resultCount: nativeResult.results?.length || 0,
+        },
+      });
     } catch (error) {
       nativeError = error;
       await appendEvent({
@@ -1162,6 +1641,8 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
   if (nativeError) {
     result.nativeError = nativeError.message;
     result.fallbackFrom = 'native';
+  } else if (nativeResult) {
+    result.fallbackFrom = 'native-empty';
   }
   await appendEvent({
     type: 'tool.web_search.completed',
@@ -1386,9 +1867,9 @@ async function renderProviderMessage(chat, message, config, options = {}) {
 }
 
 async function resolveMessageAttachments(chat, options = {}) {
-  if (options.retryMessageId) {
-    const existing = chat.messages.find((message) => message.id === options.retryMessageId && message.role === 'user');
-    return existing?.attachments || [];
+  const requestSource = resolveRequestSourceMessage(chat, options);
+  if (requestSource?.sourceUserMessage) {
+    return requestSource.sourceUserMessage.attachments || [];
   }
 
   const ids = Array.isArray(options.attachmentIds) ? options.attachmentIds : [];

@@ -13,6 +13,9 @@ export const defaultConfig = Object.freeze({
   technicalLevel: 'balanced',
   technicalGuidanceEnabled: true,
   systemPromptExtra: '',
+  appearance: {
+    theme: 'light',
+  },
   tools: {
     terminal: true,
     chatMemory: true,
@@ -24,8 +27,11 @@ export const defaultConfig = Object.freeze({
     searchMode: 'native',
     alwaysAllow: false,
     terminalMode: 'standard',
+    deepInvestigation: false,
   },
   routing: {
+    modelRotationEnabled: false,
+    modelFallbacks: [],
     providerRotationEnabled: false,
     maxProviderPasses: 2,
     fallbacks: [],
@@ -95,6 +101,10 @@ export async function saveConfig(patch) {
         ? current.technicalGuidanceEnabled !== false
         : patch.technicalGuidanceEnabled !== false,
     systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
+    appearance: normalizeAppearanceSettings({
+      ...current.appearance,
+      ...(patch.appearance || {}),
+    }),
     tools: normalizeTools(patch.tools || current.tools),
     context: normalizeContextSettings({
       ...current.context,
@@ -138,6 +148,7 @@ export function sanitizeConfig(config) {
     technicalLevel: normalizeTechnicalLevel(config.technicalLevel),
     technicalGuidanceEnabled: config.technicalGuidanceEnabled !== false,
     systemPromptExtra: config.systemPromptExtra,
+    appearance: normalizeAppearanceSettings(config.appearance),
     tools: normalizeTools(config.tools),
     context: normalizeContextSettings(config.context),
     routing: normalizeRoutingSettings(config.routing),
@@ -734,6 +745,7 @@ function normalizeTools(tools = {}) {
     searchMode,
     alwaysAllow: tools.alwaysAllow === true,
     terminalMode: tools.terminalMode === 'isolated' ? 'isolated' : 'standard',
+    deepInvestigation: tools.deepInvestigation === true,
   };
 }
 
@@ -755,6 +767,19 @@ function normalizeContextSettings(context = {}) {
 }
 
 function normalizeRoutingSettings(routing = {}) {
+  const modelFallbacks = Array.isArray(routing.modelFallbacks)
+    ? routing.modelFallbacks
+        .filter((item) => item?.provider && item?.model)
+        .map((item) => {
+          const provider = normalizeProviderId(item?.provider);
+          const model = String(item?.model || getDefaultModelForProvider(provider)).trim();
+          return { provider, model };
+        })
+        .filter((item, index, items) =>
+          items.findIndex((candidate) => candidate.provider === item.provider && candidate.model === item.model) === index,
+        )
+        .slice(0, 16)
+    : [];
   const fallbacks = Array.isArray(routing.fallbacks)
     ? routing.fallbacks
         .filter((item) => item?.provider)
@@ -770,6 +795,8 @@ function normalizeRoutingSettings(routing = {}) {
     : [];
 
   return {
+    modelRotationEnabled: routing.modelRotationEnabled === true,
+    modelFallbacks,
     providerRotationEnabled: routing.providerRotationEnabled === true,
     maxProviderPasses: clampInteger(routing.maxProviderPasses, 1, 5, 2),
     fallbacks,
@@ -787,6 +814,13 @@ function normalizeServerSettings(server = {}) {
 function normalizeTechnicalLevel(value) {
   const level = String(value || 'balanced').trim();
   return ['beginner', 'careful', 'balanced', 'advanced', 'expert'].includes(level) ? level : 'balanced';
+}
+
+function normalizeAppearanceSettings(appearance = {}) {
+  const theme = String(appearance.theme || 'light').trim();
+  return {
+    theme: ['light', 'dark', 'system'].includes(theme) ? theme : 'light',
+  };
 }
 
 function normalizeConfig(config = {}) {
@@ -809,6 +843,7 @@ function normalizeConfig(config = {}) {
     technicalLevel: normalizeTechnicalLevel(config.technicalLevel),
     technicalGuidanceEnabled: config.technicalGuidanceEnabled !== false,
     systemPromptExtra: String(config.systemPromptExtra || '').trim(),
+    appearance: normalizeAppearanceSettings(config.appearance || defaultConfig.appearance),
     tools: normalizeTools(config.tools || defaultConfig.tools),
     context: normalizeContextSettings(config.context || defaultConfig.context),
     routing: normalizeRoutingSettings(config.routing || defaultConfig.routing),
@@ -943,7 +978,7 @@ function normalizeModelSettings(settings = {}) {
   if (presencePenalty !== null) next.presencePenalty = presencePenalty;
   if (frequencyPenalty !== null) next.frequencyPenalty = frequencyPenalty;
   if (seed !== null) next.seed = seed;
-  if (['none', 'low', 'medium', 'high', 'xhigh'].includes(reasoningEffort)) next.reasoningEffort = reasoningEffort;
+  if (['none', 'default', 'low', 'medium', 'high', 'xhigh'].includes(reasoningEffort)) next.reasoningEffort = reasoningEffort;
   if (stop.length) next.stop = stop;
   return next;
 }

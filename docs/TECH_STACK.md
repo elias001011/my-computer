@@ -1,8 +1,10 @@
 # Technology Stack
 
-## MVP stack
+Atualizado em 26/05/2026.
 
-O MVP favorece simplicidade e facilidade de desinstalação.
+## Stack do MVP
+
+O projeto favorece simplicidade, instalacao facil e desinstalacao limpa.
 
 ### Frontend
 
@@ -14,53 +16,47 @@ O MVP favorece simplicidade e facilidade de desinstalação.
 ### Backend
 
 - Node.js 20+.
-- HTTP server nativo de Node.
-- `fetch` nativo para providers OpenAI-compatible e Anthropic.
+- `fetch` nativo para providers e descoberta dinamica.
 - `child_process.spawn` para a tool de terminal.
-- Busca web via terminal usa Python padrão do sistema para consultar DuckDuckGo HTML quando habilitada.
-- Atualizador usa Git local: `git fetch`, `git pull --ff-only` e `npm install`.
-- Arquivos JSON, Markdown e JSONL para persistência local.
-- Extração de anexos feita com APIs nativas: texto/HTML/código sem dependências externas.
+- `python3` para a busca web via terminal quando necessario.
+- Git local para update.
+- JSON, JSONL e Markdown para persistencia.
+- Extracao simples de texto para anexos sem parser pesado no MVP.
 
-### AI provider
+### Providers
 
-- Providers nomeados: Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI e Ollama.
-- Provider custom `OpenAI compatível` para qualquer endpoint com formato `/v1/chat/completions`.
-- Modelo padrão inicial: `llama-3.3-70b-versatile` no Groq.
-- O provider/modelo global é apenas default; cada chat salva seu próprio provider e modelo.
-- A lista de providers e modelos fica em `src/server/models.js` e é enviada no bootstrap da UI.
-- `src/server/provider-client.js` centraliza chamadas, rotação de API keys, adaptador Anthropic e pull automático do Ollama.
-- `src/server/models.js` contém presets verificados e metadados básicos de visão/limite; modelos personalizados cobrem lançamentos ou endpoints fora do catálogo.
+- Groq, OpenAI, OpenRouter, Hugging Face, Gemini, Anthropic, xAI e Ollama.
+- Provider custom `OpenAI compatible` para endpoints proprios.
+- `src/server/models.js` centraliza o catalogo de providers, modelos e specs.
+- `src/server/provider-client.js` centraliza chamadas, rotacao de keys, fallback e adaptadores.
 
-### Attachments
+### Storage
 
-- Upload via JSON base64 para manter o backend sem parser multipart no MVP.
-- Arquivo bruto salvo em `attachments/`.
-- Metadados e texto extraído em `attachments.json`.
-- Imagens multimodais enviadas como data URL/base64 para providers OpenAI-compatible.
-- Anthropic recebe imagens convertidas para blocos nativos de `image` na Messages API.
-- Vídeos ficam salvos com preview local e são enviados como referência/caminho. Upload nativo de vídeo depende de adapters de arquivos dos providers.
+- Runtime do usuario em `~/.my-computer` por padrao.
+- Configuracoes, chats, memoria e eventos ficam separados do codigo do projeto.
+- Export/import e update trabalham em cima desse runtime.
 
-### Networking
+### Integracoes opcionais
 
-- Local por padrão em `127.0.0.1`.
-- Modo rede usa `0.0.0.0` no próximo restart quando configurado com senha.
-- A autenticação atual do modo rede é Basic Auth com senha única.
+- `ollama` para modelos locais, vision local e catalogo dinamico via `/api/tags`.
+- `python3` para a pesquisa web via terminal.
+- `sudo` apenas quando o usuario quiser liberar tarefas administrativas do Ollama.
 
-## Why not React/Fastify/SQLite yet
+## Por que ainda nao tem React, Fastify ou SQLite
 
-Essas opções continuam boas para uma fase maior, mas o MVP precisa ser fácil de entender, instalar e remover. Por isso a versão atual evita build, banco e dependências de framework.
+O MVP quer ser facil de entender e de remover. Por isso ele evita:
 
-Quando a UI ganhar fluxos mais complexos, streaming real, confirmações ricas e gerenciamento de skills, faz sentido reavaliar React/Vite ou outro framework.
+- build de frontend
+- banco de dados pesado
+- framework extra no servidor
+- runtime externo desnecessario
 
-## Runtime and uninstall
+Quando a UI e o fluxo de tools ficarem mais complexos, essas escolhas podem ser revisitadas.
 
-Dependências ficam no projeto (`node_modules`).
-Dados do usuário ficam em `~/.my-computer` por padrão.
+## Runtime e desinstalacao
 
-`./uninstall.sh` remove dependências.
-`./uninstall.sh --remove-data` remove também o runtime.
+- `./install.sh` instala dependencias, prepara o runtime e pode abrir o painel.
+- `./uninstall.sh` remove o projeto local.
+- `./uninstall.sh --remove-data` apaga tambem o runtime do usuario.
 
-`./install.sh` e `./uninstall.sh` são wrappers públicos. A implementação fica em `scripts/bootstrap.sh` e `scripts/remove.sh` para evitar múltiplos `install.sh` concorrendo dentro do projeto.
-
-`./install.sh` sempre roda `npm install` antes de iniciar, a menos que o usuário só esteja consultando `--help`. Use `--no-start` para instalar/preparar sem subir o servidor.
+O split entre `install.sh`/`uninstall.sh` na raiz e `scripts/` por baixo existe para manter o entrypoint simples para o usuario final.

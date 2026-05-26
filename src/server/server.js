@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { panelDir, runtimeHome } from './paths.js';
 import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage } from './assistant.js';
-import { getProviderModels, getProvidersForClient } from './models.js';
+import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
 import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
@@ -81,21 +81,13 @@ async function handleApi(request, response, url) {
 
   if (method === 'GET' && parts[1] === 'bootstrap') {
     const config = await loadConfig();
-    const ollamaInstalledModels = await listOllamaInstalledModels(config);
+    const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
     const chats = await listChats();
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       config: sanitizeConfig(config),
-      providers: getProvidersForClient({
-        customModelsByProvider: config.customModels,
-        modelCapabilitiesByProvider: config.modelCapabilities,
-        ollamaInstalledModels,
-      }),
-      models: getProviderModels(config.provider, {
-        customModels: config.customModels?.[config.provider],
-        modelCapabilities: config.modelCapabilities?.[config.provider],
-        ollamaInstalledModels,
-      }),
+      providers,
+      models,
       ollamaInstalledModels,
       chats,
       activeChat,
@@ -136,7 +128,14 @@ async function handleApi(request, response, url) {
       modelCapabilities: body.modelCapabilities,
       setupComplete: true,
     });
-    sendJson(response, 200, { config: sanitizeConfig(config) });
+    const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
+    sendJson(response, 200, {
+      config: sanitizeConfig(config),
+      providers,
+      models,
+      ollamaInstalledModels,
+      networkStatus: getNetworkStatus(config),
+    });
     return;
   }
 
@@ -157,22 +156,14 @@ async function handleApi(request, response, url) {
     const options = body?.data && body?.options ? body.options : {};
     const imported = await importRuntimeData(payload, options);
     const config = await loadConfig();
-    const ollamaInstalledModels = await listOllamaInstalledModels(config);
+    const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
     const chats = await listChats();
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       imported,
       config: sanitizeConfig(config),
-      providers: getProvidersForClient({
-        customModelsByProvider: config.customModels,
-        modelCapabilitiesByProvider: config.modelCapabilities,
-        ollamaInstalledModels,
-      }),
-      models: getProviderModels(config.provider, {
-        customModels: config.customModels?.[config.provider],
-        modelCapabilities: config.modelCapabilities?.[config.provider],
-        ollamaInstalledModels,
-      }),
+      providers,
+      models,
       ollamaInstalledModels,
       chats,
       activeChat,
@@ -361,6 +352,7 @@ async function handleChatsApi(request, response, parts) {
     const body = await readBody(request);
     const result = await sendUserMessage(chatId, body.content || '', {
       retryMessageId: body.retryMessageId || null,
+      continueMessageId: body.continueMessageId || null,
       attachmentIds: body.attachmentIds || [],
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
@@ -389,6 +381,24 @@ async function handleChatsApi(request, response, parts) {
   }
 
   sendJson(response, 404, { error: 'Endpoint de chat nao encontrado.' });
+}
+
+async function buildClientCatalog(config) {
+  const ollamaInstalledModels = await listOllamaInstalledModels(config);
+  await refreshRuntimeModelCatalog(config, { ollamaInstalledModels });
+  return {
+    providers: getProvidersForClient({
+      customModelsByProvider: config.customModels,
+      modelCapabilitiesByProvider: config.modelCapabilities,
+      ollamaInstalledModels,
+    }),
+    models: getProviderModels(config.provider, {
+      customModels: config.customModels?.[config.provider],
+      modelCapabilities: config.modelCapabilities?.[config.provider],
+      ollamaInstalledModels,
+    }),
+    ollamaInstalledModels,
+  };
 }
 
 async function handleOllamaApi(request, response, parts) {

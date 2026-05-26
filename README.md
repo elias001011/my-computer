@@ -1,169 +1,309 @@
 # My Computer
 
-My Computer é um painel self-hosted para conversar com uma IA que pode usar tools locais, ler contexto salvo e executar terminal quando a tool estiver ligada.
+Atualizado em 26/05/2026.
 
-O MVP roda em Node local, usa HTML/CSS/JS puro no painel e salva tudo em uma pasta central do usuário.
+My Computer e um painel self-hosted para conversar com uma IA, usar tools locais com aprovacao, manter contexto entre chats e alternar entre providers sem perder o historico.
 
-## Instalar e abrir
+Ele roda localmente em Node.js, usa HTML/CSS/JS puro no painel e guarda todos os dados do usuario em um runtime separado do projeto.
+
+## O que este projeto usa
+
+- Node.js 20 ou mais novo.
+- Git, para update direto do repositorio.
+- npm, para instalar dependencias.
+- Python 3, quando voce usa a pesquisa web via terminal.
+- Uma ou mais API keys, dependendo dos providers que voce quiser usar.
+- Opcional: Ollama, se voce quiser modelos locais.
+
+### Dependencias opcionais e quando usar
+
+- `ollama` para rodar modelos locais, fazer `pull` e testar vision local.
+- `python3` para a busca web via terminal quando `tools.searchMode` estiver em `terminal` ou `both`.
+- `sudo` so e necessario se voce quiser deixar o sistema instalar/remover Ollama automaticamente.
+
+## Instalação rapida
 
 ```bash
 ./install.sh
 ```
 
-Esse é o único entrypoint de instalação para uso normal. Ele chama o script interno `scripts/bootstrap.sh`, instala dependências com `npm install`, cria o runtime em `~/.my-computer` e abre o navegador com o painel local. O servidor fica em primeiro plano no terminal; use `Ctrl+C` para parar.
+Esse e o caminho normal de instalacao. O script faz o seguinte:
 
-Opções úteis:
+- roda `npm install`
+- cria o runtime em `~/.my-computer` por padrao
+- abre o painel local no navegador
+- deixa o servidor rodando no terminal
 
-```bash
-./install.sh --fresh          # move ~/.my-computer para backup e mostra setup inicial
-./install.sh --no-open        # inicia sem abrir navegador
-./install.sh --no-start       # instala/prepara runtime sem iniciar servidor
-./install.sh --port 8788      # inicia em outra porta
-./install.sh --host 0.0.0.0   # força bind de rede; prefira configurar rede pela UI
-```
-
-Para ver o setup inicial sem apagar seus dados, movendo o runtime atual para backup:
+Se quiser controlar melhor o comportamento, use as flags abaixo:
 
 ```bash
 ./install.sh --fresh
+./install.sh --no-open
+./install.sh --no-start
+./install.sh --port 8788
+./install.sh --host 127.0.0.1
 ```
 
-Também dá para iniciar manualmente:
+- `--fresh` move o runtime atual para um backup e mostra o setup inicial de novo.
+- `--no-open` inicia sem abrir o navegador.
+- `--no-start` instala dependencias e prepara o runtime sem subir o servidor.
+- `--port` escolhe a porta do painel.
+- `--host` força o host de bind.
+
+O script tambem respeita estas variaveis de ambiente:
+
+- `MY_COMPUTER_HOME`
+- `PORT`
+- `HOST`
+
+## Como iniciar
+
+Depois da instalacao, voce pode abrir o painel de tres formas:
 
 ```bash
 npm run start:open
-npm run start -- --port 8787
+npm run start
+node src/cli/mc.js start --open
 ```
 
-Depois de instalado, iniciar novamente é só rodar `./install.sh`, `npm run start:open` ou `npm run start` nesta pasta.
+- `npm run start:open` sobe o servidor e abre o navegador.
+- `npm run start` sobe o servidor sem forcar abrir o navegador.
+- `node src/cli/mc.js start --open` usa o mesmo CLI interno do projeto.
 
-## Desinstalar
+Para diagnosticar o ambiente:
+
+```bash
+npm run doctor
+node src/cli/mc.js doctor
+```
+
+## Desinstalação
 
 ```bash
 ./uninstall.sh
 ```
 
-Por padrão, o uninstall remove `node_modules` e preserva os dados em `~/.my-computer`.
+Por padrao, isso remove `node_modules` e preserva o runtime em `~/.my-computer`.
 
-Para remover chats, memória, config, anexos e logs também:
+Para apagar tambem chats, anexos, memoria e configuracoes:
 
 ```bash
 ./uninstall.sh --remove-data
 ```
 
-Use `./uninstall.sh --help` para ver as opções. Se o servidor estiver rodando, encerre pelo botão das configurações ou use `Ctrl+C` no terminal antes de remover dependências.
+Outras opcoes:
 
-## Configurar integrações externas
+- `--keep-data` preserva o runtime.
+- `--yes` funciona como atalho para `--remove-data`.
+- `./uninstall.sh --help` mostra a ajuda completa.
 
-- API keys ficam em Configurações gerais > Providers e APIs. Cada provider aceita várias keys e o backend tenta a próxima quando uma falha recuperável acontece.
-- OpenAI compatível custom usa qualquer endpoint com `/v1/chat/completions`; configure `Endpoint/base URL`, modelo e keys no painel.
-- Ollama pode ser instalado, verificado, ter modelos baixados/removidos e ser desinstalado pelo painel. Se `sudo` pedir senha, rode o comando exibido no terminal.
-- Rede local fica em Configurações gerais > Rede local. Quando ligada com senha, o próximo restart escuta em `0.0.0.0` e usa Basic Auth com senha única, sem usuário por pessoa. A própria UI mostra o endereço LAN detectado, como `http://192.168.x.x:8787`, e um checklist de restart, Wi-Fi e firewall.
-- Pesquisa web fica em Configurações gerais > Tools, com modo `Web nativa`, `Terminal`, `Ambos` ou `Desligado`. A nativa roda no provider; a de terminal usa a tool local e segue aprovação.
-- Se o modelo escrever uma chamada de `web_search` como texto, o backend tenta recuperar como tool real e normaliza `maxResults` antes de executar.
-- A rotatória de providers fica em Configurações gerais > Providers. Quando ativada, o app tenta fallbacks em ordem e registra tentativas, erros e sucesso nos eventos do chat.
+## Primeiro uso
 
-## Atualizar
+1. Instale o projeto com `./install.sh`.
+2. Abra o painel e entre em `Configurações gerais`.
+3. Escolha um provider e adicione as API keys.
+4. Ajuste o tema do painel, o idioma e o nivel tecnico.
+5. Se quiser usar modelos locais, configure Ollama.
+6. Abra o `Indice de modelos` para conferir o que e selecionavel e o que e apenas informativo.
+7. Comece um chat novo.
 
-O botão de atualização fica em Configurações gerais > Atualizações.
+## Providers e chaves
 
-Ele usa o clone Git local:
+O app suporta estes providers:
 
-1. roda `git fetch --prune`
-2. compara `HEAD` com o upstream da branch
-3. se houver commits novos e o código local estiver limpo, mostra confirmação
-4. ao confirmar, roda `git pull --ff-only && npm install`
-5. reinicia o servidor na mesma porta
-
-Se houver alterações locais sem commit, o painel bloqueia a atualização para não sobrescrever trabalho.
-
-## Providers
-
-Providers nomeados:
-
-- Groq
 - OpenAI
+- Anthropic
+- Gemini
+- Groq
+- xAI
 - OpenRouter
 - Hugging Face
-- Gemini
-- Anthropic
-- xAI
 - Ollama
-- OpenAI compatível custom
+- OpenAI compativel custom
 
-O provider custom aceita qualquer endpoint que implemente `/v1/chat/completions`, como Minimax, Together, Fireworks, servidores próprios ou gateways.
+As chaves mais comuns sao:
 
-Cada provider tem endpoint/base URL e múltiplas API keys salvas localmente. Se uma key falha por autenticação, rate limit ou erro temporário, o backend tenta a próxima.
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `GROQ_API_KEY`
+- `XAI_API_KEY`
+- `OPENROUTER_API_KEY`
+- `HF_TOKEN`
 
-Os presets foram revisados para 24/05/2026 com modelos atuais como GPT-5.5, Claude Opus 4.7, Claude Sonnet 4.6, Gemini 3.5 Flash, Gemini 3.1 Pro Preview, Grok 4.3, Llama 4 Scout no Groq e Qwen3.6/Qwen3-VL no Ollama. Modelos que mudam rápido continuam disponíveis via `Modelo personalizado`.
+Se a variavel de ambiente existir, o backend a reaproveita automaticamente no provider correspondente.
 
-## Ollama
+### Como ler o índice de modelos
 
-No setup, selecione Ollama para ver orientação dentro do navegador:
+No painel existe uma aba chamada `Indice de modelos`. Ela mostra:
 
-- verificar se `ollama` está instalado
-- tentar instalar pelo script oficial
-- baixar o modelo selecionado
-- remover modelos locais já baixados
+- `selecionavel`: aparece em dropdowns e rotatorias
+- `indice`: nao entra no seletor, mas fica documentado
+- `raciocinio`: suporta reasoning ou thinking
+- `visao`: aceita imagens
+- `saída`: limite maximo de tokens de resposta
+- `API`: observacoes tecnicas e restricoes do provider
+
+`openrouter/free` continua como o endpoint gratuito do OpenRouter. `openrouter/auto` continua como o roteador automatico.
+
+## Modelos e rotação
+
+O app tem tres ideias separadas:
+
+- `Modelo padrão`: o valor salvo para chats novos.
+- `Rotatória de modelos`: troca entre modelos do mesmo provider quando um deles falha.
+- `Rotatória de providers`: troca de provider/modelo quando a chamada falha e existe fallback configurado.
+
+Se um modelo nao aparece no seletor, ele ainda pode aparecer no `Indice de modelos`.
+Se voce quiser usar um endpoint ou alias que ainda nao entrou na lista, use `Modelo personalizado`.
+
+## Tema escuro
+
+Em `Configurações gerais > Identidade` existe `Tema do painel` com:
+
+- `Claro`
+- `Escuro`
+- `Sistema`
+
+O tema e salvo na configuracao e segue a preferencia do sistema quando voce escolher `Sistema`.
+
+## Ollama local
+
+Ollama e opcional, mas o app sabe trabalhar com ele:
+
+- verificar se o daemon esta instalado
+- instalar pelo script oficial
+- listar modelos locais
+- dar `pull` no modelo selecionado
+- remover modelos locais
 - tentar desinstalar o Ollama do sistema
 
-Em Linux, a instalação pode pedir `sudo`. Se a instalação pelo navegador falhar por senha/permissão, o painel mostra o comando para rodar no terminal.
-Quando a instalação termina e o provider/modelo selecionado é Ollama, o app tenta baixar automaticamente o modelo escolhido.
-Modelos já baixados são detectados pelo serviço do Ollama e, se ele estiver offline, por leitura dos manifests locais quando disponíveis.
-
-## Anexos
-
-Arquivos enviados ficam salvos dentro da pasta do chat:
+Base local padrao:
 
 ```text
-~/.my-computer/chats/<chat-id>/attachments/
+http://127.0.0.1:11434/v1
 ```
 
-Metodologia atual:
+Se o instalador ou o gerenciamento do Ollama pedir `sudo`, voce tem duas opcoes seguras:
 
-- Imagens são enviadas ao modelo como imagem multimodal apenas se o modelo estiver marcado como compatível com imagens.
-- Modelos personalizados têm toggle `Este modelo suporta imagens`.
-- O MVP limita upload bruto a 20 MB por arquivo e envio a 8 anexos por mensagem.
-- Quando o catálogo conhece limite de imagem do modelo, a UI avisa e o backend bloqueia excesso. Exemplo: Groq Llama 4 Scout aceita até 5 imagens e 20 MB por imagem.
-- Texto, Markdown, JSON, CSV, HTML e código têm texto extraído e enviado ao modelo em uma seção de documentos.
-- HTML é convertido para texto legível antes de ir para o modelo.
-- PDF tem visualização no painel, mas ainda entra como referência/caminho. DOCX e binários incertos são bloqueados até haver extração confiável.
-- Vídeos e áudios têm preview/player e ficam salvos como referência/caminho. Gemini tem suporte nativo a vídeo via Files API, mas o adapter nativo de vídeo ainda não está implementado neste MVP.
-- Quando o texto extraído é grande, ele é truncado antes de entrar no prompt. O painel deixa isso claro.
+1. Rodar o comando manualmente no terminal e digitar a senha.
+2. Criar uma regra limitada em `/etc/sudoers.d/my-computer`.
 
-## O que existe no MVP
+Exemplo de regra limitada para comandos de servico do Ollama:
 
-- Setup inicial com provider, modelo padrão, idioma, apelido e system prompt geral.
-- Nível técnico do usuário no setup e nas configurações gerais, com toggle para remover essa instrução extra do prompt.
-- Múltiplas API keys já no setup inicial.
-- Chat novo usa provider/modelo padrão das configurações gerais.
-- Provider/modelo do chat editável durante a conversa.
-- Configurações técnicas por chat: temperatura, top_p, max tokens, stop sequences e parâmetros compatíveis por provider.
-- Chat com histórico persistente.
-- Upload de arquivos com preview e tratamento de imagem/modelo incompatível.
-- Tool `run_terminal_command` para a IA usar o terminal local.
-- Tool `web_search` para pesquisa web transparente. Ela tenta busca nativa em OpenAI, Groq, Gemini, Anthropic, xAI e OpenRouter quando configurado; em `Ambos`, usa terminal como fallback.
-- Tool `memory_chat` para a IA ler, anexar ou reescrever a memória Markdown do chat.
-- Tool `persistent_memory` para memória global entre chats.
-- Tool `compact_context` para compactação automática quando habilitada.
-- Tool `rename_chat` para a IA nomear o chat.
-- Toggles globais para ligar/desligar tools, escolher modo de busca, alternar terminal padrão/isolado leve e escolher se tools locais exigem aprovação pela UI.
-- Cache local do prompt em andamento por chat, para não perder texto ao abrir configurações antes de enviar.
-- Compactação automática configurável por limite estimado de contexto e mínimo de mensagens.
-- Editor manual de `context.md` pelo botão de caneta ao lado de compactar contexto.
-- Abertura opcional para rede local com autenticação básica e senha única, aplicada no próximo restart.
-- Checagem e aplicação de update pelo repositório Git local.
-- Eventos filtrados por chat no painel lateral.
-- Botão de copiar respostas da IA e retry para requests com erro.
-- Export/import seletivo de configurações, chats, memórias, contexto, anexos e eventos.
+```sudoers
+elias ALL=(root) NOPASSWD: /usr/bin/systemctl start ollama, /usr/bin/systemctl stop ollama, /usr/bin/systemctl restart ollama, /usr/bin/systemctl enable ollama, /usr/bin/systemctl disable ollama, /usr/bin/systemctl status ollama
+```
 
-## Estrutura
+- Troque `elias` pelo seu usuario.
+- Ajuste os binarios e comandos para o que voce realmente confia.
+- Evite liberar `ALL` sem senha.
+- O app mostra stdout, stderr e codigo de saida quando um comando falha.
 
-- `docs/` - documentação alinhada ao MVP.
-- `src/panel/` - painel web em HTML, CSS e JS puro.
-- `src/server/` - servidor local, storage, providers e tools.
-- `src/cli/` - CLI mínima para iniciar e diagnosticar.
-- `scripts/` - implementação interna de instalação/desinstalação (`bootstrap.sh` e `remove.sh`).
-- `tests/` - testes do storage local.
+## Search e tools
 
-Comece por [docs/INDEX.md](./docs/INDEX.md).
+O app tem estes modos de pesquisa web:
+
+- `Web nativa`
+- `Terminal`
+- `Ambos`
+- `Desligado`
+
+`Web nativa` usa o provider quando a API suporta busca.
+`Terminal` usa o computador local.
+`Ambos` tenta a rota nativa primeiro e cai para o terminal.
+
+Outras tools locais podem ser ligadas e desligadas nas configuracoes:
+
+- `run_terminal_command`
+- `memory_chat`
+- `persistent_memory`
+- `compact_context`
+- `rename_chat`
+
+Por padrao, tools locais exigem aprovacao manual na UI.
+
+## Falhas e continuidade
+
+Quando a IA falha, para no meio ou estoura limite de saida, o app nao apaga a tentativa anterior.
+
+O painel mostra:
+
+- `Tentar novamente`: reenvia a solicitacao original desde o inicio.
+- `Continuar`: retoma a partir da ultima saida parcial e do historico da tentativa.
+- `Ver detalhes`: abre um modal com o processo completo, tools, outputs e eventos ligados aquela tentativa.
+- `Copiar eventos`: copia o log bruto do chat para analise ou auditoria.
+
+Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
+
+## Rede local
+
+Em `Configurações gerais > Rede`, voce pode abrir o painel para outros dispositivos na mesma rede.
+
+Quando isso esta ligado:
+
+- o proximo restart escuta em `0.0.0.0`
+- a UI pede senha unica via Basic Auth
+- o painel mostra a URL local e os IPs LAN detectados
+
+Para ligar:
+
+1. Marque `Abrir painel para a rede`.
+2. Defina uma senha.
+3. Salve as configuracoes.
+4. Reinicie o servidor.
+
+## Atualizações
+
+O botao de atualizacao usa o clone Git local.
+
+O fluxo e este:
+
+1. `git fetch --prune`
+2. compara `HEAD` com o upstream
+3. bloqueia atualizacao se houver mudancas locais
+4. quando voce confirma, roda `git pull --ff-only && npm install`
+5. reinicia o servidor na mesma porta
+
+## Runtime
+
+Por padrao, tudo fica em:
+
+```text
+~/.my-computer
+```
+
+Voce pode trocar isso com `MY_COMPUTER_HOME`.
+
+Arquivos principais do runtime:
+
+- `config.json`
+- `events.jsonl`
+- `persistent-memory.md`
+- `chats/<chat-id>/metadata.json`
+- `chats/<chat-id>/messages.json`
+- `chats/<chat-id>/memory.md`
+- `chats/<chat-id>/context.md`
+- `chats/<chat-id>/context-window.md`
+- `chats/<chat-id>/attachments/`
+
+## Estrutura do projeto
+
+- `src/panel/` - UI local do painel.
+- `src/server/` - HTTP server, storage, providers e tools.
+- `src/cli/` - comandos do painel.
+- `scripts/` - implementacao interna de install e uninstall.
+- `docs/` - documentacao do produto e da arquitetura.
+- `tests/` - testes locais.
+
+## Documentação recomendada
+
+- [docs/INDEX.md](./docs/INDEX.md)
+- [docs/PROVIDERS.md](./docs/PROVIDERS.md)
+- [docs/UI_SPEC.md](./docs/UI_SPEC.md)
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+- [docs/SECURITY.md](./docs/SECURITY.md)
+
+## Dica pratica
+
+Se algo parecer errado no catalogo de modelos, abra o `Indice de modelos` no painel e compare com [docs/PROVIDERS.md](./docs/PROVIDERS.md). O catalogo do app e atualizado pelo arquivo `src/server/models.js` e pela descoberta dinamica dos providers.

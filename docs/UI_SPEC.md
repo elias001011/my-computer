@@ -1,158 +1,170 @@
 # UI Spec
 
-## Shape
+Atualizado em 26/05/2026.
 
-O MVP é uma single-page app branca, minimalista e funcional.
+O painel e uma single-page app local, feita para abrir, configurar e usar sem precisar entender a estrutura interna do projeto.
 
-### Setup inicial
+## Visao geral
 
-Campos:
+- Desktop usa 3 areas principais: barra lateral, chat central e painel de configuracoes a direita.
+- No mobile, as secoes viram modais e paineis empilhados para caber na tela.
+- O layout prioriza operacao simples: abrir chat, escolher provider, escolher modelo e mandar mensagem.
 
-- Provider.
-- API keys quando o provider exige, com botão para adicionar mais de uma key e alternar visibilidade.
-- Endpoint/base URL quando o provider usa configuração local ou custom.
-- Modelo padrão em um seletor, com opção de modelo personalizado.
-- Idioma da IA, com `Automático` como padrão.
-- Apelido do usuário.
-- Nível técnico do usuário, com padrão `Equilibrado`.
-- Toggle para ativar/desativar adaptação da resposta ao nível técnico.
+## Setup inicial
+
+O fluxo inicial pede:
+
+- Provider padrao.
+- API keys quando o provider exige.
+- Endpoint ou base URL quando o provider usa instancia local ou endpoint custom.
+- Modelo padrao.
+- Idioma da IA.
+- Apelido do usuario.
+- Nivel tecnico.
+- Toggle para adaptar a resposta ao nivel tecnico.
 - System prompt geral.
-- Segurança inicial: aprovar tools por padrão, abrir para rede local e senha.
+- Tema do painel.
+- Seguranca inicial: aprovar tools por padrao, abrir para rede local e senha.
 
-Quando Ollama é selecionado, a tela mostra um bloco de onboarding com:
+Se o provider for Ollama, o setup mostra um bloco proprio com:
 
-- verificar instalação;
-- tentar instalar pelo script oficial;
-- baixar o modelo selecionado;
-- remover modelos baixados;
+- verificar instalacao;
+- instalar Ollama pelo script oficial;
+- listar modelos locais;
+- dar pull do modelo selecionado;
+- remover modelos locais;
 - tentar desinstalar o Ollama;
-- comando manual quando a instalação pelo navegador precisar de sudo/senha.
+- comando manual quando sudo for necessario.
 
-### Layout principal
+## Layout principal
 
-Desktop usa três áreas fixas:
+### Desktop
 
-- Esquerda: marca, botão de novo chat, configurações gerais e lista de chats.
-- Centro: cabeçalho do chat, mensagens, tool groups e composer.
-- Direita: configurações compactas do chat, botões de prompt/memória, configurações do modelo, status e eventos.
+- Esquerda: marca, novo chat, configuracoes gerais e lista de chats.
+- Centro: cabecalho do chat, mensagens, tools e composer.
+- Direita: configuracoes do chat, memoria, modelo, indice de eventos e status.
 
-A página não cresce conforme o chat: a área de mensagens rola internamente.
+### Mobile
 
-## Chat behavior
+- O chat continua sendo a tela principal.
+- Configuracoes e edicoes abrem em modal ou drawer.
+- O composer cresce ate um limite, sem empurrar a tela inteira para fora.
 
-- O histórico é persistido por chat.
-- Cada tool aparece agrupada como `Tool usada` e começa recolhida.
-- Quando `Sempre permitir qualquer tool` está desligado, a tool aparece pendente com botões `Permitir` e `Negar`.
-- Enquanto uma request está em andamento, a UI faz polling de eventos do chat e mostra status de tools solicitadas/concluídas.
-- `run_terminal_command` mostra comando, stdout e stderr.
-- `web_search` mostra query, método e fontes encontradas.
-- `memory_chat` mostra input e resultado em JSON.
-- Cada mensagem da IA tem botão de copiar.
-- Erros de request aparecem na conversa e no painel com botão de retry.
-- Quando uma request falha, o prompt do usuário permanece salvo no histórico com estado `falhou`; retry reaproveita essa mesma mensagem.
-- O modelo ativo aparece no cabeçalho do chat.
-- O usuário pode trocar provider e modelo do chat durante a conversa.
-- `Enter` envia a mensagem; `Alt+Enter` insere nova linha.
-- No mobile, o composer fica preso ao rodapé visual e o textarea cresce automaticamente até o limite.
-- O texto ainda não enviado fica salvo em cache local por chat.
-- No mobile, a área inferior mostra só o botão `Configurações de chat`; as configurações abrem em modal rolável.
+## Comportamento do chat
+
+- O historico fica salvo por chat.
+- `Enter` envia.
+- `Alt+Enter` quebra linha.
+- A resposta da IA aparece com botao de copiar.
+- Erros de request aparecem no proprio chat.
+- Retry reaproveita a mensagem do usuario que falhou.
+- Tentativas do assistente continuam visiveis quando ha falha ou saida incompleta.
+- `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
+- `Continuar` retoma a partir da ultima saida parcial e mostra a nova tentativa no mesmo grupo.
+- `Ver detalhes` abre um modal com o processo completo, tools, outputs e eventos da tentativa.
+- `Copiar eventos` copia o log bruto do chat para auditoria ou debug.
+- O modelo ativo aparece no cabecalho.
+- O usuario pode trocar provider e modelo no meio da conversa.
+- O texto nao enviado fica salvo localmente por chat.
+- Tool calls sao agrupadas, mostradas como blocos e podem ficar pendentes para aprovacao.
 
 ## Attachments
 
-- O composer tem botão de anexar arquivos.
-- Arquivo anexado aparece em uma bandeja antes do envio.
-- Imagens têm preview visual.
-- Vídeos têm preview com player, mas são enviados como referência/caminho no MVP.
-- Texto/HTML/código mostram trecho extraído.
-- Cada anexo mostra um aviso de como será enviado para a IA.
-- Quando há texto extraído, existe ação para colar o texto no composer.
-- Imagens são bloqueadas quando o modelo ativo não suporta imagem.
-- Há limite de 20 MB por arquivo e 8 anexos por mensagem no MVP.
-- Quando o catálogo conhece limites de visão do modelo, a UI avisa e o backend bloqueia excesso.
-- Modelos personalizados têm toggle para declarar suporte a imagens.
-- Formatos sem extração ficam salvos no chat; a UI explica que a IA receberá caminho/metadados e poderá acessar via terminal.
+- O composer aceita arquivos.
+- Imagens mostram preview.
+- Videos mostram preview e player, mas no MVP o envio pode ser como referencia/caminho quando o provider nao suporta video nativo.
+- Texto, markdown, json, csv, html e codigo exibem texto extraido.
+- Arquivos complexos ou sem extracao confiavel continuam no chat como referencia explicavel.
+- O painel avisa quando o modelo nao suporta imagem.
+- O UI respeita o limite de 20 MB por arquivo e o limite de anexos por mensagem.
 
 ## Model selection
 
-- O setup define provider e modelo padrão.
-- Chat novo usa automaticamente provider e modelo padrão.
-- O chat guarda provider e modelo em `metadata.json`.
-- Trocar provider/modelo durante o chat é permitido e gera evento.
-- Cada seletor de modelo tem opção `Modelo personalizado`.
-- Em Ollama, modelos instalados aparecem marcados e modelos ainda não instalados acionam pull automático no primeiro uso.
-- Em Ollama, o painel consegue verificar instalação, instalar, puxar o modelo selecionado, remover modelos locais e tentar desinstalar o Ollama.
+- O setup define provider e modelo padrao.
+- Chat novo herda esse padrao.
+- O chat grava `provider`, `model` e `modelSettings` no `metadata.json`.
+- Trocar provider ou modelo durante o chat e permitido e gera evento.
+- Cada seletor tem `Modelo personalizado`.
+- Em Ollama, modelos instalados aparecem marcados e o app pode fazer pull automatico quando necessario.
+- O painel mostra `Indice de modelos` para comparar capacidade, limite e observacoes tecnicas.
 
-Trocar no meio pode mudar estilo, qualidade de tool calling e limite efetivo de contexto, mas não corrompe o histórico. Para o MVP, a regra é permitir, deixando visível e auditável.
+## General settings
 
-## General settings modal
+O modal de configuracao geral concentra o que o usuario precisa para operar o app sem abrir arquivo nenhum:
 
-No desktop, usa navegação lateral por seções. No mobile, todas as seções ficam empilhadas na mesma tela para evitar navegação apertada.
+- Identidade: apelido, idioma, nivel tecnico e tema do painel.
+- Providers e APIs: provider padrao, endpoint/base URL e multiplas API keys.
+- Rotacao: rotatoria de modelos e rotatoria de providers com fallback.
+- Models: modelo padrao, catalogo curado e indice tecnico.
+- Ollama: verificacao, pull, remocao e desinstalacao.
+- Tools: terminal local, search mode, memoria, compactacao e rename.
+- Rede: abertura em LAN com senha unica e Basic Auth.
+- Atualizacoes: estado do Git, diff, pull e restart.
+- Export/import: backup e restauracao seletivos.
+- Seguranca: avisos de sudo e de acesso remoto.
 
-Inclui:
+## Indice de modelos
 
-- Apelido.
-- Provider padrão.
-- Modelo padrão.
-- Idioma.
-- Nível técnico e toggle de adaptação ao nível técnico.
-- System prompt geral.
-- Menu de providers e APIs, com endpoint/base URL por provider.
-- Múltiplas API keys por provider, usadas em rotação quando uma chamada falha por autenticação, rate limit ou erro temporário.
-- Rotatória opcional entre providers/modelos fallback, com limite de voltas e eventos por tentativa.
-- Orientação e gerenciamento do Ollama quando o provider selecionado para edição é Ollama.
-- Memória persistente.
-- Toggles de tools.
-- Explicação avançada sobre tools e contexto.
-- Método do terminal por cards grandes: isolamento leve ou sem restrições.
-- Aprovação de tools locais: sempre permitir ou pedir aprovação na UI.
-- Pesquisa web por modo único: web nativa, terminal, ambos ou desligado.
-- Compactação automática com limite estimado e intervalo mínimo.
-- Rede local com senha única, Basic Auth sem usuário individual, aviso de restart, URLs locais/LAN detectadas e checklist de Wi-Fi/firewall.
-- Atualizações pelo repositório Git local, com checagem, resumo de commits, bloqueio quando há mudanças locais e confirmação antes de aplicar.
-- Export/import seletivo de configurações, chats, memórias, contexto, anexos e eventos.
-- Botão para refazer o tour inicial sem apagar dados; o tour é guiado por etapas: provider, perfil, tools/busca e rede.
-- Botão para encerrar o servidor local, com instrução de como iniciar novamente.
+O `Indice de modelos` mostra, para cada entrada do catalogo:
 
-## Context and memory controls
+- provider
+- id do modelo
+- nome legivel
+- se o modelo e selecionavel
+- se e apenas indice tecnico
+- visao
+- raciocinio
+- limite de contexto
+- limite de saida
+- observacoes de API
 
-- `Salvar snapshot` cria snapshot em `context-snapshots/` e atualiza `context-window.md`.
-- `Compactar contexto` atualiza `context.md` usando o provider/modelo do chat.
-- O botão de caneta ao lado de compactar abre um modal para editar `context.md`.
-- Compactação automática mostra um card no chat com arquivo, preview do conteúdo e botão para editar.
-- O botão `Prompt e memória` abre um modal único para editar o system prompt do chat e `memory.md`.
-- A IA também pode editar a memória via tool `memory_chat`.
-- A IA pode editar memória global via `persistent_memory`.
-- A IA pode compactar contexto via `compact_context`, se a tool estiver ligada.
-- A IA pode renomear o chat via `rename_chat`, se a tool estiver ligada.
-
-## Chat events
-
-O painel de eventos mostra apenas eventos do chat ativo. Eventos globais continuam no arquivo `events.jsonl`, mas não poluem a visão de cada conversa.
+Esse indice existe para evitar adivinhacao. O nome bonito do modelo nao e suficiente para saber se ele aceita imagem, reasoning, audio, video ou rotacao.
 
 ## Model settings
 
-O botão `Configurações do modelo` abre ajustes técnicos por chat:
+O botao `Configuracoes do modelo` abre ajustes tecnicos por chat:
 
-- temperatura;
-- top_p;
-- máximo de tokens de saída;
-- stop sequences;
-- seed, penalties e reasoning effort quando o provider aceita.
+- temperatura
+- top_p
+- maxTokens
+- stop sequences
+- seed
+- presencePenalty
+- frequencyPenalty
+- reasoningEffort
 
-Esses campos são salvos em `metadata.json` do chat. Parâmetros incompatíveis ficam ocultos para reduzir erros de API.
+A UI so mostra o que faz sentido para o provider/modelo ativo. Parametros que o provider nao suporta ficam ocultos para diminuir erro de API.
 
-## Save and dirty states
+## Save states
 
-- Botões de salvar ficam laranja quando há alterações pendentes.
-- A UI mostra `Alterações não salvas` perto de cada botão de salvamento afetado.
-- Salvar configurações gerais, chat, prompt/memória ou modelo não fecha automaticamente a tela.
-- Fechar configurações gerais com alterações pendentes abre modal com `Salvar e fechar`, `Descartar` e `Continuar editando`.
-- Enviar mensagem com configurações do chat pendentes abre modal com `Salvar e enviar`, `Enviar sem salvar` e `Cancelar`.
+- Alteracoes nao salvas aparecem com destaque.
+- Fechar configuracoes com pendencia pede confirmacao.
+- Enviar mensagem com configuracoes pendentes pede confirmacao.
+- O usuario pode salvar, descartar ou continuar editando.
+
+## Prompt, memoria e contexto
+
+- `Prompt e memoria` abre um modal unico para system prompt e memoria do chat.
+- `Salvar snapshot` grava o estado atual do contexto.
+- `Compactar contexto` resume o chat em `context.md`.
+- `Compactacao automatica` aparece quando o limiar configurado e atingido.
+
+## Search e tools
+
+- Busca web pode ser `nativa`, `terminal`, `ambos` ou `desligada`.
+- Terminal local pode ser `sem restricoes` ou `isolamento leve`.
+- Tools locais podem exigir aprovacao manual ou ficar em sempre permitir.
+- A UI mostra claramente o status de cada tool, incluindo requests pendentes, permitidas e negadas.
+
+## Rede local e updates
+
+- O painel pode escutar em `0.0.0.0` no proximo restart quando a rede local estiver ativada com senha.
+- A interface mostra a URL local e os IPs LAN detectados.
+- O update mostra status do Git antes de aplicar `git pull --ff-only && npm install`.
+- Se houver mudancas locais, a UI bloqueia o update automatico.
 
 ## Attachment viewer
 
-- Clicar em `Visualizar` abre modal do arquivo.
-- Imagem, vídeo, áudio e PDF usam visualizadores nativos do navegador.
-- Texto/código usa o texto extraído no painel.
-- Upload aceita apenas formatos visualizáveis/explicáveis no MVP: imagens, vídeo, áudio, PDF, texto/código, JSON, CSV, HTML, XML, YAML e Markdown.
-- DOCX e binários incertos são bloqueados até haver extração confiável.
+- Imagem, video, audio e PDF usam visualizadores nativos do navegador.
+- Texto, codigo e arquivos extraidos aparecem no painel.
+- Formatos sem extracao confiavel mostram caminho e metadados.
