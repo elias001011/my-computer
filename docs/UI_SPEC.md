@@ -61,8 +61,8 @@ Se o provider for Ollama, o setup mostra um bloco proprio com:
 - Tentativas do assistente continuam visiveis quando ha falha ou saida incompleta.
 - `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
 - `Continuar` retoma a partir da ultima saida parcial e mostra a nova tentativa no mesmo grupo.
-- `Ver detalhes` abre um modal com o processo completo, tools, outputs e eventos da tentativa.
-- `Copiar eventos` copia o log bruto do chat para auditoria ou debug.
+- `Ver detalhes` abre um modal com o processo e os eventos relacionados da tentativa.
+- `Copiar eventos` copia os eventos carregados do chat para auditoria ou debug.
 - O modelo ativo aparece no cabecalho.
 - O usuario pode trocar provider e modelo no meio da conversa.
 - O texto nao enviado fica salvo localmente por chat.

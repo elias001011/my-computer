@@ -135,13 +135,13 @@ export async function sendUserMessage(chatId, content, options = {}) {
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
-          if (toolUse.name === 'web_search' && toolUse.result?.error && toolUse.result?.method === 'native') {
+          if (toolUseHasExecutionFailure(toolUse)) {
             assistantOutcome = {
               status: 'incomplete',
               content: renderToolFailureMessage(toolUse),
               finishReason: assistantMessage.finishReason || null,
               continuationAvailable: true,
-              error: toolUse.result?.error || 'Falha na busca web nativa.',
+              error: toolUse.result?.error || describeToolFailure(toolUse),
             };
             break;
           }
@@ -199,13 +199,13 @@ export async function sendUserMessage(chatId, content, options = {}) {
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
-        if (toolUse.name === 'web_search' && toolUse.result?.error && toolUse.result?.method === 'native') {
+        if (toolUseHasExecutionFailure(toolUse)) {
           assistantOutcome = {
             status: 'incomplete',
             content: renderToolFailureMessage(toolUse),
             finishReason: assistantMessage.finishReason || null,
             continuationAvailable: true,
-            error: toolUse.result?.error || 'Falha na busca web nativa.',
+            error: toolUse.result?.error || describeToolFailure(toolUse),
           };
           break;
         }
@@ -452,7 +452,7 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
 
   const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
   if (!toolOutputsRequested) {
-    const hasToolErrors = toolUses.some((toolUse) => toolUse.status !== 'denied' && toolUse.result?.error);
+    const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
     const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
     const finalContent =
       finalStatus === 'incomplete'
@@ -728,6 +728,16 @@ function getNextAssistantAttemptIndex(messages = [], groupId) {
 
 function isIncompleteFinishReason(finishReason) {
   return INCOMPLETE_FINISH_REASONS.has(String(finishReason || '').trim().toLowerCase());
+}
+
+function toolUseHasExecutionFailure(toolUse = {}) {
+  if (!toolUse || toolUse.status === 'denied') return false;
+  if (toolUse.result?.error) return true;
+  if (toolUse.name !== 'run_terminal_command') return false;
+  if (toolUse.result?.timedOut) return true;
+  if (toolUse.result?.signal) return true;
+  const exitCode = toolUse.result?.exitCode;
+  return typeof exitCode === 'number' && exitCode !== 0;
 }
 
 function getLatestAssistantOutputContent(message = {}) {
@@ -1473,6 +1483,18 @@ function createDeniedToolUse(toolCall) {
   };
 }
 
+function describeToolFailure(toolUse = {}) {
+  if (!toolUse) return 'Falha na tool.';
+  if (toolUse.name === 'run_terminal_command') {
+    if (toolUse.result?.timedOut) return 'O comando do terminal excedeu o timeout configurado.';
+    if (toolUse.result?.signal) return `O comando do terminal foi encerrado por signal ${toolUse.result.signal}.`;
+    if (typeof toolUse.result?.exitCode === 'number') {
+      return `O comando do terminal terminou com exit code ${toolUse.result.exitCode}.`;
+    }
+  }
+  return toolUse.result?.error || `Falha na tool ${toolUse.name || 'desconhecida'}.`;
+}
+
 function shouldReturnToolOutput(toolCall) {
   const name = toolCall?.function?.name;
   const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
@@ -1492,6 +1514,22 @@ function appendToolResultForModel(messages, toolCall, toolUse) {
 }
 
 function renderToolFailureMessage(toolUse) {
+  if (toolUse.name === 'run_terminal_command') {
+    const exitCode = typeof toolUse.result?.exitCode === 'number' ? toolUse.result.exitCode : 'desconhecido';
+    const timeoutNote = toolUse.result?.timedOut ? ' O comando excedeu o timeout solicitado.' : '';
+    const signalNote = toolUse.result?.signal ? ` Encerrado por signal ${toolUse.result.signal}.` : '';
+    const stderrNote = toolUse.result?.stderr ? `\n\nstderr:\n${truncate(toolUse.result.stderr, 2000)}` : '';
+    return [
+      'O comando do terminal falhou antes de concluir.',
+      '',
+      `Exit code: ${exitCode}.${timeoutNote}${signalNote}`,
+      '',
+      'Você pode tentar novamente, aumentar timeoutSeconds ou continuar a partir do estado atual.',
+      stderrNote,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   if (toolUse.name !== 'web_search') {
     return `A tool ${toolUse.name} falhou: ${toolUse.result?.error || 'erro desconhecido'}`;
   }

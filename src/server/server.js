@@ -119,6 +119,7 @@ async function handleApi(request, response, url) {
       technicalLevel: body.technicalLevel,
       technicalGuidanceEnabled: body.technicalGuidanceEnabled,
       systemPromptExtra: body.systemPromptExtra || '',
+      appearance: body.appearance,
       tools: body.tools,
       context: body.context,
       routing: body.routing,

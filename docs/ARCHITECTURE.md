@@ -74,7 +74,7 @@ Quando uma resposta falha ou para no meio:
 - a tentativa continua salva como uma mensagem do assistente
 - o grupo da tentativa recebe um `continuationGroupId`
 - o painel mostra `Tentar novamente` e `Continuar`
-- o modal de detalhes usa `messages.json` e `events.jsonl` para reconstruir o processo completo
+- o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
 
 ## Provider layer
 
@@ -101,6 +101,7 @@ O bootstrap refaz essa descoberta para o painel nascer com a lista mais recente 
 - Rotacao de modelos troca entre modelos do mesmo provider quando o usuario configurou fallback.
 
 Cada tentativa, erro e sucesso gera evento para o chat ativo.
+O painel carrega uma janela recente desses eventos para a UI e para o modal de detalhes.
 
 ## Tools
 

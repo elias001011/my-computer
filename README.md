@@ -231,8 +231,8 @@ O painel mostra:
 
 - `Tentar novamente`: reenvia a solicitacao original desde o inicio.
 - `Continuar`: retoma a partir da ultima saida parcial e do historico da tentativa.
-- `Ver detalhes`: abre um modal com o processo completo, tools, outputs e eventos ligados aquela tentativa.
-- `Copiar eventos`: copia o log bruto do chat para analise ou auditoria.
+- `Ver detalhes`: abre um modal com o processo e os eventos relacionados daquela tentativa.
+- `Copiar eventos`: copia os eventos carregados do chat para analise ou auditoria.
 
 Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
 

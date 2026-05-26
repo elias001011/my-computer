@@ -3242,9 +3242,7 @@ async function retryLastAction() {
 async function retryMessage(messageId) {
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
-  const sourceMessage = message.role === 'assistant' ? getSourceUserMessageForAttempt(message) : message;
-  if (!sourceMessage) return;
-  await sendMessageContent('', { retryMessageId: sourceMessage.id });
+  await sendMessageContent('', { retryMessageId: message.id });
 }
 
 async function continueMessage(messageId) {

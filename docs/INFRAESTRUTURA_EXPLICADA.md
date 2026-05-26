@@ -50,7 +50,7 @@ Se a resposta falhar ou parar no meio:
 - `Tentar novamente` reenvia desde o inicio
 - `Continuar` retoma a ultima saida parcial
 - `Ver detalhes` abre o processo completo da tentativa
-- `Copiar eventos` leva o log bruto para analise
+- `Copiar eventos` leva os eventos carregados para analise
 
 ## 3. O que entra no prompt
 

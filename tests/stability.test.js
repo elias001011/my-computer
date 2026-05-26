@@ -271,3 +271,118 @@ test('continue reuses the same prompt and creates a second assistant attempt', a
     global.fetch = originalFetch;
   }
 });
+
+test('config endpoint persists appearance theme changes', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-theme-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const serverModule = await import(`../src/server/server.js?test=${Date.now()}-theme-server`);
+  const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+
+  try {
+    const response = await fetch(`${url}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openai-compatible',
+        model: 'gpt-5.5',
+        appearance: { theme: 'dark' },
+        providerSettings: {
+          'openai-compatible': {
+            baseUrl: 'https://example.test/v1',
+            apiKeys: [{ value: 'test-key' }],
+          },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.config.appearance.theme, 'dark');
+
+    const bootstrap = await fetch(`${url}/api/bootstrap`);
+    assert.equal(bootstrap.status, 200);
+    const bootstrapData = await bootstrap.json();
+    assert.equal(bootstrapData.config.appearance.theme, 'dark');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('terminal command failures keep the assistant turn incomplete', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-terminal-failure-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    if (String(url).includes('/chat/completions')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'tool-call-1',
+                    type: 'function',
+                    function: {
+                      name: 'run_terminal_command',
+                      arguments: JSON.stringify({ command: 'sh -c "exit 1"', returnOutput: false }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-terminal-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-terminal-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: true,
+        terminalMode: 'standard',
+        deepInvestigation: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+
+    const chat = await store.createChat('Terminal failure', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Rode um comando que falhe.');
+    assert.equal(result.assistantStatus, 'incomplete');
+    assert.equal(result.assistantMessage.status, 'incomplete');
+    assert.match(result.assistantMessage.content, /terminal/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
