@@ -1556,10 +1556,17 @@ function renderAttemptBadge(message) {
   return `<span class="message-attempt">${index + 1}/${attempts.length}</span>`;
 }
 
+function isLatestAssistantAttempt(message) {
+  if (message?.role !== 'assistant') return true;
+  const attempts = getAssistantAttemptsForMessage(message);
+  const latest = attempts[attempts.length - 1];
+  return !latest || latest.id === message.id;
+}
+
 function renderMessageActions(message) {
   const actions = [];
   const disabled = state.busy ? 'disabled' : '';
-  if (message.role === 'assistant' && ['failed', 'incomplete'].includes(message.status)) {
+  if (message.role === 'assistant' && ['failed', 'incomplete'].includes(message.status) && isLatestAssistantAttempt(message)) {
     actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}" ${disabled}>Tentar novamente</button>`);
     actions.push(`<button type="button" class="continue-message primary" data-message-id="${escapeAttr(message.id)}" ${disabled}>Continuar</button>`);
   } else if (message.role === 'user' && message.status === 'failed') {
@@ -3281,6 +3288,7 @@ async function retryMessage(messageId) {
   if (state.busy) return;
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
+  if (message.role === 'assistant' && !isLatestAssistantAttempt(message)) return;
   await sendMessageContent('', { retryMessageId: message.id });
 }
 
@@ -3289,6 +3297,7 @@ async function continueMessage(messageId) {
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
   if (message.role !== 'assistant') return;
+  if (!isLatestAssistantAttempt(message)) return;
   await sendMessageContent('', { continueMessageId: message.id });
 }
 

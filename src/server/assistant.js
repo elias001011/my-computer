@@ -36,9 +36,14 @@ const MAX_TOOL_ROUNDS = 4;
 const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 8;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
+const chatTurnLocks = new Map();
 const toolApprovalLocks = new Map();
 
 export async function sendUserMessage(chatId, content, options = {}) {
+  return withChatTurnLock(chatId, () => sendUserMessageLocked(chatId, content, options));
+}
+
+async function sendUserMessageLocked(chatId, content, options = {}) {
   const config = await loadConfig();
   const trimmed = String(content || '').trim();
   if (!trimmed && !options.retryMessageId && !options.continueMessageId) {
@@ -49,6 +54,12 @@ export async function sendUserMessage(chatId, content, options = {}) {
 
   const chatBefore = await readChat(chatId);
   const requestSource = resolveRequestSourceMessage(chatBefore, options);
+  if ((options.retryMessageId || options.continueMessageId) && !requestSource) {
+    const error = new Error('Mensagem para retry/continue não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  ensureRequestSourceIsActionable(chatBefore, requestSource);
   const selectedAttachments = requestSource?.sourceUserMessage?.attachments || (await resolveMessageAttachments(chatBefore, options));
   const userMessage = requestSource?.sourceUserMessage
     ? await saveUserMessageForRequest(chatId, chatBefore, trimmed || requestSource.sourceUserMessage.content || '', requestSource.sourceUserMessage.id, selectedAttachments)
@@ -132,7 +143,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
         const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, effectiveConfig));
         const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, effectiveConfig));
         for (const toolCall of safeToolCalls) {
-          const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
+          const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -196,7 +207,7 @@ export async function sendUserMessage(chatId, content, options = {}) {
       }
 
       for (const toolCall of toolCalls) {
-        const toolUse = await executeToolCall(chatId, toolCall, effectiveConfig);
+        const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -455,7 +466,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
     const toolUse =
       decisions[toolCall.id] === 'approve'
-        ? await executeToolCall(chatId, toolCall, effectiveConfig)
+        ? await executeToolCallSafely(chatId, toolCall, effectiveConfig)
         : createDeniedToolUse(toolCall);
     toolUses.push(toolUse);
     executionTrace.push(createToolTraceEntry(toolUse));
@@ -634,6 +645,23 @@ async function withToolApprovalLock(chatId, messageId, action) {
   return run;
 }
 
+async function withChatTurnLock(chatId, action) {
+  const key = String(chatId || '');
+  if (chatTurnLocks.has(key)) {
+    const error = new Error('Já existe uma execução em andamento neste chat. Aguarde concluir antes de enviar, tentar novamente ou continuar.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const run = Promise.resolve().then(action);
+  chatTurnLocks.set(key, run);
+  try {
+    return await run;
+  } finally {
+    if (chatTurnLocks.get(key) === run) chatTurnLocks.delete(key);
+  }
+}
+
 function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages, config, options = {}) {
   const preapprovedToolUses = options.preapprovedToolUses || [];
   const approvalToolCalls = options.approvalToolCalls || toolCalls;
@@ -777,6 +805,25 @@ function resolveRequestSourceMessage(chat, options = {}) {
   if (options.continueMessageId) return resolveContinuationTargetMessage(chat, options.continueMessageId);
   if (options.retryMessageId) return resolveRetrySourceMessage(chat, options.retryMessageId);
   return null;
+}
+
+function ensureRequestSourceIsActionable(chat, requestSource = null) {
+  const sourceAssistantMessage = requestSource?.sourceAssistantMessage;
+  if (!sourceAssistantMessage) return;
+
+  if (!['failed', 'incomplete'].includes(sourceAssistantMessage.status)) {
+    const error = new Error('Esta tentativa não está disponível para retry/continue.');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const attempts = getAssistantAttempts(chat.messages, getMessageContinuationGroupId(sourceAssistantMessage));
+  const latestAttempt = attempts[attempts.length - 1];
+  if (latestAttempt && latestAttempt.id !== sourceAssistantMessage.id) {
+    const error = new Error('Esta tentativa já possui uma tentativa mais recente. Use a tentativa mais recente para continuar ou tentar novamente.');
+    error.statusCode = 409;
+    throw error;
+  }
 }
 
 function getAssistantAttempts(messages = [], groupId) {
@@ -1324,6 +1371,27 @@ async function executeToolCall(chatId, toolCall, config = {}) {
   };
 }
 
+async function executeToolCallSafely(chatId, toolCall, config = {}) {
+  try {
+    return await executeToolCall(chatId, toolCall, config);
+  } catch (error) {
+    try {
+      await appendEvent({
+        type: 'tool.execution.failed',
+        chatId,
+        details: {
+          toolCallId: toolCall?.id || null,
+          toolName: toolCall?.function?.name || 'unknown_tool',
+          error: error.message || String(error),
+        },
+      });
+    } catch {
+      // The assistant turn still needs a persisted tool failure if diagnostics fail.
+    }
+    return createFailedToolUse(toolCall, error);
+  }
+}
+
 async function executeRenameChatToolCall(chatId, toolCallId, input) {
   const title = String(input.title || '').trim();
   if (!title) {
@@ -1543,6 +1611,18 @@ function createDeniedToolUse(toolCall) {
     status: 'denied',
     approvalRequired: true,
     result: { action: 'denied_by_user', reason: 'Negado pelo usuário na UI.' },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createFailedToolUse(toolCall, error) {
+  const name = toolCall?.function?.name || 'unknown_tool';
+  return {
+    id: toolCall?.id || `failed_tool_${Date.now()}`,
+    name,
+    input: normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments)),
+    status: 'failed',
+    result: { error: error.message || String(error) || 'Falha ao executar tool.' },
     createdAt: new Date().toISOString(),
   };
 }

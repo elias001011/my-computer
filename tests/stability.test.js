@@ -635,7 +635,220 @@ test('parallel tool approvals execute a pending tool only once', async () => {
   }
 });
 
-test('concurrent sends append all messages without temp-file collisions', async () => {
+test('parallel continue requests only create one follow-up attempt', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-continue-lock-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const sideEffectPath = path.join(tempDir, 'continue-side-effect.txt');
+  const sideEffectScript = `require('node:fs').appendFileSync(${JSON.stringify(sideEffectPath)}, 'x')`;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      const callNumber = providerCalls;
+      await new Promise((resolve) => setTimeout(resolve, callNumber === 1 ? 5 : 50));
+      if (callNumber === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{ message: { role: 'assistant', content: 'Saída parcial' }, finish_reason: 'length' }],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou executar uma continuação.',
+                tool_calls: [
+                  {
+                    id: `continue-tool-${callNumber}`,
+                    type: 'function',
+                    function: {
+                      name: 'run_terminal_command',
+                      arguments: JSON.stringify({
+                        command: `${process.execPath} -e ${JSON.stringify(sideEffectScript)}`,
+                        returnOutput: false,
+                      }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-continue-lock-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-continue-lock-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: true,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Continue lock', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const first = await assistant.sendUserMessage(chat.id, 'Gere uma resposta parcial.');
+    assert.equal(first.assistantMessage.status, 'incomplete');
+
+    const results = await Promise.allSettled([
+      assistant.sendUserMessage(chat.id, '', { continueMessageId: first.assistantMessage.id }),
+      assistant.sendUserMessage(chat.id, '', { continueMessageId: first.assistantMessage.id }),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    assert.equal(rejected.reason.statusCode, 409);
+    assert.equal(await fs.readFile(sideEffectPath, 'utf8'), 'x');
+
+    const updatedChat = await store.readChat(chat.id);
+    const assistantAttempts = updatedChat.messages.filter((message) => message.role === 'assistant');
+    assert.equal(assistantAttempts.length, 2);
+    assert.equal(assistantAttempts[0].attemptIndex, 1);
+    assert.equal(assistantAttempts[1].attemptIndex, 2);
+    assert.equal(assistantAttempts[1].continuedFromMessageId, first.assistantMessage.id);
+
+    await assert.rejects(
+      () => assistant.sendUserMessage(chat.id, '', { continueMessageId: first.assistantMessage.id }),
+      (error) => error.statusCode === 409,
+    );
+    await assert.rejects(
+      () => assistant.sendUserMessage(chat.id, '', { continueMessageId: 'missing-message' }),
+      (error) => error.statusCode === 404,
+    );
+    assert.equal(providerCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('approved tool exceptions are persisted as incomplete turns', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-approved-tool-exception-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou compactar o contexto.',
+                  tool_calls: [
+                    {
+                      id: 'compact-tool-1',
+                      type: 'function',
+                      function: {
+                        name: 'compact_context',
+                        arguments: JSON.stringify({ reason: 'Teste de falha', returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: false,
+        status: 500,
+        json: async () => ({ error: { message: 'provider failed while compacting' } }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-tool-exception-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-tool-exception-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Approved tool exception', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Compacte o contexto.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    const completed = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'compact-tool-1',
+    });
+    const updatedMessage = completed.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(updatedMessage.status, 'incomplete');
+    assert.equal(updatedMessage.pendingToolApproval, null);
+    assert.equal(updatedMessage.continuationAvailable, true);
+    assert.match(updatedMessage.toolUses[0].result.error, /provider failed/);
+    assert.equal(providerCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('concurrent sends reject duplicate in-flight turns', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-concurrent-send-'));
   process.env.MY_COMPUTER_HOME = tempDir;
   const originalFetch = global.fetch;
@@ -683,19 +896,19 @@ test('concurrent sends append all messages without temp-file collisions', async 
       model: 'gpt-5.5',
     });
 
-    await Promise.all([
+    const results = await Promise.allSettled([
       assistant.sendUserMessage(chat.id, 'primeira'),
       assistant.sendUserMessage(chat.id, 'segunda'),
     ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    assert.equal(rejected.reason.statusCode, 409);
 
     const reloadedChat = await store.readChat(chat.id);
-    assert.equal(reloadedChat.messages.length, 4);
-    assert.equal(reloadedChat.messages.filter((message) => message.role === 'user').length, 2);
-    assert.equal(reloadedChat.messages.filter((message) => message.role === 'assistant').length, 2);
-    assert.deepEqual(
-      reloadedChat.messages.filter((message) => message.role === 'user').map((message) => message.content).sort(),
-      ['primeira', 'segunda'],
-    );
+    assert.equal(reloadedChat.messages.length, 2);
+    assert.equal(reloadedChat.messages.filter((message) => message.role === 'user').length, 1);
+    assert.equal(reloadedChat.messages.filter((message) => message.role === 'assistant').length, 1);
+    assert.equal(providerCalls, 1);
   } finally {
     global.fetch = originalFetch;
   }

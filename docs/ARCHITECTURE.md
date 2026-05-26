@@ -78,6 +78,7 @@ Quando uma resposta falha ou para no meio:
 - a tentativa continua salva como uma mensagem do assistente
 - o grupo da tentativa recebe um `continuationGroupId`
 - o painel mostra `Tentar novamente` e `Continuar`
+- o backend aceita apenas um envio/retry/continue em andamento por chat e bloqueia retry/continue em tentativa superseded
 - o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
 - falhas reais de terminal/tool mantem a tentativa como incompleta ou falha, mesmo quando a tool foi aprovada manualmente
 

@@ -143,6 +143,7 @@ A UI so mostra o que faz sentido para o provider/modelo ativo. Parametros que o 
 - Enviar mensagem com configuracoes pendentes pede confirmacao.
 - O usuario pode salvar, descartar ou continuar editando.
 - Enquanto uma acao esta em andamento, envio, retry, continue e aprovacoes de tool ficam bloqueados para evitar duplicidade.
+- Retry e Continue aparecem apenas na tentativa mais recente do grupo; tentativas antigas continuam visiveis, mas nao disparam novas ramificacoes.
 
 ## Prompt, memoria e contexto
 

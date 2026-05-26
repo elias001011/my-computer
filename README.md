@@ -247,6 +247,7 @@ O painel mostra:
 - `Copiar eventos`: copia os eventos carregados do chat para analise ou auditoria.
 
 Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
+Retry e Continue ficam disponiveis apenas na tentativa mais recente do grupo. O backend tambem rejeita envios, retries e continues simultaneos no mesmo chat para evitar cliques duplicados e side effects repetidos.
 Falhas de terminal e tools, incluindo timeout, signal e exit code diferente de zero, ficam marcadas como falhas reais da tentativa.
 
 ## Rede local
