@@ -52,6 +52,10 @@ Por padrao, os dados do usuario ficam em `~/.my-computer`:
 
 `MY_COMPUTER_HOME` pode mudar esse caminho.
 
+Gravacoes JSON que dependem de ler, mesclar e escrever estado sao serializadas por arquivo dentro do processo Node. Isso evita colisao entre envios simultaneos, aprovacoes de tool, updates de metadados e anexos no mesmo chat.
+
+O export/import opera sobre esse runtime. O backup serializa a configuracao normalizada completa, memorias, chats, contexto, anexos e eventos; na importacao, a UI permite escolher esses grupos separadamente.
+
 ## Fluxo de uma mensagem
 
 1. A UI envia a mensagem para `/api/chats/:id/messages`.
@@ -75,6 +79,7 @@ Quando uma resposta falha ou para no meio:
 - o grupo da tentativa recebe um `continuationGroupId`
 - o painel mostra `Tentar novamente` e `Continuar`
 - o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
+- falhas reais de terminal/tool mantem a tentativa como incompleta ou falha, mesmo quando a tool foi aprovada manualmente
 
 ## Provider layer
 
@@ -120,8 +125,9 @@ Fluxo basico:
 2. O assistant valida se a tool esta habilitada.
 3. Se a aprovacao for exigida, a UI pede permissao.
 4. A tool roda.
-5. O resultado volta como mensagem `tool`.
-6. O provider recebe os resultados e continua a resposta.
+5. Se a tool falhar por erro, timeout, signal ou exit code diferente de zero, a tentativa fica incompleta e o provider nao transforma isso em sucesso.
+6. Se a tool concluir, o resultado volta como mensagem `tool`.
+7. O provider recebe os resultados e continua a resposta.
 
 Para saidas longas ou execucoes demoradas:
 

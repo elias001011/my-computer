@@ -439,6 +439,7 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
     },
   });
 
+  let failedToolUse = null;
   for (const toolCall of toolCalls) {
     if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
     const toolUse =
@@ -448,6 +449,47 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
     toolUses.push(toolUse);
     executionTrace.push(createToolTraceEntry(toolUse));
     appendToolResultForModel(workingMessages, toolCall, toolUse);
+    if (toolUseHasExecutionFailure(toolUse)) {
+      failedToolUse = toolUse;
+      break;
+    }
+  }
+
+  if (failedToolUse) {
+    const finalTimestamp = new Date().toISOString();
+    await updateMessage(chatId, messageId, {
+      status: 'incomplete',
+      content: renderToolFailureMessage(failedToolUse),
+      toolUses,
+      executionTrace: executionTrace.length ? executionTrace : null,
+      pendingToolApproval: null,
+      modelUsed: pendingMessage.modelUsed || effectiveConfig.model,
+      providerUsed: pendingMessage.providerUsed || effectiveConfig.provider,
+      finishReason: pendingMessage.finishReason || null,
+      continuationAvailable: true,
+      error: failedToolUse.result?.error || describeToolFailure(failedToolUse),
+      interruptedAt: finalTimestamp,
+    });
+    await appendEvent({
+      type: 'chat.message.incomplete',
+      chatId,
+      details: {
+        messageId,
+        sourceUserMessageId: sourceUserMessage?.id || null,
+        groupId: continuationGroupId,
+        attemptIndex,
+        approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
+        failedToolName: failedToolUse.name || null,
+        failedToolId: failedToolUse.id || null,
+        error: failedToolUse.result?.error || describeToolFailure(failedToolUse),
+        status: 'incomplete',
+      },
+    });
+    const updatedChat = await readChat(chatId);
+    const latestPersistentMemory = await readPersistentMemory();
+    await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
+    await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
+    return { chat: await readChat(chatId) };
   }
 
   const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));

@@ -43,6 +43,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   await store.saveConfig({
     technicalLevel: 'beginner',
     technicalGuidanceEnabled: false,
+    appearance: { theme: 'dark' },
     tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchMode: 'both', deepInvestigation: true },
     context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
     routing: {
@@ -57,6 +58,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const securityConfig = await store.loadConfig();
   assert.equal(securityConfig.technicalLevel, 'beginner');
   assert.equal(securityConfig.technicalGuidanceEnabled, false);
+  assert.equal(securityConfig.appearance.theme, 'dark');
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
   assert.equal(securityConfig.tools.deepInvestigation, true);
@@ -139,9 +141,26 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const exported = await store.exportRuntimeData();
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
+  assert.equal(exported.config.appearance.theme, 'dark');
+  assert.equal(exported.config.tools.deepInvestigation, true);
+  assert.equal(exported.config.context.autoCompactEnabled, true);
+  assert.equal(exported.config.routing.modelRotationEnabled, true);
+  assert.deepEqual(exported.config.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 3);
 
+  await store.saveConfig({
+    appearance: { theme: 'light' },
+    tools: { deepInvestigation: false, alwaysAllow: false, searchMode: 'native' },
+    context: { autoCompactEnabled: false, autoCompactChars: 24000, autoCompactMinMessages: 12 },
+    routing: {
+      modelRotationEnabled: false,
+      modelFallbacks: [],
+      providerRotationEnabled: false,
+      maxProviderPasses: 1,
+      fallbacks: [],
+    },
+  });
   await store.writePersistentMemory('# Local\n\n- keep local memory');
   await store.importRuntimeData(exported, {
     config: true,
@@ -155,6 +174,13 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const importedChat = await store.readChat(importedChats[0].id);
   assert.equal(importedChat.attachments.length, 0);
   assert.match(await store.readPersistentMemory(), /keep local memory/);
+  const importedConfig = await store.loadConfig();
+  assert.equal(importedConfig.appearance.theme, 'dark');
+  assert.equal(importedConfig.tools.deepInvestigation, true);
+  assert.equal(importedConfig.context.autoCompactEnabled, true);
+  assert.equal(importedConfig.routing.modelRotationEnabled, true);
+  assert.deepEqual(importedConfig.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
+  assert.equal(importedConfig.routing.providerRotationEnabled, true);
 
   const chats = await store.listChats();
   assert.equal(chats.length, 1);

@@ -4,6 +4,8 @@ import path from 'node:path';
 import { getDefaultModelForProvider, isKnownProvider, providerCatalog } from './models.js';
 import { chatsDir, configPath, eventsPath, persistentMemoryPath, runtimeHome } from './paths.js';
 
+const fileLocks = new Map();
+
 export const defaultConfig = Object.freeze({
   setupComplete: false,
   provider: 'groq',
@@ -74,67 +76,66 @@ export async function loadConfig() {
   return normalizeConfig(config);
 }
 
-export async function saveConfig(patch) {
-  const current = await loadConfig();
-  const provider = normalizeProviderId(patch.provider || current.provider);
-  const providerSettings = normalizeProviderSettings({
-    ...current.providerSettings,
-    ...(patch.providerSettings || {}),
-  });
+export async function saveConfig(patch = {}) {
+  return withFileLock(configPath, async () => {
+    const current = await loadConfig();
+    const provider = normalizeProviderId(patch.provider || current.provider);
+    const providerSettings = normalizeProviderSettings(mergeProviderSettings(current.providerSettings, patch.providerSettings));
 
-  if (Object.hasOwn(patch, 'apiKey') && patch.apiKey !== undefined) {
-    providerSettings[provider] = {
-      ...providerSettings[provider],
-      apiKeys: normalizeApiKeyEntries([patch.apiKey]),
+    if (Object.hasOwn(patch, 'apiKey') && patch.apiKey !== undefined) {
+      providerSettings[provider] = {
+        ...providerSettings[provider],
+        apiKeys: normalizeApiKeyEntries([patch.apiKey]),
+      };
+    }
+
+    const next = {
+      ...current,
+      provider,
+      model: String(patch.model || current.model || getDefaultModelForProvider(provider)).trim(),
+      language: String(patch.language || current.language || 'auto').trim(),
+      userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
+      technicalLevel: normalizeTechnicalLevel(patch.technicalLevel ?? current.technicalLevel),
+      technicalGuidanceEnabled:
+        patch.technicalGuidanceEnabled === undefined
+          ? current.technicalGuidanceEnabled !== false
+          : patch.technicalGuidanceEnabled !== false,
+      systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
+      appearance: normalizeAppearanceSettings({
+        ...current.appearance,
+        ...(patch.appearance || {}),
+      }),
+      tools: normalizeTools({
+        ...current.tools,
+        ...(patch.tools || {}),
+      }),
+      context: normalizeContextSettings({
+        ...current.context,
+        ...(patch.context || {}),
+      }),
+      routing: normalizeRoutingSettings({
+        ...current.routing,
+        ...(patch.routing || {}),
+      }),
+      server: normalizeServerSettings({
+        ...current.server,
+        ...(patch.server || {}),
+      }),
+      providerSettings,
+      customModels: normalizeCustomModels({
+        ...current.customModels,
+        ...(patch.customModels || {}),
+      }),
+      modelCapabilities: normalizeModelCapabilities(mergeModelCapabilities(current.modelCapabilities, patch.modelCapabilities)),
+      setupComplete: Boolean(patch.setupComplete ?? true),
+      updatedAt: new Date().toISOString(),
     };
-  }
+    next.apiKey = getPrimaryApiKey(next.providerSettings, next.provider);
 
-  const next = {
-    ...current,
-    provider,
-    model: String(patch.model || current.model || getDefaultModelForProvider(provider)).trim(),
-    language: String(patch.language || current.language || 'auto').trim(),
-    userNickname: String(patch.userNickname ?? current.userNickname ?? '').trim(),
-    technicalLevel: normalizeTechnicalLevel(patch.technicalLevel ?? current.technicalLevel),
-    technicalGuidanceEnabled:
-      patch.technicalGuidanceEnabled === undefined
-        ? current.technicalGuidanceEnabled !== false
-        : patch.technicalGuidanceEnabled !== false,
-    systemPromptExtra: String(patch.systemPromptExtra ?? current.systemPromptExtra ?? '').trim(),
-    appearance: normalizeAppearanceSettings({
-      ...current.appearance,
-      ...(patch.appearance || {}),
-    }),
-    tools: normalizeTools(patch.tools || current.tools),
-    context: normalizeContextSettings({
-      ...current.context,
-      ...(patch.context || {}),
-    }),
-    routing: normalizeRoutingSettings({
-      ...current.routing,
-      ...(patch.routing || {}),
-    }),
-    server: normalizeServerSettings({
-      ...current.server,
-      ...(patch.server || {}),
-    }),
-    providerSettings,
-    customModels: normalizeCustomModels({
-      ...current.customModels,
-      ...(patch.customModels || {}),
-    }),
-    modelCapabilities: normalizeModelCapabilities({
-      ...current.modelCapabilities,
-      ...(patch.modelCapabilities || {}),
-    }),
-    setupComplete: Boolean(patch.setupComplete ?? true),
-    updatedAt: new Date().toISOString(),
-  };
-  next.apiKey = getPrimaryApiKey(next.providerSettings, next.provider);
-
-  await writeJson(configPath, next, 0o600);
-  await appendEvent({ type: 'config.updated', details: { provider: next.provider, model: next.model } });
-  return next;
+    await writeJson(configPath, next, 0o600);
+    await appendEvent({ type: 'config.updated', details: { provider: next.provider, model: next.model } });
+    return next;
+  });
 }
 
 export function sanitizeConfig(config) {
@@ -236,59 +237,67 @@ export async function readChat(id) {
 export async function appendMessages(id, messages) {
   assertChatId(id);
   const chatDir = getChatDir(id);
-  const current = await readJson(path.join(chatDir, 'messages.json'), []);
-  const next = [...current, ...messages];
-  await writeJson(path.join(chatDir, 'messages.json'), next, 0o600);
-  await touchChat(id);
-  return next;
+  const messagesPath = path.join(chatDir, 'messages.json');
+  return withFileLock(messagesPath, async () => {
+    const current = await readJson(messagesPath, []);
+    const next = [...current, ...messages];
+    await writeJson(messagesPath, next, 0o600);
+    await touchChat(id);
+    return next;
+  });
 }
 
 export async function updateMessage(id, messageId, patch) {
   assertChatId(id);
   const chatDir = getChatDir(id);
   const messagesPath = path.join(chatDir, 'messages.json');
-  const current = await readJson(messagesPath, []);
-  let found = false;
-  const next = current.map((message) => {
-    if (message.id !== messageId) return message;
-    found = true;
-    return {
-      ...message,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    };
+  return withFileLock(messagesPath, async () => {
+    const current = await readJson(messagesPath, []);
+    let found = false;
+    const next = current.map((message) => {
+      if (message.id !== messageId) return message;
+      found = true;
+      return {
+        ...message,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    if (!found) {
+      const error = new Error('Mensagem não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    await writeJson(messagesPath, next, 0o600);
+    await touchChat(id);
+    return next.find((message) => message.id === messageId);
   });
-
-  if (!found) {
-    const error = new Error('Mensagem não encontrada.');
-    error.statusCode = 404;
-    throw error;
-  }
-
-  await writeJson(messagesPath, next, 0o600);
-  await touchChat(id);
-  return next.find((message) => message.id === messageId);
 }
 
 export async function updateChatMetadata(id, patch) {
   assertChatId(id);
-  const metadata = await readChatMetadata(id);
-  const next = {
-    ...metadata,
-    ...patch,
-    title: patch.title ? normalizeTitle(patch.title) : metadata.title,
-    provider: patch.provider ? normalizeProviderId(patch.provider) : normalizeProviderId(metadata.provider),
-    model: patch.model ? String(patch.model).trim() : metadata.model,
-    modelSettings:
-      patch.modelSettings === undefined ? normalizeModelSettings(metadata.modelSettings || {}) : normalizeModelSettings(patch.modelSettings),
-    systemPromptExtra:
-      patch.systemPromptExtra === undefined
-        ? metadata.systemPromptExtra || ''
-        : String(patch.systemPromptExtra || '').trim(),
-    updatedAt: new Date().toISOString(),
-  };
-  await writeJson(path.join(getChatDir(id), 'metadata.json'), next, 0o600);
-  return next;
+  const metadataPath = path.join(getChatDir(id), 'metadata.json');
+  return withFileLock(metadataPath, async () => {
+    const metadata = await readChatMetadata(id);
+    const next = {
+      ...metadata,
+      ...patch,
+      title: patch.title ? normalizeTitle(patch.title) : metadata.title,
+      provider: patch.provider ? normalizeProviderId(patch.provider) : normalizeProviderId(metadata.provider),
+      model: patch.model ? String(patch.model).trim() : metadata.model,
+      modelSettings:
+        patch.modelSettings === undefined ? normalizeModelSettings(metadata.modelSettings || {}) : normalizeModelSettings(patch.modelSettings),
+      systemPromptExtra:
+        patch.systemPromptExtra === undefined
+          ? metadata.systemPromptExtra || ''
+          : String(patch.systemPromptExtra || '').trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJson(metadataPath, next, 0o600);
+    return next;
+  });
 }
 
 export async function deleteChat(id) {
@@ -403,8 +412,11 @@ export async function saveAttachment(id, file = {}) {
     createdAt: new Date().toISOString(),
   };
 
-  const attachments = await listAttachments(id);
-  await writeJson(getAttachmentsMetadataPath(id), [...attachments, attachment], 0o600);
+  const attachmentsPath = getAttachmentsMetadataPath(id);
+  await withFileLock(attachmentsPath, async () => {
+    const attachments = await readJson(attachmentsPath, []);
+    await writeJson(attachmentsPath, [...attachments, attachment], 0o600);
+  });
   await touchChat(id);
   await appendEvent({
     type: 'chat.attachment.created',
@@ -446,15 +458,20 @@ export async function readAttachmentFile(id, attachmentId) {
 }
 
 export async function deleteAttachment(id, attachmentId) {
-  const attachments = await listAttachments(id);
-  const attachment = attachments.find((item) => item.id === attachmentId);
+  const attachmentsPath = getAttachmentsMetadataPath(id);
+  const attachment = await withFileLock(attachmentsPath, async () => {
+    const attachments = await readJson(attachmentsPath, []);
+    const target = attachments.find((item) => item.id === attachmentId);
+    if (!target) return null;
+    await fs.rm(target.path, { force: true });
+    await writeJson(
+      attachmentsPath,
+      attachments.filter((item) => item.id !== attachmentId),
+      0o600,
+    );
+    return target;
+  });
   if (!attachment) return;
-  await fs.rm(attachment.path, { force: true });
-  await writeJson(
-    getAttachmentsMetadataPath(id),
-    attachments.filter((item) => item.id !== attachmentId),
-    0o600,
-  );
   await touchChat(id);
   await appendEvent({ type: 'chat.attachment.deleted', chatId: id, details: { name: attachment.name } });
 }
@@ -686,10 +703,13 @@ async function importChatAttachments(id, attachments = []) {
 }
 
 async function touchChat(id) {
-  const metadata = await readChatMetadata(id);
-  await writeJson(path.join(getChatDir(id), 'metadata.json'), {
-    ...metadata,
-    updatedAt: new Date().toISOString(),
+  const metadataPath = path.join(getChatDir(id), 'metadata.json');
+  await withFileLock(metadataPath, async () => {
+    const metadata = await readChatMetadata(id);
+    await writeJson(metadataPath, {
+      ...metadata,
+      updatedAt: new Date().toISOString(),
+    });
   });
 }
 
@@ -704,9 +724,20 @@ async function readJson(filePath, fallback) {
 
 async function writeJson(filePath, value, mode = 0o600) {
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const tempPath = `${filePath}.${process.pid}.tmp`;
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { mode });
   await fs.rename(tempPath, filePath);
+}
+
+async function withFileLock(filePath, action) {
+  const key = path.resolve(filePath);
+  const previous = fileLocks.get(key) || Promise.resolve();
+  const run = previous.catch(() => {}).then(action);
+  const cleanup = run.catch(() => {}).then(() => {
+    if (fileLocks.get(key) === cleanup) fileLocks.delete(key);
+  });
+  fileLocks.set(key, cleanup);
+  return run;
 }
 
 async function ensureTextFile(filePath, content) {
@@ -814,6 +845,28 @@ function normalizeServerSettings(server = {}) {
 function normalizeTechnicalLevel(value) {
   const level = String(value || 'balanced').trim();
   return ['beginner', 'careful', 'balanced', 'advanced', 'expert'].includes(level) ? level : 'balanced';
+}
+
+function mergeProviderSettings(current = {}, patch = {}) {
+  const next = { ...(current || {}) };
+  for (const [providerId, settings] of Object.entries(patch || {})) {
+    next[providerId] = {
+      ...(current?.[providerId] || {}),
+      ...(settings || {}),
+    };
+  }
+  return next;
+}
+
+function mergeModelCapabilities(current = {}, patch = {}) {
+  const next = { ...(current || {}) };
+  for (const [providerId, capabilities] of Object.entries(patch || {})) {
+    next[providerId] = {
+      ...(current?.[providerId] || {}),
+      ...(capabilities || {}),
+    };
+  }
+  return next;
 }
 
 function normalizeAppearanceSettings(appearance = {}) {

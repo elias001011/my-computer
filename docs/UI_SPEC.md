@@ -20,11 +20,12 @@ O fluxo inicial pede:
 - Modelo padrao.
 - Idioma da IA.
 - Apelido do usuario.
+- Tema do painel.
 - Nivel tecnico.
 - Toggle para adaptar a resposta ao nivel tecnico.
 - System prompt geral.
-- Tema do painel.
-- Seguranca inicial: aprovar tools por padrao, abrir para rede local e senha.
+- Tools iniciais: aprovar tools por padrao, incentivar investigacao profunda e escolher modo de pesquisa web.
+- Rede local: abrir para LAN e definir senha.
 
 Se o provider for Ollama, o setup mostra um bloco proprio com:
 
@@ -61,7 +62,7 @@ Se o provider for Ollama, o setup mostra um bloco proprio com:
 - Tentativas do assistente continuam visiveis quando ha falha ou saida incompleta.
 - `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
 - `Continuar` retoma a partir da ultima saida parcial e mostra a nova tentativa no mesmo grupo.
-- `Ver detalhes` abre um modal com o processo e os eventos relacionados da tentativa.
+- `Ver detalhes` abre um modal com o processo salvo e a janela de eventos carregados relacionada a tentativa.
 - `Copiar eventos` copia os eventos carregados do chat para auditoria ou debug.
 - O modelo ativo aparece no cabecalho.
 - O usuario pode trocar provider e modelo no meio da conversa.
@@ -100,7 +101,7 @@ O modal de configuracao geral concentra o que o usuario precisa para operar o ap
 - Tools: terminal local, search mode, memoria, compactacao e rename.
 - Rede: abertura em LAN com senha unica e Basic Auth.
 - Atualizacoes: estado do Git, diff, pull e restart.
-- Export/import: backup e restauracao seletivos.
+- Export/import: backup e restauracao seletivos de configuracao completa, memoria, chats, anexos e eventos.
 - Seguranca: avisos de sudo e de acesso remoto.
 
 ## Indice de modelos
@@ -141,6 +142,7 @@ A UI so mostra o que faz sentido para o provider/modelo ativo. Parametros que o 
 - Fechar configuracoes com pendencia pede confirmacao.
 - Enviar mensagem com configuracoes pendentes pede confirmacao.
 - O usuario pode salvar, descartar ou continuar editando.
+- Enquanto uma acao esta em andamento, envio, retry, continue e aprovacoes de tool ficam bloqueados para evitar duplicidade.
 
 ## Prompt, memoria e contexto
 
@@ -154,7 +156,7 @@ A UI so mostra o que faz sentido para o provider/modelo ativo. Parametros que o 
 - Busca web pode ser `nativa`, `terminal`, `ambos` ou `desligada`.
 - Terminal local pode ser `sem restricoes` ou `isolamento leve`.
 - Tools locais podem exigir aprovacao manual ou ficar em sempre permitir.
-- A UI mostra claramente o status de cada tool, incluindo requests pendentes, permitidas e negadas.
+- A UI mostra claramente o status de cada tool, incluindo requests pendentes, permitidas, negadas, timeout, exit code e erro.
 
 ## Rede local e updates
 

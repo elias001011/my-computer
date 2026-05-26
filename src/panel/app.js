@@ -106,11 +106,11 @@ function renderSetup() {
             <p>${state.setupReviewOpen ? 'Revise as escolhas iniciais sem apagar chats, logs, anexos ou memórias.' : 'Um painel local para conversar com uma IA, usar tools do seu computador com controle e manter contexto entre chats.'}</p>
           </div>
           <div class="setup-choice-grid">
-            <button type="button" class="setup-choice primary" id="start-guided-setup">
+            <button type="button" class="setup-choice primary" id="start-guided-setup" ${state.busy ? 'disabled' : ''}>
               <strong>${state.setupReviewOpen ? 'Refazer tour' : 'Configurar agora'}</strong>
-              <span>Escolher provider, API key, nível técnico, busca, tools e rede.</span>
+              <span>Escolher provider, API key, tema, nível técnico, busca, tools e rede.</span>
             </button>
-            <button type="button" class="setup-choice" id="skip-guided-setup">
+            <button type="button" class="setup-choice" id="skip-guided-setup" ${state.busy ? 'disabled' : ''}>
               <strong>${state.setupReviewOpen ? 'Voltar ao painel' : 'Pular para o painel'}</strong>
               <span>${state.setupReviewOpen ? 'Não altera nada e retorna ao chat.' : 'Usar defaults agora e ajustar tudo depois em Configurações gerais.'}</span>
             </button>
@@ -205,6 +205,12 @@ function renderSetup() {
               ${renderLanguageOptions(setupConfig.language || 'auto')}
             </select>
           </label>
+          <label>
+            Tema do painel
+            <select name="theme">
+              ${renderThemeOptions(setupConfig.appearance?.theme || 'light')}
+            </select>
+          </label>
           <div class="setup-grid">
             <label id="setup-technical-level-row" class="${setupConfig.technicalGuidanceEnabled === false ? 'hidden' : ''}">
               Nível técnico
@@ -274,8 +280,8 @@ function renderSetup() {
           </section>
           ` : ''}
           <div class="button-row">
-            ${step !== 'provider' ? '<button type="button" id="setup-back">Voltar</button>' : ''}
-            <button class="primary" type="submit">${step === 'network' ? (state.setupReviewOpen ? 'Salvar e voltar ao painel' : 'Salvar e abrir chat') : 'Continuar'}</button>
+            ${step !== 'provider' ? `<button type="button" id="setup-back" ${state.busy ? 'disabled' : ''}>Voltar</button>` : ''}
+            <button class="primary" type="submit" ${state.busy ? 'disabled' : ''}>${step === 'network' ? (state.setupReviewOpen ? 'Salvar e voltar ao painel' : 'Salvar e abrir chat') : 'Continuar'}</button>
           </div>
           ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ''}
         </form>
@@ -735,10 +741,10 @@ function renderSettingsModal() {
               <h3>Backup</h3>
               <p class="help-text">Exporta ou importa configurações, chats, memórias e contexto salvo do runtime local.</p>
               <div class="button-row">
-                <button type="button" id="export-data">Exportar dados</button>
+                <button type="button" id="export-data" ${state.busy ? 'disabled' : ''}>Exportar dados</button>
                 <label class="file-button">
                   Importar dados
-                  <input type="file" id="import-data" accept="application/json" />
+                  <input type="file" id="import-data" accept="application/json" ${state.busy ? 'disabled' : ''} />
                 </label>
               </div>
             </section>
@@ -814,6 +820,7 @@ function renderSetupProgress(activeStep) {
 
 function nextSetupStep(event) {
   event.preventDefault();
+  if (state.busy) return;
   captureSetupDraftFromForm(event.currentTarget);
   const currentIndex = SETUP_STEPS.indexOf(state.setupStep || 'provider');
   state.setupStep = SETUP_STEPS[Math.min(currentIndex + 1, SETUP_STEPS.length - 1)];
@@ -821,6 +828,7 @@ function nextSetupStep(event) {
 }
 
 function previousSetupStep() {
+  if (state.busy) return;
   captureSetupDraftFromForm(document.querySelector('#setup-form'));
   const currentIndex = SETUP_STEPS.indexOf(state.setupStep || 'provider');
   state.setupStep = SETUP_STEPS[Math.max(currentIndex - 1, 0)];
@@ -861,6 +869,10 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
     draft.technicalLevel = form.get('technicalLevel') || draft.technicalLevel || 'balanced';
     draft.technicalGuidanceEnabled = form.get('technicalGuidanceEnabled') === 'on';
     draft.systemPromptExtra = form.get('systemPromptExtra') || '';
+    draft.appearance = {
+      ...(draft.appearance || {}),
+      theme: form.get('theme') || draft.appearance?.theme || 'light',
+    };
   }
   if (form.has('alwaysAllowTools') || form.has('searchEnabled') || form.has('searchMode')) {
     const searchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draft.tools) : 'off';
@@ -1387,7 +1399,7 @@ function renderImportModal() {
           <section class="modal-section">
             <p class="help-text">Escolha o que importar. Chats com o mesmo id podem ser sobrescritos.</p>
             <div class="toggle-list">
-              ${renderImportOption('config', 'Configurações e providers', 'Inclui provider padrão, API keys, tools, rede e rotatória.', true)}
+              ${renderImportOption('config', 'Configurações e providers', 'Inclui provider padrão, API keys, tema, tools, contexto, rede e rotatórias.', true)}
               ${renderImportOption('persistentMemory', 'Memória persistente', 'Substitui a memória global compartilhada entre chats.', true)}
               ${renderImportOption('chats', 'Chats e mensagens', 'Importa metadados, histórico, memória e contexto dos chats.', true)}
               ${renderImportOption('attachments', 'Anexos', 'Inclui arquivos salvos dentro dos chats importados.', true)}
@@ -1397,7 +1409,7 @@ function renderImportModal() {
         </div>
         <footer class="modal-footer">
           <button type="button" id="cancel-import-modal">Cancelar</button>
-          <button type="button" class="primary" id="confirm-import-modal">Importar selecionados</button>
+          <button type="button" class="primary" id="confirm-import-modal" ${state.busy ? 'disabled' : ''}>Importar selecionados</button>
         </footer>
       </section>
     </div>
@@ -1546,11 +1558,12 @@ function renderAttemptBadge(message) {
 
 function renderMessageActions(message) {
   const actions = [];
+  const disabled = state.busy ? 'disabled' : '';
   if (message.role === 'assistant' && ['failed', 'incomplete'].includes(message.status)) {
-    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`);
-    actions.push(`<button type="button" class="continue-message primary" data-message-id="${escapeAttr(message.id)}">Continuar</button>`);
+    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}" ${disabled}>Tentar novamente</button>`);
+    actions.push(`<button type="button" class="continue-message primary" data-message-id="${escapeAttr(message.id)}" ${disabled}>Continuar</button>`);
   } else if (message.role === 'user' && message.status === 'failed') {
-    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}">Tentar novamente</button>`);
+    actions.push(`<button type="button" class="retry-message danger-button" data-message-id="${escapeAttr(message.id)}" ${disabled}>Tentar novamente</button>`);
   }
   if (!actions.length) return '';
   return `<div class="message-actions">${actions.join('')}</div>`;
@@ -1734,8 +1747,8 @@ function renderToolUse(toolUse, message = null) {
     isActivePending
       ? `
         <div class="tool-approval-actions">
-          <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${decisionBusy ? 'disabled' : ''}>Permitir esta tool</button>
-          <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${decisionBusy ? 'disabled' : ''}>Negar esta tool</button>
+          <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${state.busy || decisionBusy ? 'disabled' : ''}>Permitir esta tool</button>
+          <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${state.busy || decisionBusy ? 'disabled' : ''}>Negar esta tool</button>
         </div>
       `
       : toolUse.status === 'pending_approval'
@@ -1745,7 +1758,7 @@ function renderToolUse(toolUse, message = null) {
     <details class="tool-box" ${isActivePending ? 'open' : ''}>
       <summary class="tool-summary">
         <span>Tool usada: ${escapeHtml(toolUse.name)}</span>
-        <span>${toolUse.status === 'pending_approval' ? 'aguardando aprovação' : result.timedOut ? 'timeout' : result.exitCode === undefined ? escapeHtml(result.action || result.method || 'ok') : `exit ${escapeHtml(String(result.exitCode))}`}</span>
+        <span class="tool-state ${toolUseHasFailure(toolUse) ? 'failed' : ''}">${escapeHtml(formatToolUseState(toolUse))}</span>
       </summary>
       <div class="tool-body">
         ${approvalActions}
@@ -1774,6 +1787,23 @@ function renderToolUse(toolUse, message = null) {
       </div>
     </details>
   `;
+}
+
+function toolUseHasFailure(toolUse = {}) {
+  const result = toolUse.result || {};
+  if (result.error) return true;
+  if (result.timedOut || result.signal) return true;
+  return typeof result.exitCode === 'number' && result.exitCode !== 0;
+}
+
+function formatToolUseState(toolUse = {}) {
+  const result = toolUse.result || {};
+  if (toolUse.status === 'pending_approval') return 'aguardando aprovação';
+  if (result.error) return 'erro';
+  if (result.timedOut) return 'timeout';
+  if (result.signal) return `signal ${result.signal}`;
+  if (typeof result.exitCode === 'number') return `exit ${result.exitCode}`;
+  return result.action || result.method || toolUse.status || 'ok';
 }
 
 function renderAttachmentCard(attachment, options = {}) {
@@ -2516,6 +2546,7 @@ function bindAppEvents() {
 
 async function saveSetup(event) {
   event.preventDefault();
+  if (state.busy) return;
   captureSetupDraftFromForm(event.currentTarget);
   const draft = state.setupDraft || buildSetupDraft();
   const provider = draft.provider || 'groq';
@@ -2543,6 +2574,7 @@ async function saveSetup(event) {
         technicalLevel: draft.technicalLevel,
         technicalGuidanceEnabled: draft.technicalGuidanceEnabled,
         systemPromptExtra: draft.systemPromptExtra,
+        appearance: draft.appearance,
         tools: draft.tools,
         context: draft.context,
         routing: draft.routing,
@@ -2558,6 +2590,7 @@ async function saveSetup(event) {
 }
 
 async function skipSetup() {
+  if (state.busy) return;
   await runAction('Abrindo painel...', async () => {
     await api('/api/config', {
       method: 'PUT',
@@ -2569,6 +2602,7 @@ async function skipSetup() {
         technicalLevel: state.config.technicalLevel || 'balanced',
         technicalGuidanceEnabled: state.config.technicalGuidanceEnabled !== false,
         systemPromptExtra: state.config.systemPromptExtra || '',
+        appearance: state.config.appearance,
         tools: state.config.tools,
         context: state.config.context,
         routing: state.config.routing,
@@ -2998,6 +3032,7 @@ async function loadChat(chatId) {
 
 async function sendMessage(event) {
   event.preventDefault();
+  if (state.busy) return;
   const textarea = event.currentTarget.elements.content;
   const content = textarea.value.trim();
   if ((!content && !state.pendingAttachments.length) || !state.activeChat) return;
@@ -3060,6 +3095,7 @@ async function sendMessageFromValues(textarea, content) {
 }
 
 async function sendMessageContent(content, options = {}) {
+  if (state.busy) return;
   const chatId = state.activeChat.id;
   const attachments = options.attachments || [];
   const isContinuationRequest = Boolean(options.retryMessageId || options.continueMessageId);
@@ -3121,6 +3157,7 @@ async function sendMessageContent(content, options = {}) {
 }
 
 async function decideToolApproval(messageId, decision, toolCallId = null, button = null) {
+  if (state.busy) return;
   const decisionKey = `${messageId}:${toolCallId || 'next'}`;
   if (state.toolDecisionInFlight.has(decisionKey)) return;
   state.toolDecisionInFlight.add(decisionKey);
@@ -3233,6 +3270,7 @@ function getComposerDraftKey(chatId) {
 }
 
 async function retryLastAction() {
+  if (state.busy) return;
   if (!state.lastFailedAction) return;
   const retry = state.lastFailedAction;
   state.lastFailedAction = null;
@@ -3240,12 +3278,14 @@ async function retryLastAction() {
 }
 
 async function retryMessage(messageId) {
+  if (state.busy) return;
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
   await sendMessageContent('', { retryMessageId: message.id });
 }
 
 async function continueMessage(messageId) {
+  if (state.busy) return;
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
   if (message.role !== 'assistant') return;
@@ -3808,6 +3848,7 @@ function removeProviderFallbackRow(index) {
 }
 
 async function exportData() {
+  if (state.busy) return;
   await runAction('Exportando dados...', async () => {
     const data = await api('/api/export');
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3825,6 +3866,7 @@ async function exportData() {
 async function importData(event) {
   const file = event.target.files?.[0];
   event.target.value = '';
+  if (state.busy) return;
   if (!file) return;
   try {
     const content = await file.text();
@@ -3854,7 +3896,7 @@ function closeImportModal() {
 }
 
 async function confirmImportData() {
-  if (!state.importDraft) return;
+  if (state.busy || !state.importDraft) return;
   state.importDraft.options = {
     ...state.importDraft.options,
     ...Object.fromEntries([...document.querySelectorAll('.import-option')].map((input) => [input.name, input.checked])),
@@ -3999,13 +4041,15 @@ async function shutdownApp() {
 }
 
 async function runAction(status, action, retry = null) {
+  if (state.busy) return;
   captureOpenDrafts();
   const visualState = captureVisualState();
   state.busy = true;
   state.status = status;
   state.error = '';
   state.lastFailedAction = null;
-  updateStatusUi();
+  render();
+  restoreVisualState(visualState);
   try {
     await action();
   } catch (error) {

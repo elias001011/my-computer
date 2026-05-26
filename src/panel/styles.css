@@ -661,6 +661,11 @@ pre {
   font-size: 13px;
 }
 
+.tool-state.failed {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .tool-body {
   display: grid;
   gap: 10px;

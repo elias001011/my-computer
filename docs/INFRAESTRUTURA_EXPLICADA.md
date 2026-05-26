@@ -49,8 +49,10 @@ Se a resposta falhar ou parar no meio:
 - a tentativa anterior continua visivel no chat
 - `Tentar novamente` reenvia desde o inicio
 - `Continuar` retoma a ultima saida parcial
-- `Ver detalhes` abre o processo completo da tentativa
+- `Ver detalhes` abre o processo salvo da tentativa e a janela de eventos relacionados carregados
 - `Copiar eventos` leva os eventos carregados para analise
+
+Falha de tool ou terminal tambem conta como falha real da tentativa: timeout, signal e exit code diferente de zero deixam a resposta incompleta em vez de aparecerem como sucesso.
 
 ## 3. O que entra no prompt
 
@@ -196,7 +198,19 @@ Se o usuario ligar o modo de rede:
 
 Nao e uma VPN, nao e um sistema corporativo e nao e uma fortaleza. E so uma forma pratica de abrir o painel para a LAN com risco consciente.
 
-## 11. Update e manutencao
+## 11. Backup e restauracao
+
+O backup exporta o runtime em grupos selecionaveis:
+
+- configuracao completa, incluindo tema, providers, API keys, tools, contexto, rede e rotatorias
+- memoria persistente
+- chats, mensagens, memorias e contexto salvo
+- anexos
+- eventos recentes para diagnostico
+
+Na restauracao, a UI permite importar so os grupos escolhidos. Importar chats sem anexos preserva o historico, mas nao copia os arquivos anexados.
+
+## 12. Update e manutencao
 
 O update assume que o projeto e um clone Git.
 
@@ -209,7 +223,7 @@ Fluxo:
 5. roda `npm install`
 6. reinicia o servidor
 
-## 12. Como debugar sem sofrimento
+## 13. Como debugar sem sofrimento
 
 Se algo quebrar:
 
@@ -220,7 +234,7 @@ Se algo quebrar:
 - veja se a provider key esta correta
 - veja se o modelo escolhido realmente suporta o que voce quer
 
-## 13. A ideia geral
+## 14. A ideia geral
 
 O app e basicamente isto:
 

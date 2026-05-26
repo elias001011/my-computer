@@ -307,6 +307,72 @@ test('config endpoint persists appearance theme changes', async () => {
   }
 });
 
+test('config endpoint preserves existing fields on partial appearance update', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-config-partial-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const store = await import(`../src/server/store.js?test=${Date.now()}-partial-config-store`);
+  await store.ensureRuntime();
+  await store.saveConfig({
+    setupComplete: true,
+    provider: 'openai-compatible',
+    model: 'gpt-5.5',
+    language: 'pt-BR',
+    userNickname: 'Elias',
+    systemPromptExtra: 'Preserve this prompt.',
+    appearance: { theme: 'dark' },
+    tools: {
+      terminal: false,
+      chatMemory: true,
+      persistentMemory: true,
+      autoCompact: true,
+      chatTitle: true,
+      webSearch: false,
+      searchMode: 'off',
+      searchTerminal: false,
+      alwaysAllow: true,
+      terminalMode: 'isolated',
+      deepInvestigation: true,
+    },
+    providerSettings: {
+      'openai-compatible': {
+        baseUrl: 'https://example.test/v1',
+        apiKeys: [{ value: 'test-key' }],
+      },
+    },
+  });
+  const serverModule = await import(`../src/server/server.js?test=${Date.now()}-partial-config-server`);
+  const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+
+  try {
+    const response = await fetch(`${url}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appearance: { theme: 'system' },
+        providerSettings: {
+          'openai-compatible': {
+            baseUrl: 'https://example.test/changed/v1',
+          },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.config.appearance.theme, 'system');
+    assert.equal(data.config.language, 'pt-BR');
+    assert.equal(data.config.userNickname, 'Elias');
+    assert.equal(data.config.systemPromptExtra, 'Preserve this prompt.');
+    assert.equal(data.config.tools.terminal, false);
+    assert.equal(data.config.tools.alwaysAllow, true);
+    assert.equal(data.config.tools.terminalMode, 'isolated');
+    assert.equal(data.config.tools.deepInvestigation, true);
+    assert.equal(data.config.providerSettings['openai-compatible'].baseUrl, 'https://example.test/changed/v1');
+    assert.equal(data.config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('terminal command failures keep the assistant turn incomplete', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-terminal-failure-'));
   process.env.MY_COMPUTER_HOME = tempDir;
@@ -382,6 +448,161 @@ test('terminal command failures keep the assistant turn incomplete', async () =>
     assert.equal(result.assistantStatus, 'incomplete');
     assert.equal(result.assistantMessage.status, 'incomplete');
     assert.match(result.assistantMessage.content, /terminal/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('approved terminal command failures keep the pending assistant turn incomplete', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-approved-terminal-failure-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou rodar o comando.',
+                tool_calls: [
+                  {
+                    id: 'tool-call-1',
+                    type: 'function',
+                    function: {
+                      name: 'run_terminal_command',
+                      arguments: JSON.stringify({ command: 'sh -c "exit 1"', returnOutput: true }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-approved-terminal-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-approved-terminal-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+        terminalMode: 'standard',
+        deepInvestigation: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+
+    const chat = await store.createChat('Approved terminal failure', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Rode um comando que falhe.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    const completed = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'tool-call-1',
+    });
+    const updatedMessage = completed.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(updatedMessage.status, 'incomplete');
+    assert.equal(updatedMessage.continuationAvailable, true);
+    assert.match(updatedMessage.content, /terminal/i);
+    assert.equal(updatedMessage.toolUses[0].result.exitCode, 1);
+    assert.equal(providerCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('concurrent sends append all messages without temp-file collisions', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-concurrent-send-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      const callNumber = providerCalls;
+      await new Promise((resolve) => setTimeout(resolve, callNumber === 1 ? 50 : 10));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: { role: 'assistant', content: `ok ${callNumber}` },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-concurrent-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-concurrent-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+
+    const chat = await store.createChat('Concurrent send', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    await Promise.all([
+      assistant.sendUserMessage(chat.id, 'primeira'),
+      assistant.sendUserMessage(chat.id, 'segunda'),
+    ]);
+
+    const reloadedChat = await store.readChat(chat.id);
+    assert.equal(reloadedChat.messages.length, 4);
+    assert.equal(reloadedChat.messages.filter((message) => message.role === 'user').length, 2);
+    assert.equal(reloadedChat.messages.filter((message) => message.role === 'assistant').length, 2);
+    assert.deepEqual(
+      reloadedChat.messages.filter((message) => message.role === 'user').map((message) => message.content).sort(),
+      ['primeira', 'segunda'],
+    );
   } finally {
     global.fetch = originalFetch;
   }

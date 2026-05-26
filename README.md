@@ -100,7 +100,7 @@ Outras opcoes:
 ## Primeiro uso
 
 1. Instale o projeto com `./install.sh`.
-2. Abra o painel e entre em `Configurações gerais`.
+2. Abra o painel e siga o setup inicial, ou entre depois em `Configurações gerais`.
 3. Escolha um provider e adicione as API keys.
 4. Ajuste o tema do painel, o idioma e o nivel tecnico.
 5. Se quiser usar modelos locais, configure Ollama.
@@ -166,6 +166,18 @@ Em `Configurações gerais > Identidade` existe `Tema do painel` com:
 - `Sistema`
 
 O tema e salvo na configuracao e segue a preferencia do sistema quando voce escolher `Sistema`.
+
+## Backup e restauracao
+
+Em `Configurações gerais > Backup`, o export inclui:
+
+- configuracao completa, incluindo provider, API keys, tema, tools, contexto, rede e rotatorias
+- memoria persistente
+- chats, mensagens, memorias de chat e contexto salvo
+- anexos dos chats, que podem ser ignorados na importacao
+- eventos recentes para diagnostico
+
+Na importacao, voce escolhe cada grupo. Se importar chats sem anexos, o historico entra sem copiar os arquivos anexados.
 
 ## Ollama local
 
@@ -235,6 +247,7 @@ O painel mostra:
 - `Copiar eventos`: copia os eventos carregados do chat para analise ou auditoria.
 
 Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
+Falhas de terminal e tools, incluindo timeout, signal e exit code diferente de zero, ficam marcadas como falhas reais da tentativa.
 
 ## Rede local
 
