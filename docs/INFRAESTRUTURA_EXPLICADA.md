@@ -208,7 +208,7 @@ O backup exporta o runtime em grupos selecionaveis:
 - anexos
 - eventos recentes para diagnostico
 
-Na restauracao, a UI permite importar so os grupos escolhidos. Importar chats sem anexos preserva o historico, mas nao copia os arquivos anexados.
+Na restauracao, a UI permite importar so os grupos escolhidos. Configuracao importada substitui a configuracao atual como snapshot completo, inclusive removendo modelos customizados e capacidades que nao existam no backup. Importar chats sem anexos preserva o historico, mas nao copia os arquivos anexados.
 
 ## 12. Update e manutencao
 

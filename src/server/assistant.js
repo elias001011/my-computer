@@ -13,10 +13,10 @@ import {
   readAttachmentFile,
   saveContextSnapshot,
   saveCurrentContextWindow,
+  updateMemory,
+  updatePersistentMemory,
   updateChatMetadata,
   updateMessage,
-  writeMemory,
-  writePersistentMemory,
   writeContextSummary,
 } from './store.js';
 import {
@@ -36,6 +36,7 @@ const MAX_TOOL_ROUNDS = 4;
 const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 8;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
+const toolApprovalLocks = new Map();
 
 export async function sendUserMessage(chatId, content, options = {}) {
   const config = await loadConfig();
@@ -337,9 +338,19 @@ export async function sendUserMessage(chatId, content, options = {}) {
 }
 
 export async function continueToolApproval(chatId, messageId, decision = 'approve', options = {}) {
+  return withToolApprovalLock(chatId, messageId, () => continueToolApprovalLocked(chatId, messageId, decision, options));
+}
+
+async function continueToolApprovalLocked(chatId, messageId, decision = 'approve', options = {}) {
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
+  if (pendingMessage?.status === 'running_tools') {
+    return { chat };
+  }
   if (!pendingMessage?.pendingToolApproval) {
+    if (pendingMessage && pendingMessage.status !== 'needs_tool_approval') {
+      return { chat };
+    }
     const error = new Error('Aprovação de tool não encontrada.');
     error.statusCode = 404;
     throw error;
@@ -610,6 +621,17 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
     },
   });
   return { chat: await readChat(chatId) };
+}
+
+async function withToolApprovalLock(chatId, messageId, action) {
+  const key = `${chatId}:${messageId}`;
+  const previous = toolApprovalLocks.get(key) || Promise.resolve();
+  const run = previous.catch(() => {}).then(action);
+  const cleanup = run.catch(() => {}).then(() => {
+    if (toolApprovalLocks.get(key) === cleanup) toolApprovalLocks.delete(key);
+  });
+  toolApprovalLocks.set(key, cleanup);
+  return run;
 }
 
 function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages, config, options = {}) {
@@ -1759,9 +1781,9 @@ function nativeSearchSupported(providerId) {
 
 async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
   const action = input.action || 'read';
-  const previous = await readPersistentMemory();
 
   if (action === 'read') {
+    const previous = await readPersistentMemory();
     await appendEvent({ type: 'tool.persistent_memory.read', chatId, details: { reason: input.reason } });
     return {
       id: toolCallId,
@@ -1789,14 +1811,10 @@ async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
     };
   }
 
-  const next =
-    action === 'append'
-      ? `${previous.trim()}\n\n${content}\n`
-      : content.endsWith('\n')
-        ? content
-        : `${content}\n`;
+  const update = await updatePersistentMemory((previous) => applyMemoryToolUpdate(previous, content, action));
+  const previous = update.previousContent;
+  const next = update.content;
 
-  await writePersistentMemory(next);
   await appendEvent({
     type: `tool.persistent_memory.${action}`,
     chatId,
@@ -1818,10 +1836,10 @@ async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
 
 async function executeMemoryToolCall(chatId, toolCallId, input) {
   const action = input.action || 'read';
-  const previous = await readMemory(chatId);
-  const chat = await readChat(chatId);
 
   if (action === 'read') {
+    const previous = await readMemory(chatId);
+    const chat = await readChat(chatId);
     await appendEvent({ type: 'tool.memory_chat.read', chatId, details: { reason: input.reason } });
     return {
       id: toolCallId,
@@ -1838,6 +1856,7 @@ async function executeMemoryToolCall(chatId, toolCallId, input) {
 
   const content = String(input.content || '').trim();
   if (!content) {
+    const chat = await readChat(chatId);
     return {
       id: toolCallId,
       name: 'memory_chat',
@@ -1851,18 +1870,14 @@ async function executeMemoryToolCall(chatId, toolCallId, input) {
     };
   }
 
-  const next =
-    action === 'append'
-      ? `${previous.trim()}\n\n${content}\n`
-      : content.endsWith('\n')
-        ? content
-        : `${content}\n`;
+  const update = await updateMemory(chatId, (previous) => applyMemoryToolUpdate(previous, content, action));
+  const previous = update.previousContent;
+  const next = update.content;
 
-  await writeMemory(chatId, next);
   await appendEvent({
     type: `tool.memory_chat.${action}`,
     chatId,
-    details: { reason: input.reason, path: chat.paths.memory },
+    details: { reason: input.reason, path: update.path },
   });
 
   return {
@@ -1871,12 +1886,20 @@ async function executeMemoryToolCall(chatId, toolCallId, input) {
     input,
     result: {
       action,
-      path: chat.paths.memory,
+      path: update.path,
       previousContent: truncate(previous, 4000),
       content: truncate(next, 12000),
     },
     createdAt: new Date().toISOString(),
   };
+}
+
+function applyMemoryToolUpdate(previous, content, action) {
+  return action === 'append'
+    ? `${previous.trim()}\n\n${content}\n`
+    : content.endsWith('\n')
+      ? content
+      : `${content}\n`;
 }
 
 function renderMessageForModel(message) {

@@ -52,9 +52,9 @@ Por padrao, os dados do usuario ficam em `~/.my-computer`:
 
 `MY_COMPUTER_HOME` pode mudar esse caminho.
 
-Gravacoes JSON que dependem de ler, mesclar e escrever estado sao serializadas por arquivo dentro do processo Node. Isso evita colisao entre envios simultaneos, aprovacoes de tool, updates de metadados e anexos no mesmo chat.
+Gravacoes que dependem de ler, mesclar e escrever estado sao serializadas por arquivo dentro do processo Node. Isso cobre JSON de config/mensagens/metadados/anexos e appends de memoria Markdown usados pelas tools. O objetivo e evitar colisao entre envios simultaneos, aprovacoes de tool, updates de metadados, anexos e memoria no mesmo runtime.
 
-O export/import opera sobre esse runtime. O backup serializa a configuracao normalizada completa, memorias, chats, contexto, anexos e eventos; na importacao, a UI permite escolher esses grupos separadamente.
+O export/import opera sobre esse runtime. O backup serializa a configuracao normalizada completa, memorias, chats, contexto, anexos e eventos; na importacao, a UI permite escolher esses grupos separadamente. Quando o grupo de configuracao e importado, ele substitui a configuracao atual como snapshot completo, em vez de mesclar modelos customizados antigos.
 
 ## Fluxo de uma mensagem
 

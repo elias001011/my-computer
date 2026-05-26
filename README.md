@@ -177,7 +177,7 @@ Em `Configurações gerais > Backup`, o export inclui:
 - anexos dos chats, que podem ser ignorados na importacao
 - eventos recentes para diagnostico
 
-Na importacao, voce escolhe cada grupo. Se importar chats sem anexos, o historico entra sem copiar os arquivos anexados.
+Na importacao, voce escolhe cada grupo. Configuracao importada e tratada como snapshot completo: modelos customizados e capacidades que nao estao no backup sao removidos do runtime atual. Se importar chats sem anexos, o historico entra sem copiar os arquivos anexados.
 
 ## Ollama local
 

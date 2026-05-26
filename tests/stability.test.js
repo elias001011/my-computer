@@ -542,6 +542,99 @@ test('approved terminal command failures keep the pending assistant turn incompl
   }
 });
 
+test('parallel tool approvals execute a pending tool only once', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-idempotent-approval-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const sideEffectPath = path.join(tempDir, 'side-effect.txt');
+  const sideEffectScript = `require('node:fs').appendFileSync(${JSON.stringify(sideEffectPath)}, 'x')`;
+  let providerCalls = 0;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou executar uma ação local.',
+                tool_calls: [
+                  {
+                    id: 'tool-call-1',
+                    type: 'function',
+                    function: {
+                      name: 'run_terminal_command',
+                      arguments: JSON.stringify({
+                        command: `${process.execPath} -e ${JSON.stringify(sideEffectScript)}`,
+                        returnOutput: false,
+                      }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-idempotent-approval-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-idempotent-approval-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Idempotent approval', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Execute uma ação com side effect.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    await Promise.all([
+      assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', { toolCallId: 'tool-call-1' }),
+      assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', { toolCallId: 'tool-call-1' }),
+    ]);
+
+    assert.equal(await fs.readFile(sideEffectPath, 'utf8'), 'x');
+    const updatedChat = await store.readChat(chat.id);
+    const updatedMessage = updatedChat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(updatedMessage.status, 'sent');
+    assert.equal(updatedMessage.toolUses.filter((toolUse) => toolUse.id === 'tool-call-1').length, 1);
+    assert.equal(providerCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('concurrent sends append all messages without temp-file collisions', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-concurrent-send-'));
   process.env.MY_COMPUTER_HOME = tempDir;

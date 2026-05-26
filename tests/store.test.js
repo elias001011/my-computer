@@ -182,6 +182,68 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.deepEqual(importedConfig.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(importedConfig.routing.providerRotationEnabled, true);
 
+  await store.saveConfig({
+    customModels: {
+      'openai-compatible': ['old/custom-model'],
+    },
+    modelCapabilities: {
+      'openai-compatible': {
+        'old/custom-model': { images: true, maxInputImages: 2 },
+      },
+    },
+    tools: { searchMode: 'off', webSearch: false, searchTerminal: false },
+  });
+  await store.importRuntimeData(
+    {
+      version: 1,
+      config: {
+        setupComplete: true,
+        provider: 'openai-compatible',
+        model: 'restored-model',
+        providerSettings: {
+          'openai-compatible': {
+            baseUrl: 'https://backup.test/v1',
+            apiKeys: [{ value: 'backup-key' }],
+          },
+        },
+        customModels: {},
+        modelCapabilities: {},
+        tools: { webSearch: true, searchTerminal: false },
+      },
+    },
+    { config: true, persistentMemory: false, chats: false, attachments: false, events: false },
+  );
+  const restoredConfig = await store.loadConfig();
+  assert.equal(restoredConfig.customModels['openai-compatible'].length, 0);
+  assert.deepEqual(restoredConfig.modelCapabilities['openai-compatible'], {});
+  assert.equal(restoredConfig.tools.searchMode, 'native');
+  assert.equal(restoredConfig.tools.webSearch, true);
+  assert.equal(restoredConfig.providerSettings['openai-compatible'].apiKeys[0].value, 'backup-key');
+
+  await store.saveConfig({ tools: { searchMode: 'off', webSearch: false, searchTerminal: false } });
+  await store.saveConfig({ tools: { webSearch: true, searchTerminal: false } });
+  const legacyPatchConfig = await store.loadConfig();
+  assert.equal(legacyPatchConfig.tools.searchMode, 'native');
+  assert.equal(legacyPatchConfig.tools.webSearch, true);
+
+  await store.writePersistentMemory('# Shared\n');
+  await Promise.all([
+    store.updatePersistentMemory((previous) => `${previous.trim()}\n\n- alpha\n`),
+    store.updatePersistentMemory((previous) => `${previous.trim()}\n\n- beta\n`),
+  ]);
+  const persistentMemory = await store.readPersistentMemory();
+  assert.match(persistentMemory, /alpha/);
+  assert.match(persistentMemory, /beta/);
+
+  await store.writeMemory(chat.id, '# Chat memory\n');
+  await Promise.all([
+    store.updateMemory(chat.id, (previous) => `${previous.trim()}\n\n- local alpha\n`),
+    store.updateMemory(chat.id, (previous) => `${previous.trim()}\n\n- local beta\n`),
+  ]);
+  const chatMemory = (await store.readChat(chat.id)).memory;
+  assert.match(chatMemory, /local alpha/);
+  assert.match(chatMemory, /local beta/);
+
   const chats = await store.listChats();
   assert.equal(chats.length, 1);
 

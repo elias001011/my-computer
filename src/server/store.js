@@ -105,10 +105,7 @@ export async function saveConfig(patch = {}) {
         ...current.appearance,
         ...(patch.appearance || {}),
       }),
-      tools: normalizeTools({
-        ...current.tools,
-        ...(patch.tools || {}),
-      }),
+      tools: normalizeTools(mergeToolsSettings(current.tools, patch.tools)),
       context: normalizeContextSettings({
         ...current.context,
         ...(patch.context || {}),
@@ -134,6 +131,22 @@ export async function saveConfig(patch = {}) {
 
     await writeJson(configPath, next, 0o600);
     await appendEvent({ type: 'config.updated', details: { provider: next.provider, model: next.model } });
+    return next;
+  });
+}
+
+export async function replaceConfig(config = {}) {
+  return withFileLock(configPath, async () => {
+    await ensureRuntime();
+    const next = normalizeConfig({
+      ...config,
+      setupComplete: Boolean(config.setupComplete ?? true),
+      updatedAt: new Date().toISOString(),
+    });
+    next.apiKey = getPrimaryApiKey(next.providerSettings, next.provider);
+
+    await writeJson(configPath, next, 0o600);
+    await appendEvent({ type: 'config.replaced', details: { provider: next.provider, model: next.model } });
     return next;
   });
 }
@@ -313,11 +326,26 @@ export async function readMemory(id) {
 }
 
 export async function writeMemory(id, content) {
-  const chat = await readChat(id);
-  await fs.writeFile(chat.paths.memory, String(content || ''), { mode: 0o600 });
-  await touchChat(id);
-  await appendEvent({ type: 'chat.memory.updated', chatId: id });
+  await updateMemory(id, () => String(content || ''));
   return readChat(id);
+}
+
+export async function updateMemory(id, updater) {
+  assertChatId(id);
+  const metadata = await readChatMetadata(id);
+  return withFileLock(metadata.paths.memory, async () => {
+    const previousContent = await readText(metadata.paths.memory, '');
+    const nextValue = await updater(previousContent);
+    const content = String(nextValue ?? '');
+    await fs.writeFile(metadata.paths.memory, content, { mode: 0o600 });
+    await touchChat(id);
+    await appendEvent({ type: 'chat.memory.updated', chatId: id });
+    return {
+      previousContent,
+      content,
+      path: metadata.paths.memory,
+    };
+  });
 }
 
 export async function readPersistentMemory() {
@@ -326,10 +354,24 @@ export async function readPersistentMemory() {
 }
 
 export async function writePersistentMemory(content) {
+  const result = await updatePersistentMemory(() => String(content || ''));
+  return result.content;
+}
+
+export async function updatePersistentMemory(updater) {
   await ensureRuntime();
-  await fs.writeFile(persistentMemoryPath, String(content || ''), { mode: 0o600 });
-  await appendEvent({ type: 'memory.persistent.updated', details: { path: persistentMemoryPath } });
-  return readPersistentMemory();
+  return withFileLock(persistentMemoryPath, async () => {
+    const previousContent = await readText(persistentMemoryPath, '');
+    const nextValue = await updater(previousContent);
+    const content = String(nextValue ?? '');
+    await fs.writeFile(persistentMemoryPath, content, { mode: 0o600 });
+    await appendEvent({ type: 'memory.persistent.updated', details: { path: persistentMemoryPath } });
+    return {
+      previousContent,
+      content,
+      path: persistentMemoryPath,
+    };
+  });
 }
 
 export async function readContextSummary(id) {
@@ -554,7 +596,7 @@ export async function importRuntimeData(payload = {}, options = {}) {
   const settings = normalizeImportOptions(options);
 
   if (settings.config && payload.config) {
-    await saveConfig({
+    await replaceConfig({
       ...payload.config,
       setupComplete: Boolean(payload.config.setupComplete ?? true),
     });
@@ -777,6 +819,25 @@ function normalizeTools(tools = {}) {
     alwaysAllow: tools.alwaysAllow === true,
     terminalMode: tools.terminalMode === 'isolated' ? 'isolated' : 'standard',
     deepInvestigation: tools.deepInvestigation === true,
+  };
+}
+
+function mergeToolsSettings(current = {}, patch = {}) {
+  if (!patch || typeof patch !== 'object') return current || {};
+  const next = { ...(current || {}) };
+  const hasLegacySearchPatch =
+    !Object.hasOwn(patch, 'searchMode') &&
+    (Object.hasOwn(patch, 'webSearch') || Object.hasOwn(patch, 'searchTerminal'));
+
+  if (hasLegacySearchPatch) {
+    delete next.searchMode;
+    delete next.webSearch;
+    delete next.searchTerminal;
+  }
+
+  return {
+    ...next,
+    ...patch,
   };
 }
 
