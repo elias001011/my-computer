@@ -8,6 +8,8 @@ const rotationCursors = new Map();
 const modelRotationCursors = new Map();
 const OLLAMA_TAGS_PATH = '/api/tags';
 const OLLAMA_PULL_PATH = '/api/pull';
+const DEFAULT_PROVIDER_TIMEOUT_MS = clampTimeoutMs(process.env.MC_PROVIDER_TIMEOUT_MS, 120000);
+const OLLAMA_PULL_TIMEOUT_MS = clampTimeoutMs(process.env.MC_OLLAMA_PULL_TIMEOUT_MS, 600000);
 
 export async function callProviderChat({
   config,
@@ -548,15 +550,14 @@ async function callOpenRouterNativeSearch(provider, runtime, apiKey, model, quer
 }
 
 async function postJson(url, body, headers, provider) {
-  const response = await fetch(url, {
+  const { response, data } = await fetchJsonWithTimeout(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...headers,
     },
     body: JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => ({}));
+  }, provider);
   if (!response.ok) {
     const message = data?.error?.message || data?.error || `${provider.label} retornou HTTP ${response.status}.`;
     const error = new Error(String(message));
@@ -602,12 +603,11 @@ async function callOpenAICompatibleChat({
     headers['X-OpenRouter-Title'] = 'My Computer';
   }
 
-  const response = await fetch(getChatCompletionsUrl(runtime.baseUrl), {
+  const { response, data } = await fetchJsonWithTimeout(getChatCompletionsUrl(runtime.baseUrl), {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => ({}));
+  }, provider);
 
   if (!response.ok) {
     const message = data?.error?.message || `${provider.label} retornou HTTP ${response.status}.`;
@@ -667,7 +667,7 @@ async function callAnthropicChat({
     }));
   }
 
-  const response = await fetch(`${stripTrailingSlash(runtime.baseUrl)}/messages`, {
+  const { response, data } = await fetchJsonWithTimeout(`${stripTrailingSlash(runtime.baseUrl)}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -675,8 +675,7 @@ async function callAnthropicChat({
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
-  });
-  const data = await response.json().catch(() => ({}));
+  }, provider);
 
   if (!response.ok) {
     const message = data?.error?.message || `${provider.label} retornou HTTP ${response.status}.`;
@@ -798,12 +797,12 @@ async function ensureOllamaModel(model, openAIBaseUrl) {
 
   if (installed.includes(model)) return;
 
-  const response = await fetch(`${baseApiUrl}${OLLAMA_PULL_PATH}`, {
+  const provider = getProvider('ollama');
+  const { response, data } = await fetchJsonWithTimeout(`${baseApiUrl}${OLLAMA_PULL_PATH}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, stream: false }),
-  });
-  const data = await response.json().catch(() => ({}));
+  }, provider, OLLAMA_PULL_TIMEOUT_MS);
 
   if (!response.ok) {
     const error = new Error(data?.error || `Ollama não conseguiu instalar o modelo ${model}.`);
@@ -1096,6 +1095,35 @@ function supportsReasoningEffortParameter(providerId, model) {
   const metadata = getModelMetadata(providerId, model);
   if (metadata.supportsReasoning) return true;
   return providerId === 'openai-compatible';
+}
+
+async function fetchJsonWithTimeout(url, options = {}, provider = {}, timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const label = provider.label || 'Provider';
+      const timeoutError = new Error(`${label} não respondeu em ${Math.ceil(timeoutMs / 1000)}s.`);
+      timeoutError.statusCode = 408;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function clampTimeoutMs(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(Math.max(Math.round(number), 50), 900000);
 }
 
 function buildAnthropicWebSearchTool(model, maxResults) {

@@ -320,6 +320,11 @@ function renderApp() {
   const chat = getActiveChatView();
   const chatProviderId = chat?.provider || state.config.provider;
   const chatModel = chat?.model || state.config.model;
+  const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
+  const composerDisabled = !chat || state.busy || toolApprovalBlocksComposer;
+  const composerPlaceholder = toolApprovalBlocksComposer
+    ? 'Aprove ou negue a tool pendente antes de enviar outra mensagem.'
+    : 'Digite uma mensagem...';
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
@@ -362,10 +367,10 @@ function renderApp() {
           <div class="composer-main">
             <label class="attach-button icon-button" title="Anexar arquivo" aria-label="Anexar arquivo">
               <span aria-hidden="true">+</span>
-              <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${!chat || state.busy ? 'disabled' : ''} />
+              <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${composerDisabled ? 'disabled' : ''} />
             </label>
-            <textarea name="content" placeholder="Digite uma mensagem..." ${state.busy ? 'disabled' : ''}>${escapeHtml(getComposerDraft(chat?.id))}</textarea>
-            <button class="primary icon-button" type="submit" aria-label="Enviar" title="Enviar" ${state.busy ? 'disabled' : ''}>
+            <textarea name="content" placeholder="${escapeAttr(composerPlaceholder)}" ${composerDisabled ? 'disabled' : ''}>${escapeHtml(getComposerDraft(chat?.id))}</textarea>
+            <button class="primary icon-button" type="submit" aria-label="Enviar" title="Enviar" ${composerDisabled ? 'disabled' : ''}>
               <span aria-hidden="true">↑</span>
             </button>
           </div>
@@ -1513,6 +1518,16 @@ function getMessageContinuationGroupId(message) {
   return message?.continuationGroupId || message?.sourceUserMessageId || message?.id || null;
 }
 
+function chatHasActiveToolApproval(chat) {
+  return Boolean(
+    chat?.messages?.some(
+      (message) =>
+        message.role === 'assistant' &&
+        (message.pendingToolApproval || message.status === 'needs_tool_approval' || message.status === 'running_tools'),
+    ),
+  );
+}
+
 function getAssistantAttemptsForMessage(message) {
   if (!state.activeChat?.messages?.length || message?.role !== 'assistant') return [];
   const groupId = getMessageContinuationGroupId(message);
@@ -1749,6 +1764,8 @@ function renderToolUse(toolUse, message = null) {
   const genericResult = JSON.stringify(result || {}, null, 2);
   const nextPending = message?.toolUses?.find((item) => item.status === 'pending_approval');
   const isActivePending = toolUse.status === 'pending_approval' && nextPending?.id === toolUse.id;
+  const canCheckRunningTool =
+    message?.status === 'running_tools' && ['approved_pending_execution', 'pending_approval'].includes(toolUse.status);
   const decisionBusy = state.toolDecisionInFlight.has(`${message?.id || ''}:${toolUse.id}`);
   const approvalActions =
     isActivePending
@@ -1756,6 +1773,12 @@ function renderToolUse(toolUse, message = null) {
         <div class="tool-approval-actions">
           <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${state.busy || decisionBusy ? 'disabled' : ''}>Permitir esta tool</button>
           <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${state.busy || decisionBusy ? 'disabled' : ''}>Negar esta tool</button>
+        </div>
+      `
+      : canCheckRunningTool
+        ? `
+        <div class="tool-approval-actions">
+          <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message?.id || '')}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${state.busy || decisionBusy ? 'disabled' : ''}>Verificar execução</button>
         </div>
       `
       : toolUse.status === 'pending_approval'
@@ -3060,6 +3083,12 @@ async function sendMessageFromComposerDraft() {
 }
 
 async function sendMessageFromValues(textarea, content) {
+  const chatId = state.activeChat?.id;
+  if (chatHasActiveToolApproval(state.activeChat)) {
+    state.error = 'Aprove ou negue a tool pendente antes de enviar outra mensagem neste chat.';
+    renderPreservingVisualState();
+    return;
+  }
   if (state.pendingAttachments.length > 8) {
     state.error = 'Envie no máximo 8 anexos por mensagem neste MVP.';
     renderPreservingVisualState();
@@ -3094,18 +3123,31 @@ async function sendMessageFromValues(textarea, content) {
     return;
   }
   if (textarea) textarea.value = '';
-  clearComposerDraft(state.activeChat.id);
+  clearComposerDraft(chatId);
   autoResizeComposer();
   const attachments = state.pendingAttachments;
   state.pendingAttachments = [];
-  await sendMessageContent(content || 'Analise os anexos enviados.', { attachments });
+  const sendResult = await sendMessageContent(content || 'Analise os anexos enviados.', { attachments });
+  if (state.error && !sendResult?.messageAccepted && state.activeChat?.id === chatId) {
+    state.pendingAttachments = attachments;
+    setComposerDraft(chatId, content);
+    state.lastFailedAction = () => sendMessageFromComposerDraft();
+    renderPreservingVisualState();
+    autoResizeComposer();
+  }
 }
 
 async function sendMessageContent(content, options = {}) {
-  if (state.busy) return;
+  if (state.busy) return { messageAccepted: false };
+  if (chatHasActiveToolApproval(state.activeChat)) {
+    state.error = 'Aprove ou negue a tool pendente antes de enviar outra mensagem neste chat.';
+    renderPreservingVisualState();
+    return { messageAccepted: false };
+  }
   const chatId = state.activeChat.id;
   const attachments = options.attachments || [];
   const isContinuationRequest = Boolean(options.retryMessageId || options.continueMessageId);
+  let messageAccepted = false;
   if (!isContinuationRequest) {
     const localMessage = {
       id: `local-${Date.now()}`,
@@ -3135,6 +3177,7 @@ async function sendMessageContent(content, options = {}) {
             attachmentIds: attachments.map((attachment) => attachment.id),
           },
         });
+        messageAccepted = true;
       } finally {
         stopEventPolling();
       }
@@ -3158,9 +3201,17 @@ async function sendMessageContent(content, options = {}) {
     scrollMessagesToBottom();
   }
   if (state.error && state.activeChat?.id === chatId) {
-    await refreshActiveChatData();
+    if (messageAccepted) {
+      state.lastFailedAction = () => refreshChatAfterAcceptedMessage(chatId);
+    }
+    try {
+      await refreshActiveChatData();
+    } catch {
+      // The retry action can refresh again; preserve the original request outcome.
+    }
     renderPreservingVisualState();
   }
+  return { messageAccepted };
 }
 
 async function decideToolApproval(messageId, decision, toolCallId = null, button = null) {
@@ -3193,11 +3244,23 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
         state.status = 'A tool aprovada parou antes do final. Use Continuar.';
       } else if (updatedMessage?.status === 'sent') {
         state.status = 'A tool aprovada foi concluída.';
+      } else if (updatedMessage?.status === 'running_tools') {
+        state.status = 'A tool ainda está em execução.';
       }
     });
   } finally {
     state.toolDecisionInFlight.delete(decisionKey);
   }
+}
+
+async function refreshChatAfterAcceptedMessage(chatId) {
+  await runAction('Atualizando chat...', async () => {
+    if (state.activeChat?.id === chatId) {
+      await refreshActiveChatData();
+    }
+    const fresh = await api('/api/chats');
+    state.chats = fresh.chats;
+  });
 }
 
 function startEventPolling(chatId) {
@@ -3270,6 +3333,11 @@ function saveComposerDraft() {
 function clearComposerDraft(chatId) {
   if (!chatId) return;
   localStorage.removeItem(getComposerDraftKey(chatId));
+}
+
+function setComposerDraft(chatId, content) {
+  if (!chatId) return;
+  localStorage.setItem(getComposerDraftKey(chatId), content);
 }
 
 function getComposerDraftKey(chatId) {

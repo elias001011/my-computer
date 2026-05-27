@@ -36,6 +36,8 @@ const MAX_TOOL_ROUNDS = 4;
 const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 8;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
+const MEMORY_TOOL_ACTIONS = new Set(['read', 'write', 'append']);
+const DEFAULT_RUNNING_TOOL_STALE_MS = 20 * 60 * 1000;
 const chatTurnLocks = new Map();
 const toolApprovalLocks = new Map();
 
@@ -53,6 +55,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   }
 
   const chatBefore = await readChat(chatId);
+  ensureNoActiveToolApproval(chatBefore);
   const requestSource = resolveRequestSourceMessage(chatBefore, options);
   if ((options.retryMessageId || options.continueMessageId) && !requestSource) {
     const error = new Error('Mensagem para retry/continue não encontrada.');
@@ -356,6 +359,10 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
   if (pendingMessage?.status === 'running_tools') {
+    if (isStaleRunningToolApproval(pendingMessage)) {
+      await resetStaleRunningToolApproval(chatId, pendingMessage);
+      return { chat: await readChat(chatId) };
+    }
     return { chat };
   }
   if (!pendingMessage?.pendingToolApproval) {
@@ -712,6 +719,71 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
   );
 }
 
+async function resetStaleRunningToolApproval(chatId, message) {
+  if (!message.pendingToolApproval) {
+    await updateMessage(chatId, message.id, {
+      status: 'incomplete',
+      content: 'A execução de tools foi interrompida e não há estado suficiente para retomar a aprovação.',
+      pendingToolApproval: null,
+      continuationAvailable: true,
+      error: 'Execução de tools interrompida em estado running_tools.',
+      interruptedAt: new Date().toISOString(),
+    });
+    await appendEvent({
+      type: 'tool.approval.running_stale_marked_incomplete',
+      chatId,
+      details: { messageId: message.id },
+    });
+    return;
+  }
+
+  const pendingState = message.pendingToolApproval || {};
+  const decisions = { ...(pendingState.decisions || {}) };
+  const approvalIds = new Set((pendingState.approvalToolCalls || pendingState.toolCalls || []).map((toolCall) => toolCall.id));
+  const toolUses = (message.toolUses || []).map((toolUse) => {
+    if (toolUse.status === 'denied') {
+      decisions[toolUse.id] = 'deny';
+      return toolUse;
+    }
+    if (!approvalIds.has(toolUse.id)) return toolUse;
+    delete decisions[toolUse.id];
+    return {
+      ...toolUse,
+      status: 'pending_approval',
+      result: { action: 'pending_approval_after_interrupted_execution' },
+    };
+  });
+
+  await updateMessage(chatId, message.id, {
+    status: 'needs_tool_approval',
+    content: message.content || 'A execução anterior foi interrompida. Revise e aprove ou negue a tool novamente.',
+    toolUses,
+    pendingToolApproval: {
+      ...pendingState,
+      decisions,
+    },
+    error: 'Execução de tools interrompida antes de concluir.',
+    continuationAvailable: true,
+  });
+  await appendEvent({
+    type: 'tool.approval.running_stale_reset',
+    chatId,
+    details: { messageId: message.id, staleMs: getRunningToolStaleMs() },
+  });
+}
+
+function isStaleRunningToolApproval(message = {}) {
+  const timestamp = Date.parse(message.updatedAt || message.createdAt || '');
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp > getRunningToolStaleMs();
+}
+
+function getRunningToolStaleMs() {
+  const value = Number(process.env.MC_RUNNING_TOOL_STALE_MS || DEFAULT_RUNNING_TOOL_STALE_MS);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_RUNNING_TOOL_STALE_MS;
+  return Math.min(Math.max(Math.round(value), 1000), 24 * 60 * 60 * 1000);
+}
+
 function createAssistantTraceEntry(assistantMessage, toolCalls = [], round = 1, phase = 'tool_round') {
   return {
     type: 'assistant_output',
@@ -824,6 +896,20 @@ function ensureRequestSourceIsActionable(chat, requestSource = null) {
     error.statusCode = 409;
     throw error;
   }
+}
+
+function ensureNoActiveToolApproval(chat = {}) {
+  const pendingMessage = (chat.messages || []).find(
+    (message) =>
+      message.role === 'assistant' &&
+      (message.pendingToolApproval || message.status === 'needs_tool_approval' || message.status === 'running_tools'),
+  );
+  if (!pendingMessage) return;
+
+  const error = new Error('Há uma aprovação de tool pendente neste chat. Aprove ou negue a tool antes de enviar outra mensagem.');
+  error.statusCode = 409;
+  error.details = { messageId: pendingMessage.id, status: pendingMessage.status };
+  throw error;
 }
 
 function getAssistantAttempts(messages = [], groupId) {
@@ -1860,7 +1946,10 @@ function nativeSearchSupported(providerId) {
 }
 
 async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
-  const action = input.action || 'read';
+  const action = normalizeMemoryToolAction(input.action);
+  if (!action) {
+    return createInvalidMemoryActionToolUse(toolCallId, 'persistent_memory', input);
+  }
 
   if (action === 'read') {
     const previous = await readPersistentMemory();
@@ -1915,7 +2004,10 @@ async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
 }
 
 async function executeMemoryToolCall(chatId, toolCallId, input) {
-  const action = input.action || 'read';
+  const action = normalizeMemoryToolAction(input.action);
+  if (!action) {
+    return createInvalidMemoryActionToolUse(toolCallId, 'memory_chat', input);
+  }
 
   if (action === 'read') {
     const previous = await readMemory(chatId);
@@ -1980,6 +2072,25 @@ function applyMemoryToolUpdate(previous, content, action) {
     : content.endsWith('\n')
       ? content
       : `${content}\n`;
+}
+
+function normalizeMemoryToolAction(value) {
+  const action = String(value || 'read').trim();
+  return MEMORY_TOOL_ACTIONS.has(action) ? action : null;
+}
+
+function createInvalidMemoryActionToolUse(toolCallId, name, input = {}) {
+  return {
+    id: toolCallId,
+    name,
+    input,
+    status: 'failed',
+    result: {
+      action: String(input.action || ''),
+      error: 'action must be one of: read, write, append',
+    },
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function renderMessageForModel(message) {

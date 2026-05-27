@@ -542,6 +542,207 @@ test('approved terminal command failures keep the pending assistant turn incompl
   }
 });
 
+test('pending tool approval blocks new chat turns until resolved', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-pending-approval-block-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou atualizar a memória.',
+                tool_calls: [
+                  {
+                    id: 'memory-tool-1',
+                    type: 'function',
+                    function: {
+                      name: 'memory_chat',
+                      arguments: JSON.stringify({ action: 'append', content: '- pendente', reason: 'teste' }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-pending-approval-block-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-pending-approval-block-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: false,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Pending approval block', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Crie uma memória.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    await assert.rejects(
+      () => assistant.sendUserMessage(chat.id, 'Mensagem antes de aprovar.'),
+      (error) => error.statusCode === 409 && /aprovação de tool pendente/i.test(error.message),
+    );
+
+    const reloadedChat = await store.readChat(chat.id);
+    assert.equal(reloadedChat.messages.length, 2);
+    assert.equal(providerCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('stale running tool approvals reset instead of trapping the chat', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-stale-running-approval-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const originalStaleMs = process.env.MC_RUNNING_TOOL_STALE_MS;
+  process.env.MC_RUNNING_TOOL_STALE_MS = '1000';
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou atualizar a memória.',
+                tool_calls: [
+                  {
+                    id: 'memory-tool-1',
+                    type: 'function',
+                    function: {
+                      name: 'memory_chat',
+                      arguments: JSON.stringify({
+                        action: 'append',
+                        content: '- recuperado após running stale',
+                        reason: 'teste',
+                        returnOutput: false,
+                      }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-stale-running-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-stale-running-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: false,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Stale running approval', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Crie uma memória.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    const messagesPath = path.join(store.getChatDir(chat.id), 'messages.json');
+    const messages = JSON.parse(await fs.readFile(messagesPath, 'utf8'));
+    const pendingMessage = messages.find((message) => message.id === pending.assistantMessage.id);
+    pendingMessage.status = 'running_tools';
+    pendingMessage.updatedAt = new Date(Date.now() - 2000).toISOString();
+    pendingMessage.toolUses = pendingMessage.toolUses.map((toolUse) =>
+      toolUse.id === 'memory-tool-1'
+        ? { ...toolUse, status: 'approved_pending_execution', result: { action: 'approved_pending_execution' } }
+        : toolUse,
+    );
+    await fs.writeFile(messagesPath, `${JSON.stringify(messages, null, 2)}\n`);
+
+    const reset = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'memory-tool-1',
+    });
+    const resetMessage = reset.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(resetMessage.status, 'needs_tool_approval');
+    assert.equal(resetMessage.toolUses[0].status, 'pending_approval');
+
+    const completed = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'memory-tool-1',
+    });
+    const completedMessage = completed.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(completedMessage.status, 'sent');
+    assert.equal(completedMessage.pendingToolApproval, null);
+    assert.match(await store.readMemory(chat.id), /recuperado após running stale/);
+    assert.equal(providerCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalStaleMs === undefined) {
+      delete process.env.MC_RUNNING_TOOL_STALE_MS;
+    } else {
+      process.env.MC_RUNNING_TOOL_STALE_MS = originalStaleMs;
+    }
+  }
+});
+
 test('parallel tool approvals execute a pending tool only once', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-idempotent-approval-'));
   process.env.MY_COMPUTER_HOME = tempDir;
@@ -632,6 +833,144 @@ test('parallel tool approvals execute a pending tool only once', async () => {
     assert.equal(providerCalls, 1);
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test('invalid memory tool actions fail without overwriting memory', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-invalid-memory-action-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      const toolName = providerCalls === 1 ? 'memory_chat' : 'persistent_memory';
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'memory-bad-action',
+                    type: 'function',
+                    function: {
+                      name: toolName,
+                      arguments: JSON.stringify({ action: 'delete', content: '- novo conteúdo', reason: 'ação inválida' }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-invalid-memory-action-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-invalid-memory-action-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: false,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: true,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Invalid memory action', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+    await store.writeMemory(chat.id, '# Chat memory\n\n- original\n');
+    await store.writePersistentMemory('# Persistent memory\n\n- original global\n');
+
+    const result = await assistant.sendUserMessage(chat.id, 'Tente uma ação inválida de memória.');
+    assert.equal(result.assistantMessage.status, 'incomplete');
+    assert.match(result.assistantMessage.toolUses[0].result.error, /action must be one of/i);
+    assert.match(await store.readMemory(chat.id), /original/);
+    assert.doesNotMatch(await store.readMemory(chat.id), /novo conteúdo/);
+
+    const persistentResult = await assistant.sendUserMessage(chat.id, 'Tente uma ação inválida de memória persistente.');
+    assert.equal(persistentResult.assistantMessage.status, 'incomplete');
+    assert.match(persistentResult.assistantMessage.toolUses[0].result.error, /action must be one of/i);
+    assert.match(await store.readPersistentMemory(), /original global/);
+    assert.doesNotMatch(await store.readPersistentMemory(), /novo conteúdo/);
+    assert.equal(providerCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('provider chat requests time out instead of holding a chat lock forever', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-provider-timeout-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const originalTimeout = process.env.MC_PROVIDER_TIMEOUT_MS;
+  process.env.MC_PROVIDER_TIMEOUT_MS = '50';
+  global.fetch = async (url, options = {}) => {
+    if (!String(url).includes('/chat/completions')) {
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    }
+    return new Promise((resolve, reject) => {
+      options.signal?.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    });
+  };
+
+  try {
+    const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}-provider-timeout`);
+    await assert.rejects(
+      () =>
+        providerClient.callProviderChat({
+          config: {
+            provider: 'openai-compatible',
+            model: 'gpt-5.5',
+            providerSettings: {
+              'openai-compatible': {
+                baseUrl: 'https://example.test/v1',
+                apiKeys: [{ value: 'test-key' }],
+              },
+            },
+          },
+          messages: [{ role: 'user', content: 'oi' }],
+          tools: [],
+        }),
+      (error) => error.statusCode === 408 && /não respondeu/i.test(error.message),
+    );
+  } finally {
+    global.fetch = originalFetch;
+    if (originalTimeout === undefined) {
+      delete process.env.MC_PROVIDER_TIMEOUT_MS;
+    } else {
+      process.env.MC_PROVIDER_TIMEOUT_MS = originalTimeout;
+    }
   }
 });
 
