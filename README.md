@@ -2,35 +2,35 @@
 
 Atualizado em 26/05/2026.
 
-My Computer e um painel self-hosted para conversar com uma IA, usar tools locais com aprovacao, manter contexto entre chats e alternar entre providers sem perder o historico.
+My Computer é um painel self-hosted para conversar com uma IA, usar tools locais com aprovação, manter contexto entre chats e alternar entre providers sem perder o histórico.
 
-Ele roda localmente em Node.js, usa HTML/CSS/JS puro no painel e guarda todos os dados do usuario em um runtime separado do projeto.
+Ele roda localmente em Node.js, usa HTML/CSS/JS puro no painel e guarda todos os dados do usuário em um runtime separado do projeto.
 
 ## O que este projeto usa
 
 - Node.js 20 ou mais novo.
-- Git, para update direto do repositorio.
-- npm, para instalar dependencias.
-- Python 3, quando voce usa a pesquisa web via terminal.
-- Uma ou mais API keys, dependendo dos providers que voce quiser usar.
-- Opcional: Ollama, se voce quiser modelos locais.
+- Git, para update direto do repositório.
+- npm, para instalar dependências.
+- Python 3, quando você usa a pesquisa web via terminal.
+- Uma ou mais API keys, dependendo dos providers que você quiser usar.
+- Opcional: Ollama, se você quiser modelos locais.
 
-### Dependencias opcionais e quando usar
+### Dependências opcionais e quando usar
 
 - `ollama` para rodar modelos locais, fazer `pull` e testar vision local.
 - `python3` para a busca web via terminal quando `tools.searchMode` estiver em `terminal` ou `both`.
-- `sudo` so e necessario se voce quiser deixar o sistema instalar/remover Ollama automaticamente.
+- `sudo` só é necessário se você quiser deixar o sistema instalar/remover Ollama automaticamente.
 
-## Instalação rapida
+## Instalação rápida
 
 ```bash
 ./install.sh
 ```
 
-Esse e o caminho normal de instalacao. O script faz o seguinte:
+Esse é o caminho normal de instalação. O script faz o seguinte:
 
 - roda `npm install`
-- cria o runtime em `~/.my-computer` por padrao
+- cria o runtime em `~/.my-computer` por padrão
 - abre o painel local no navegador
 - deixa o servidor rodando no terminal
 
@@ -46,11 +46,11 @@ Se quiser controlar melhor o comportamento, use as flags abaixo:
 
 - `--fresh` move o runtime atual para um backup e mostra o setup inicial de novo.
 - `--no-open` inicia sem abrir o navegador.
-- `--no-start` instala dependencias e prepara o runtime sem subir o servidor.
+- `--no-start` instala dependências e prepara o runtime sem subir o servidor.
 - `--port` escolhe a porta do painel.
 - `--host` força o host de bind.
 
-O script tambem respeita estas variaveis de ambiente:
+O script também respeita estas variáveis de ambiente:
 
 - `MY_COMPUTER_HOME`
 - `PORT`
@@ -58,7 +58,7 @@ O script tambem respeita estas variaveis de ambiente:
 
 ## Como iniciar
 
-Depois da instalacao, voce pode abrir o painel de tres formas:
+Depois da instalação, você pode abrir o painel de três formas:
 
 ```bash
 npm run start:open
@@ -67,7 +67,7 @@ node src/cli/mc.js start --open
 ```
 
 - `npm run start:open` sobe o servidor e abre o navegador.
-- `npm run start` sobe o servidor sem forcar abrir o navegador.
+- `npm run start` sobe o servidor sem forçar abrir o navegador.
 - `node src/cli/mc.js start --open` usa o mesmo CLI interno do projeto.
 
 Para diagnosticar o ambiente:
@@ -83,15 +83,15 @@ node src/cli/mc.js doctor
 ./uninstall.sh
 ```
 
-Por padrao, isso remove `node_modules` e preserva o runtime em `~/.my-computer`.
+Por padrão, isso remove `node_modules` e preserva o runtime em `~/.my-computer`.
 
-Para apagar tambem chats, anexos, memoria e configuracoes:
+Para apagar também chats, anexos, memória e configurações:
 
 ```bash
 ./uninstall.sh --remove-data
 ```
 
-Outras opcoes:
+Outras opções:
 
 - `--keep-data` preserva o runtime.
 - `--yes` funciona como atalho para `--remove-data`.
@@ -102,9 +102,9 @@ Outras opcoes:
 1. Instale o projeto com `./install.sh`.
 2. Abra o painel e siga o setup inicial, ou entre depois em `Configurações gerais`.
 3. Escolha um provider e adicione as API keys.
-4. Ajuste o tema do painel, o idioma e o nivel tecnico.
+4. Ajuste o tema do painel, o idioma e o nível técnico.
 5. Se quiser usar modelos locais, configure Ollama.
-6. Abra o `Indice de modelos` para conferir o que e selecionavel e o que e apenas informativo.
+6. Abra o `Índice de modelos` para conferir o que é selecionável e o que é apenas informativo.
 7. Comece um chat novo.
 
 ## Providers e chaves
@@ -119,9 +119,9 @@ O app suporta estes providers:
 - OpenRouter
 - Hugging Face
 - Ollama
-- OpenAI compativel custom
+- OpenAI compatível
 
-As chaves mais comuns sao:
+As chaves mais comuns são:
 
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
@@ -131,31 +131,31 @@ As chaves mais comuns sao:
 - `OPENROUTER_API_KEY`
 - `HF_TOKEN`
 
-Se a variavel de ambiente existir, o backend a reaproveita automaticamente no provider correspondente.
+Se a variável de ambiente existir, o backend a reaproveita automaticamente no provider correspondente.
 
 ### Como ler o índice de modelos
 
-No painel existe uma aba chamada `Indice de modelos`. Ela mostra:
+No painel existe uma aba chamada `Índice de modelos`. Ela mostra:
 
-- `selecionavel`: aparece em dropdowns e rotatorias
-- `indice`: nao entra no seletor, mas fica documentado
-- `raciocinio`: suporta reasoning ou thinking
-- `visao`: aceita imagens
-- `saída`: limite maximo de tokens de resposta
-- `API`: observacoes tecnicas e restricoes do provider
+- `selecionável`: aparece em dropdowns e rotatórias
+- `índice`: não entra no seletor, mas fica documentado
+- `raciocínio`: suporta reasoning ou thinking
+- `visão`: aceita imagens
+- `saída`: limite máximo de tokens de resposta
+- `API`: observações técnicas e restrições do provider
 
-`openrouter/free` continua como o endpoint gratuito do OpenRouter. `openrouter/auto` continua como o roteador automatico.
+`openrouter/free` continua como o endpoint gratuito do OpenRouter. `openrouter/auto` continua como o roteador automático.
 
 ## Modelos e rotação
 
-O app tem tres ideias separadas:
+O app tem três ideias separadas:
 
 - `Modelo padrão`: o valor salvo para chats novos.
 - `Rotatória de modelos`: troca entre modelos do mesmo provider quando um deles falha.
 - `Rotatória de providers`: troca de provider/modelo quando a chamada falha e existe fallback configurado.
 
-Se um modelo nao aparece no seletor, ele ainda pode aparecer no `Indice de modelos`.
-Se voce quiser usar um endpoint ou alias que ainda nao entrou na lista, use `Modelo personalizado`.
+Se um modelo não aparece no seletor, ele ainda pode aparecer no `Índice de modelos`.
+Se você quiser usar um endpoint ou alias que ainda não entrou na lista, use `Modelo personalizado`.
 
 ## Tema escuro
 
@@ -165,52 +165,52 @@ Em `Configurações gerais > Identidade` existe `Tema do painel` com:
 - `Escuro`
 - `Sistema`
 
-O tema e salvo na configuracao e segue a preferencia do sistema quando voce escolher `Sistema`.
+O tema é salvo na configuração e segue a preferência do sistema quando você escolher `Sistema`.
 
-## Backup e restauracao
+## Backup e restauração
 
 Em `Configurações gerais > Backup`, o export inclui:
 
-- configuracao completa, incluindo provider, API keys, tema, tools, contexto, rede e rotatorias
-- memoria persistente
-- chats, mensagens, memorias de chat e contexto salvo
-- anexos dos chats, que podem ser ignorados na importacao
-- eventos recentes para diagnostico
+- configuração completa, incluindo provider, API keys, tema, tools, contexto, rede e rotatórias
+- memória persistente
+- chats, mensagens, memórias de chat e contexto salvo
+- anexos dos chats, que podem ser ignorados na importação
+- eventos recentes para diagnóstico
 
-Na importacao, voce escolhe cada grupo. Configuracao importada e tratada como snapshot completo: modelos customizados e capacidades que nao estao no backup sao removidos do runtime atual. Se importar chats sem anexos, o historico entra sem copiar os arquivos anexados.
+Na importação, você escolhe cada grupo. Configuração importada é tratada como snapshot completo: modelos customizados e capacidades que não estão no backup são removidos do runtime atual. Se importar chats sem anexos, o histórico entra sem copiar os arquivos anexados.
 
 ## Ollama local
 
-Ollama e opcional, mas o app sabe trabalhar com ele:
+Ollama é opcional, mas o app sabe trabalhar com ele:
 
-- verificar se o daemon esta instalado
+- verificar se o daemon está instalado
 - instalar pelo script oficial
 - listar modelos locais
 - dar `pull` no modelo selecionado
 - remover modelos locais
 - tentar desinstalar o Ollama do sistema
 
-Base local padrao:
+Base local padrão:
 
 ```text
 http://127.0.0.1:11434/v1
 ```
 
-Se o instalador ou o gerenciamento do Ollama pedir `sudo`, voce tem duas opcoes seguras:
+Se o instalador ou o gerenciamento do Ollama pedir `sudo`, você tem duas opções seguras:
 
 1. Rodar o comando manualmente no terminal e digitar a senha.
 2. Criar uma regra limitada em `/etc/sudoers.d/my-computer`.
 
-Exemplo de regra limitada para comandos de servico do Ollama:
+Exemplo de regra limitada para comandos de serviço do Ollama:
 
 ```sudoers
 elias ALL=(root) NOPASSWD: /usr/bin/systemctl start ollama, /usr/bin/systemctl stop ollama, /usr/bin/systemctl restart ollama, /usr/bin/systemctl enable ollama, /usr/bin/systemctl disable ollama, /usr/bin/systemctl status ollama
 ```
 
-- Troque `elias` pelo seu usuario.
-- Ajuste os binarios e comandos para o que voce realmente confia.
+- Troque `elias` pelo seu usuário.
+- Ajuste os binários e comandos para o que você realmente confia.
 - Evite liberar `ALL` sem senha.
-- O app mostra stdout, stderr e codigo de saida quando um comando falha.
+- O app mostra stdout, stderr e código de saída quando um comando falha.
 
 ## Search e tools
 
@@ -225,7 +225,7 @@ O app tem estes modos de pesquisa web:
 `Terminal` usa o computador local.
 `Ambos` tenta a rota nativa primeiro e cai para o terminal.
 
-Outras tools locais podem ser ligadas e desligadas nas configuracoes:
+Outras tools locais podem ser ligadas e desligadas nas configurações:
 
 - `run_terminal_command`
 - `memory_chat`
@@ -233,61 +233,62 @@ Outras tools locais podem ser ligadas e desligadas nas configuracoes:
 - `compact_context`
 - `rename_chat`
 
-Por padrao, tools locais exigem aprovacao manual na UI.
+Por padrão, tools locais exigem aprovação manual na UI.
 
 ## Falhas e continuidade
 
-Quando a IA falha, para no meio ou estoura limite de saida, o app nao apaga a tentativa anterior.
+Quando a IA falha, para no meio ou estoura limite de saída, o app não apaga a tentativa anterior.
 
 O painel mostra:
 
-- `Tentar novamente`: reenvia a solicitacao original desde o inicio.
-- `Continuar`: retoma a partir da ultima saida parcial e do historico da tentativa.
+- `Tentar novamente`: reenvia a solicitação original desde o início.
+- `Continuar`: retoma a partir da última saída parcial e do histórico da tentativa.
 - `Ver detalhes`: abre um modal com o processo e os eventos relacionados daquela tentativa.
-- `Copiar eventos`: copia os eventos carregados do chat para analise ou auditoria.
+- `Copiar eventos`: copia os eventos carregados do chat para análise ou auditoria.
 
-Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
-Retry e Continue ficam disponiveis apenas na tentativa mais recente do grupo. O backend tambem rejeita envios, retries e continues simultaneos no mesmo chat para evitar cliques duplicados e side effects repetidos.
-Falhas reais de tools, timeout e signal deixam a tentativa incompleta. Em terminal, exit code diferente de zero ainda aparece destacado, mas se a IA pediu `returnOutput: true` o stdout/stderr volta para o modelo para ele poder corrigir o proximo passo.
+Isso existe para manter o histórico visível e reduzir perda de contexto quando uma resposta sai incompleta.
+Retry e Continue ficam disponíveis apenas na tentativa mais recente do grupo. O backend também rejeita envios, retries e continues simultâneos no mesmo chat para evitar cliques duplicados e side effects repetidos.
+Falhas reais de tools, timeout e signal deixam a tentativa incompleta. Em terminal, exit code diferente de zero ainda aparece destacado, mas se a IA pediu `returnOutput: true` o stdout/stderr volta para o modelo para ele poder corrigir o próximo passo.
+Quando um modelo devolve conteúdo em `<think>`, o app separa esse texto em um bloco recolhível e mantém a resposta final limpa.
 
 ## Rede local
 
-Em `Configurações gerais > Rede`, voce pode abrir o painel para outros dispositivos na mesma rede.
+Em `Configurações gerais > Rede`, você pode abrir o painel para outros dispositivos na mesma rede.
 
-Quando isso esta ligado:
+Quando isso está ligado:
 
-- o proximo restart escuta em `0.0.0.0`
-- a UI pede senha unica via Basic Auth
+- o próximo restart escuta em `0.0.0.0`
+- a UI pede senha única via Basic Auth
 - o painel mostra a URL local e os IPs LAN detectados
 
 Para ligar:
 
 1. Marque `Abrir painel para a rede`.
 2. Defina uma senha.
-3. Salve as configuracoes.
+3. Salve as configurações.
 4. Reinicie o servidor.
 
 ## Atualizações
 
-O botao de atualizacao usa o clone Git local.
+O botão de atualização usa o clone Git local.
 
-O fluxo e este:
+O fluxo é este:
 
 1. `git fetch --prune`
 2. compara `HEAD` com o upstream
-3. bloqueia atualizacao se houver mudancas locais
-4. quando voce confirma, roda `git pull --ff-only && npm install`
+3. bloqueia atualização se houver mudanças locais
+4. quando você confirma, roda `git pull --ff-only && npm install`
 5. reinicia o servidor na mesma porta
 
 ## Runtime
 
-Por padrao, tudo fica em:
+Por padrão, tudo fica em:
 
 ```text
 ~/.my-computer
 ```
 
-Voce pode trocar isso com `MY_COMPUTER_HOME`.
+Você pode trocar isso com `MY_COMPUTER_HOME`.
 
 Arquivos principais do runtime:
 
@@ -306,8 +307,8 @@ Arquivos principais do runtime:
 - `src/panel/` - UI local do painel.
 - `src/server/` - HTTP server, storage, providers e tools.
 - `src/cli/` - comandos do painel.
-- `scripts/` - implementacao interna de install e uninstall.
-- `docs/` - documentacao do produto e da arquitetura.
+- `scripts/` - implementação interna de install e uninstall.
+- `docs/` - documentação do produto e da arquitetura.
 - `tests/` - testes locais.
 
 ## Documentação recomendada
@@ -318,6 +319,6 @@ Arquivos principais do runtime:
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
 - [docs/SECURITY.md](./docs/SECURITY.md)
 
-## Dica pratica
+## Dica prática
 
-Se algo parecer errado no catalogo de modelos, abra o `Indice de modelos` no painel e compare com [docs/PROVIDERS.md](./docs/PROVIDERS.md). O catalogo do app e atualizado pelo arquivo `src/server/models.js` e pela descoberta dinamica dos providers.
+Se algo parecer errado no catálogo de modelos, abra o `Índice de modelos` no painel e compare com [docs/PROVIDERS.md](./docs/PROVIDERS.md). O catálogo do app é atualizado pelo arquivo `src/server/models.js` e pela descoberta dinâmica dos providers.

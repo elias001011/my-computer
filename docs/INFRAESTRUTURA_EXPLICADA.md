@@ -2,7 +2,7 @@
 
 Atualizado em 26/05/2026.
 
-Este arquivo e o guia mais didatico do projeto. A ideia e responder a pergunta:
+Este arquivo é o guia mais didático do projeto. A ideia é responder a pergunta:
 
 **"O que acontece quando eu digito uma mensagem e aperto enviar?"**
 
@@ -12,31 +12,31 @@ Este arquivo e o guia mais didatico do projeto. A ideia e responder a pergunta:
 Browser -> Node local -> provider -> tools locais -> retorno no chat -> salvamento no runtime
 ```
 
-O app nao manda a conversa para lugar nenhum por acidente. Tudo sai da sua maquina para o provider escolhido ou para as tools que voce habilitou.
+O app não manda a conversa para lugar nenhum por acidente. Tudo sai da sua máquina para o provider escolhido ou para as tools que você habilitou.
 
 ## 1. O que roda no computador
 
-- A interface e um HTML/CSS/JS puro em `src/panel/`.
-- O servidor local e um Node HTTP server em `src/server/server.js`.
-- O cerebro da conversa fica em `src/server/assistant.js`.
+- A interface é um HTML/CSS/JS puro em `src/panel/`.
+- O servidor local é um Node HTTP server em `src/server/server.js`.
+- O cérebro da conversa fica em `src/server/assistant.js`.
 - As chamadas para providers ficam em `src/server/provider-client.js`.
-- O catalogo de modelos fica em `src/server/models.js`.
+- O catálogo de modelos fica em `src/server/models.js`.
 - O estado persistente fica em `~/.my-computer`.
 
-Se voce quiser pensar de forma bem simples:
+Se você quiser pensar de forma bem simples:
 
 - `panel` desenha a tela.
 - `server` recebe pedidos da tela.
-- `assistant` monta o contexto e decide o proximo passo.
+- `assistant` monta o contexto e decide o próximo passo.
 - `provider-client` fala com a IA.
-- `tools` mexem na maquina local.
+- `tools` mexem na máquina local.
 
 ## 2. O caminho de uma mensagem
 
-Quando voce aperta enviar:
+Quando você aperta enviar:
 
 1. O painel manda a mensagem para o servidor local.
-2. O servidor salva a mensagem do usuario no chat.
+2. O servidor salva a mensagem do usuário no chat.
 3. O assistant monta o prompt completo.
 4. O provider recebe esse prompt.
 5. Se a IA pedir uma tool, o assistant executa a tool.
@@ -46,34 +46,34 @@ Quando voce aperta enviar:
 
 Se a resposta falhar ou parar no meio:
 
-- a tentativa anterior continua visivel no chat
-- `Tentar novamente` reenvia desde o inicio
-- `Continuar` retoma a ultima saida parcial
+- a tentativa anterior continua visível no chat
+- `Tentar novamente` reenvia desde o início
+- `Continuar` retoma a última saída parcial
 - `Ver detalhes` abre o processo salvo da tentativa e a janela de eventos relacionados carregados
-- `Copiar eventos` leva os eventos carregados para analise
+- `Copiar eventos` leva os eventos carregados para análise
 
-Falha de tool ou terminal tambem conta como falha real da tentativa: timeout e signal deixam a resposta incompleta em vez de aparecerem como sucesso. Exit code diferente de zero aparece no historico; quando a IA pediu `returnOutput: true`, stdout/stderr voltam para ela continuar ou corrigir o comando.
+Falha de tool ou terminal também conta como falha real da tentativa: timeout e signal deixam a resposta incompleta em vez de aparecerem como sucesso. Exit code diferente de zero aparece no histórico; quando a IA pediu `returnOutput: true`, stdout/stderr voltam para ela continuar ou corrigir o comando.
 
 ## 3. O que entra no prompt
 
-O prompt nao e so a ultima mensagem. Ele e montado com varias pecas:
+O prompt não é só a última mensagem. Ele é montado com várias peças:
 
 - system prompt geral
-- apelido do usuario
+- apelido do usuário
 - idioma
-- nivel tecnico
-- memoria persistente
-- memoria do chat
+- nível técnico
+- memória persistente
+- memória do chat
 - contexto compactado
-- historico recente
+- histórico recente
 - anexos
-- configuracoes tecnicas do modelo
+- configurações técnicas do modelo
 
 Isso explica por que o app consegue continuar a conversa sem esquecer tudo.
 
 ## 4. Onde as coisas ficam salvas
 
-Por padrao:
+Por padrão:
 
 ```text
 ~/.my-computer/
@@ -89,22 +89,22 @@ Por padrao:
     attachments/
 ```
 
-Em termos praticos:
+Em termos práticos:
 
-- `config.json` guarda configuracoes globais.
-- `messages.json` guarda o historico do chat.
-- `metadata.json` guarda provider, modelo e settings tecnicos do chat.
-- `memory.md` guarda memoria so daquele chat.
+- `config.json` guarda configurações globais.
+- `messages.json` guarda o histórico do chat.
+- `metadata.json` guarda provider, modelo e settings técnicos do chat.
+- `memory.md` guarda memória só daquele chat.
 - `persistent-memory.md` vale para todos os chats.
-- `context.md` guarda o resumo longo do que ja aconteceu.
+- `context.md` guarda o resumo longo do que já aconteceu.
 - `context-window.md` mostra a janela atual usada pela IA.
 - `events.jsonl` guarda eventos de debug e auditoria.
 
-## 5. O que sao tools
+## 5. O que são tools
 
-Tools sao a forma da IA fazer alguma coisa de verdade no seu computador.
+Tools são a forma da IA fazer alguma coisa de verdade no seu computador.
 
-As principais sao:
+As principais são:
 
 - `run_terminal_command`
 - `web_search`
@@ -116,109 +116,109 @@ As principais sao:
 Fluxo simples:
 
 1. A IA pede a tool.
-2. O app verifica se a tool esta ligada.
-3. Se for necessario, a UI pede aprovacao.
+2. O app verifica se a tool está ligada.
+3. Se for necessário, a UI pede aprovação.
 4. A tool roda.
 5. O resultado volta para a IA.
 6. A resposta final aparece no chat.
 
-Para saidas longas ou tarefas demoradas:
+Para saídas longas ou tarefas demoradas:
 
 - a IA pode pedir `timeoutSeconds` na tool de terminal
 - o backend espera o processo terminar antes de devolver `stdout`/`stderr`
-- downloads e rotinas longas devem usar timeout maior, mas nao infinito
+- downloads e rotinas longas devem usar timeout maior, mas não infinito
 
 ### Exemplo mental
 
-- O usuario pede para listar arquivos.
+- O usuário pede para listar arquivos.
 - A IA decide usar `run_terminal_command`.
 - O app executa o comando.
 - A IA recebe o stdout e responde em cima do resultado.
 
 ## 6. Anexos
 
-O app trata anexos de forma pratica:
+O app trata anexos de forma prática:
 
 - Imagens podem ir para modelos que aceitam vision.
-- Texto simples pode ser extraido localmente.
-- Arquivos complexos continuam salvos como referencia com caminho e metadados.
-- O usuario continua vendo o preview e o que foi enviado para a IA.
+- Texto simples pode ser extraído localmente.
+- Arquivos complexos continuam salvos como referência com caminho e metadados.
+- O usuário continua vendo o preview e o que foi enviado para a IA.
 
 Importante:
 
 - O app valida tamanho e quantidade de anexos.
-- Se o modelo nao suporta imagem, a UI bloqueia ou avisa antes do envio.
-- Video e audio ainda sao tratados de forma mais conservadora no MVP.
+- Se o modelo não suporta imagem, a UI bloqueia ou avisa antes do envio.
+- Vídeo e áudio ainda são tratados de forma mais conservadora no MVP.
 
 ## 7. Provider e modelo
 
-O usuario escolhe:
+O usuário escolhe:
 
-- provider padrao
-- modelo padrao
+- provider padrão
+- modelo padrão
 - modelo por chat
-- fallback/rotacao quando quiser
+- fallback/rotação quando quiser
 
-O catalogo tem dois tipos de entrada:
+O catálogo tem dois tipos de entrada:
 
 - curada pelo projeto
-- descoberta dinamica no provider
+- descoberta dinâmica no provider
 
-Isso e o motivo do `Indice de modelos`: ele mostra o que e realmente util, o que e so indice tecnico e o que muda em runtime.
+Isso é o motivo do `Índice de modelos`: ele mostra o que é realmente útil, o que é só índice técnico e o que muda em runtime.
 
-## 8. Rotacao
+## 8. Rotação
 
-Existe diferenca entre duas coisas:
+Existe diferença entre duas coisas:
 
-- `Rotatoria de modelos`: troca apenas o modelo dentro do mesmo provider.
-- `Rotatoria de providers`: troca provider e modelo quando o provider atual falha.
+- `Rotatória de modelos`: troca apenas o modelo dentro do mesmo provider.
+- `Rotatória de providers`: troca provider e modelo quando o provider atual falha.
 
-A UI grava isso para o usuario nao perder o historico nem ficar tentando na mao.
+A UI grava isso para o usuário não perder o histórico nem ficar tentando na mão.
 
-## 9. Contexto e memoria
+## 9. Contexto e memória
 
-O sistema usa tres niveis de lembranca:
+O sistema usa três níveis de lembranca:
 
-- memoria do chat
-- memoria persistente
+- memória do chat
+- memória persistente
 - contexto compactado
 
-Se a conversa ficar longa, o app compacta o conteudo antigo para caber melhor no prompt.
-Isso evita que o chat vire um bloco gigante e inutil.
+Se a conversa ficar longa, o app compacta o conteúdo antigo para caber melhor no prompt.
+Isso evita que o chat vire um bloco gigante e inútil.
 
-## 10. Rede local e seguranca
+## 10. Rede local e segurança
 
-Por padrao o painel escuta so na maquina local.
+Por padrão o painel escuta só na máquina local.
 
-Se o usuario ligar o modo de rede:
+Se o usuário ligar o modo de rede:
 
-- o proximo restart pode escutar em `0.0.0.0`
+- o próximo restart pode escutar em `0.0.0.0`
 - a UI pede senha
 - o acesso usa Basic Auth simples
 
-Nao e uma VPN, nao e um sistema corporativo e nao e uma fortaleza. E so uma forma pratica de abrir o painel para a LAN com risco consciente.
+Não é uma VPN, não é um sistema corporativo e não é uma fortaleza. É só uma forma prática de abrir o painel para a LAN com risco consciente.
 
-## 11. Backup e restauracao
+## 11. Backup e restauração
 
-O backup exporta o runtime em grupos selecionaveis:
+O backup exporta o runtime em grupos selecionáveis:
 
-- configuracao completa, incluindo tema, providers, API keys, tools, contexto, rede e rotatorias
-- memoria persistente
-- chats, mensagens, memorias e contexto salvo
+- configuração completa, incluindo tema, providers, API keys, tools, contexto, rede e rotatórias
+- memória persistente
+- chats, mensagens, memórias e contexto salvo
 - anexos
-- eventos recentes para diagnostico
+- eventos recentes para diagnóstico
 
-Na restauracao, a UI permite importar so os grupos escolhidos. Configuracao importada substitui a configuracao atual como snapshot completo, inclusive removendo modelos customizados e capacidades que nao existam no backup. Importar chats sem anexos preserva o historico, mas nao copia os arquivos anexados.
+Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico, mas não copia os arquivos anexados.
 
-## 12. Update e manutencao
+## 12. Update e manutenção
 
-O update assume que o projeto e um clone Git.
+O update assume que o projeto é um clone Git.
 
 Fluxo:
 
 1. verifica o remoto
-2. compara se ha commits novos
-3. bloqueia se houver mudancas locais
+2. compara se há commits novos
+3. bloqueia se houver mudanças locais
 4. aplica `git pull --ff-only`
 5. roda `npm install`
 6. reinicia o servidor
@@ -228,21 +228,21 @@ Fluxo:
 Se algo quebrar:
 
 - veja o `events.jsonl`
-- confira o `Indice de modelos`
+- confira o `Índice de modelos`
 - abra o `metadata.json` do chat
 - confira `config.json`
-- veja se a provider key esta correta
-- veja se o modelo escolhido realmente suporta o que voce quer
+- veja se a provider key está correta
+- veja se o modelo escolhido realmente suporta o que você quer
 
 ## 14. A ideia geral
 
-O app e basicamente isto:
+O app é basicamente isto:
 
 - uma UI local
 - um servidor local
-- um catalogo de modelos
+- um catálogo de modelos
 - providers remotos ou locais
-- tools com aprovacao
-- arquivos salvos no disco do usuario
+- tools com aprovação
+- arquivos salvos no disco do usuário
 
-Se voce entendeu isso, ja entendeu 90% do sistema.
+Se você entendeu isso, já entendeu 90% do sistema.
