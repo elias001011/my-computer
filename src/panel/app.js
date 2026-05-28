@@ -986,26 +986,28 @@ function renderTerminalModeCards(selectedMode) {
 }
 
 function renderRoutingFallbackRows(fallbacks = []) {
-  const rows = fallbacks.length ? fallbacks : [{ provider: '', model: '' }];
-  return rows
+  if (!fallbacks.length) {
+    return '<div class="empty-routing-state">Nenhum fallback de provider configurado.</div>';
+  }
+  return fallbacks
     .map(
       (fallback, index) => {
         const provider = fallback.provider || '';
-        const model = fallback.model || (provider ? getProvider(provider).defaultModel : '');
+        const model = fallback.model || '';
         const showCustomModel = Boolean(model) && !isKnownModel(provider, model);
         return `
           <div class="routing-fallback-row" data-fallback-index="${index}">
             <label>
               Provider
               <select class="fallback-provider">
-                <option value="">Nenhum</option>
+                <option value="" ${provider ? '' : 'selected'} disabled>Selecione um provider</option>
                 ${renderProviderOptions(provider)}
               </select>
             </label>
             <label>
               Modelo
               <select class="fallback-model">
-                ${renderModelOptions(provider || state.config.provider, model || getProvider(provider || state.config.provider).defaultModel)}
+                ${renderModelOptionsWithPlaceholder(provider || state.config.provider, model, 'Selecione um modelo')}
               </select>
             </label>
             <label class="fallback-custom-model-row ${showCustomModel ? '' : 'hidden'}">
@@ -1074,7 +1076,10 @@ function formatCompactNumber(value) {
 function renderModelFallbackRows(fallbacks = [], providerId = '') {
   const provider = providerId || state.settingsProvider || state.config?.provider || 'groq';
   const rows = fallbacks.filter((fallback) => fallback.provider === provider);
-  return (rows.length ? rows : [{ provider, model: '' }])
+  if (!rows.length) {
+    return `<div class="empty-routing-state">Nenhum modelo alternativo em ${escapeHtml(providerLabel(provider))}.</div>`;
+  }
+  return rows
     .map((fallback, index) => {
       const model = fallback.model || '';
       const showCustomModel = Boolean(model) && !isKnownModel(provider, model);
@@ -1083,7 +1088,7 @@ function renderModelFallbackRows(fallbacks = [], providerId = '') {
           <label>
             Modelo alternativo em ${escapeHtml(providerLabel(provider))}
             <select class="model-fallback-model">
-              ${renderModelOptions(provider, model || getProvider(provider).defaultModel)}
+              ${renderModelOptionsWithPlaceholder(provider, model, 'Selecione um modelo alternativo')}
             </select>
           </label>
           <label class="fallback-custom-model-row ${showCustomModel ? '' : 'hidden'}">
@@ -1558,6 +1563,7 @@ function shouldShowMessageDetails(message) {
     attempts.length > 1 ||
       (Array.isArray(message.toolUses) && message.toolUses.length) ||
       (Array.isArray(message.executionTrace) && message.executionTrace.length) ||
+      String(message.thinking || '').trim() ||
       ['failed', 'incomplete', 'needs_tool_approval', 'running_tools'].includes(message.status) ||
       message.continuationAvailable,
   );
@@ -1610,7 +1616,8 @@ function renderMessage(message) {
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
       <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
       ${renderExecutionHistory(message)}
-      <div class="bubble">${formatContent(message.content, message.role)}</div>
+      ${renderThinkingBlock(getMessageThinking(message))}
+      <div class="bubble">${formatContent(getVisibleMessageContent(message), message.role)}</div>
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
       ${renderMessageActions(message)}
       ${renderMessageSources(message)}
@@ -1645,6 +1652,45 @@ function renderMessageSources(message) {
         .join('')}
     </div>
   `;
+}
+
+function renderThinkingBlock(thinking, label = 'Think do modelo') {
+  const content = String(thinking || '').trim();
+  if (!content) return '';
+  return `
+    <details class="thinking-block">
+      <summary>${escapeHtml(label)}</summary>
+      <pre>${escapeHtml(content)}</pre>
+    </details>
+  `;
+}
+
+function getVisibleMessageContent(message = {}) {
+  if (message.role !== 'assistant') return message.content || '';
+  return splitThinkTags(message.content || '').visible.trim();
+}
+
+function getMessageThinking(message = {}) {
+  const fromField = String(message.thinking || '').trim();
+  const fromContent = splitThinkTags(message.content || '').thinking.join('\n\n').trim();
+  return [fromField, fromContent].filter(Boolean).join('\n\n');
+}
+
+function splitThinkTags(content = '') {
+  let visible = String(content || '');
+  const thinking = [];
+  visible = visible.replace(/<think>\s*([\s\S]*?)\s*<\/think>/gi, (_match, inner) => {
+    const clean = String(inner || '').trim();
+    if (clean) thinking.push(clean);
+    return '';
+  });
+  const danglingThinkIndex = visible.toLowerCase().lastIndexOf('<think>');
+  if (danglingThinkIndex >= 0) {
+    const clean = visible.slice(danglingThinkIndex + '<think>'.length).trim();
+    if (clean) thinking.push(clean);
+    visible = visible.slice(0, danglingThinkIndex);
+  }
+  return { visible, thinking };
 }
 
 function formatSourceHost(url) {
@@ -1737,6 +1783,7 @@ function renderExecutionTraceEntry(entry, message) {
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml([entry.provider && providerLabel(entry.provider), entry.model, entry.round ? `rodada ${entry.round}` : ''].filter(Boolean).join(' · '))}</span>
       </div>
+      ${renderThinkingBlock(entry.thinking, 'Think desta saída')}
       ${entry.content ? `<div><div class="message-label">Output</div><pre>${escapeHtml(entry.content)}</pre></div>` : ''}
       ${
         toolCalls.length
@@ -1886,7 +1933,7 @@ function renderPending() {
                 (event) => `
                   <div>
                     <strong>${escapeHtml(event.type)}</strong>
-                    <span>${escapeHtml(formatEventDetails(event.details))}</span>
+                    <span>${escapeHtml(formatEventSummary(event))}</span>
                   </div>
                 `,
               )
@@ -1899,7 +1946,7 @@ function renderPending() {
 
 function renderEvent(event) {
   const details = event.details && Object.keys(event.details || {}).length
-    ? `<details class="event-details"><summary>${escapeHtml(formatEventDetails(event.details)) || 'Detalhes'}</summary><pre>${escapeHtml(JSON.stringify(event.details, null, 2))}</pre></details>`
+    ? `<details class="event-details"><summary>${escapeHtml(formatEventSummary(event)) || 'Detalhes'}</summary><pre>${escapeHtml(JSON.stringify(event.details, null, 2))}</pre></details>`
     : '';
   return `
     <div class="event-item">
@@ -1981,7 +2028,8 @@ function renderMessageDetailsModal() {
                 <span class="message-status ${escapeAttr(selectedAttempt.status || '')}">${escapeHtml(selectedStatus)}</span>
                 ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
               </div>
-              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">${formatContent(selectedAttempt.content, 'assistant')}</div>
+              ${renderThinkingBlock(getMessageThinking(selectedAttempt))}
+              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">${formatContent(getVisibleMessageContent(selectedAttempt), 'assistant')}</div>
               ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
               ${renderMessageSources(selectedAttempt)}
               ${renderExecutionHistory(selectedAttempt)}
@@ -2022,6 +2070,44 @@ function renderUpdateStatus() {
       ${changedFiles}
     </div>
   `;
+}
+
+function formatEventSummary(event = {}) {
+  const details = event.details || {};
+  if (event.type === 'provider.request.started') {
+    return [
+      details.provider && providerLabel(details.provider),
+      details.model,
+      details.keyIndex && details.keyCount ? `key ${details.keyIndex}/${details.keyCount}` : '',
+      details.modelAttemptIndex && details.modelAttemptCount
+        ? `tentativa ${details.modelAttemptIndex}/${details.modelAttemptCount}`
+        : details.modelIndex && details.modelCount ? `modelo ${details.modelIndex}/${details.modelCount}` : '',
+      details.pass ? `volta ${details.pass}` : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (event.type === 'provider.route.started') {
+    return [
+      details.provider && providerLabel(details.provider),
+      Array.isArray(details.models) ? `${details.models.length} modelo(s)` : '',
+      details.source,
+      details.pass ? `volta ${details.pass}` : '',
+      details.modelRotationEnabled ? 'rotatória de modelos ligada' : '',
+      details.providerRotationEnabled ? 'rotatória de providers ligada' : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (event.type === 'provider.model_attempt.fallback') {
+    return `${details.fromModel || 'modelo'} -> ${details.toModel || 'fallback'}${details.reason ? ` · ${details.reason}` : ''}`;
+  }
+  if (event.type === 'tool.run_terminal_command.completed') {
+    return [
+      details.exitCode !== undefined ? `exit ${details.exitCode}` : '',
+      details.durationMs !== undefined ? `${details.durationMs}ms` : '',
+      details.timedOut ? 'timeout' : '',
+      details.stdoutPreview ? 'stdout disponível' : '',
+      details.stderrPreview ? 'stderr disponível' : '',
+    ].filter(Boolean).join(' · ');
+  }
+  return formatEventDetails(details);
 }
 
 function formatEventDetails(details = {}) {
@@ -2090,6 +2176,11 @@ function renderModelOptions(providerId, selectedModel) {
   const customOption = `<option value="${CUSTOM_MODEL_VALUE}" ${customSelected}>${escapeHtml(customLabel)}</option>`;
 
   return `${options}${customOption}`;
+}
+
+function renderModelOptionsWithPlaceholder(providerId, selectedModel, placeholder) {
+  const selected = selectedModel ? '' : 'selected';
+  return `<option value="" ${selected} disabled>${escapeHtml(placeholder)}</option>${renderModelOptions(providerId, selectedModel)}`;
 }
 
 function renderLanguageOptions(selectedLanguage = 'auto') {
@@ -2495,6 +2586,12 @@ function bindAppEvents() {
         renderPreservingVisualState();
       });
     });
+    document.querySelectorAll('.model-fallback-model').forEach((select) => {
+      select.addEventListener('change', () => {
+        captureSettingsDraftFromForm();
+        renderPreservingVisualState();
+      });
+    });
     document.querySelectorAll('.remove-api-key').forEach((button) => {
       button.addEventListener('click', () => removeApiKeyRow(Number(button.dataset.keyIndex)));
     });
@@ -2583,6 +2680,22 @@ async function saveSetup(event) {
   const model = draft.model || getProvider(provider).defaultModel;
   if (draft.server?.networkEnabled && !String(draft.server?.authPassword || '').trim()) {
     state.error = 'Defina uma senha para abrir o painel na rede local.';
+    renderPreservingVisualState();
+    return;
+  }
+  const providerInfo = getProvider(provider);
+  const providerSettings = draft.providerSettings?.[provider] || {};
+  const baseUrl = String(providerSettings.baseUrl || providerInfo.baseUrl || '').trim();
+  const apiKeys = (providerSettings.apiKeys || []).filter((item) => String(item.value || item || '').trim());
+  if (!baseUrl) {
+    state.error = `Defina o endpoint/base URL de ${providerInfo.label}.`;
+    state.setupStep = 'provider';
+    renderPreservingVisualState();
+    return;
+  }
+  if (providerInfo.requiresApiKey && !apiKeys.length) {
+    state.error = `Adicione ao menos uma API key de ${providerInfo.label}.`;
+    state.setupStep = 'provider';
     renderPreservingVisualState();
     return;
   }
@@ -3373,7 +3486,7 @@ async function copyMessage(messageId) {
   const message = state.activeChat?.messages?.find((item) => item.id === messageId);
   if (!message) return;
   try {
-    await navigator.clipboard.writeText(message.content || '');
+    await navigator.clipboard.writeText(getVisibleMessageContent(message));
     state.status = 'Mensagem copiada.';
     renderPreservingVisualState();
   } catch (error) {
@@ -3635,6 +3748,13 @@ async function saveGeneralSettings(event, options = {}) {
     renderPreservingVisualState();
     return;
   }
+  const validationError = validateGeneralSettingsForm(form, provider);
+  if (validationError) {
+    state.error = validationError;
+    state.settingsSection = 'providers';
+    renderPreservingVisualState();
+    return;
+  }
     await runAction('Salvando configurações gerais...', async () => {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
@@ -3823,16 +3943,72 @@ function updateDirtyIndicators() {
   document.querySelector('#save-chat-settings')?.classList.toggle('dirty-save', state.chatSettingsDirty);
 }
 
+function validateGeneralSettingsForm(form, defaultProvider) {
+  const draftConfig = state.settingsDraft?.config || state.config;
+  const providerInfo = getProvider(defaultProvider);
+  const providerSettings = draftConfig.providerSettings?.[defaultProvider] || {};
+  const baseUrl = String(providerSettings.baseUrl || providerInfo.baseUrl || '').trim();
+  const apiKeys = (providerSettings.apiKeys || []).filter((item) => String(item.value || item || '').trim());
+  if (!baseUrl) {
+    return `Defina o endpoint/base URL de ${providerInfo.label} antes de salvar esse provider como padrão.`;
+  }
+  if (providerInfo.requiresApiKey && !apiKeys.length) {
+    return `Adicione ao menos uma API key de ${providerInfo.label} antes de salvar esse provider como padrão.`;
+  }
+
+  const invalidModelRow = getModelFallbackRowValues().find((row) => !row.model);
+  if (invalidModelRow) {
+    return `Escolha um modelo alternativo em ${providerLabel(invalidModelRow.provider)} ou remova essa linha da rotatória de modelos.`;
+  }
+  const invalidProviderRow = getRoutingFallbackRowValues().find((row) => !row.provider || !row.model);
+  if (invalidProviderRow) {
+    return 'Escolha provider e modelo em todos os fallbacks, ou remova a linha incompleta da rotatória de providers.';
+  }
+
+  const modelFallbacks = readModelFallbackRows();
+  if (form.get('modelRotationEnabled') === 'on' && !modelFallbacks.length) {
+    return 'A rotatória de modelos está ligada, mas não há nenhum modelo alternativo configurado.';
+  }
+  const providerFallbacks = readRoutingFallbackRows();
+  if (form.get('providerRotationEnabled') === 'on' && !providerFallbacks.length) {
+    return 'A rotatória de providers está ligada, mas não há nenhum fallback configurado.';
+  }
+  for (const fallback of providerFallbacks) {
+    const fallbackInfo = getProvider(fallback.provider);
+    const fallbackSettings = draftConfig.providerSettings?.[fallback.provider] || {};
+    const fallbackBaseUrl = String(fallbackSettings.baseUrl || fallbackInfo.baseUrl || '').trim();
+    const fallbackKeys = (fallbackSettings.apiKeys || []).filter((item) => String(item.value || item || '').trim());
+    if (!fallbackBaseUrl) return `Defina o endpoint/base URL de ${fallbackInfo.label} antes de usar esse provider na rotatória.`;
+    if (fallbackInfo.requiresApiKey && !fallbackKeys.length) {
+      return `Adicione ao menos uma API key de ${fallbackInfo.label} antes de usar esse provider na rotatória.`;
+    }
+  }
+  return '';
+}
+
+function getRoutingFallbackRowValues() {
+  return [...document.querySelectorAll('.routing-fallback-row')].map((row) => ({
+    provider: row.querySelector('.fallback-provider')?.value || '',
+    model:
+      row.querySelector('.fallback-model')?.value === CUSTOM_MODEL_VALUE
+        ? row.querySelector('.fallback-custom-model-input')?.value.trim() || ''
+        : row.querySelector('.fallback-model')?.value.trim() || '',
+  }));
+}
+
+function getModelFallbackRowValues() {
+  const visibleProvider = state.settingsProvider || state.settingsDraft?.config?.provider || state.config.provider;
+  return [...document.querySelectorAll('.model-fallback-row')].map((row) => ({
+    provider: row.dataset.provider || visibleProvider,
+    model:
+      row.querySelector('.model-fallback-model')?.value === CUSTOM_MODEL_VALUE
+        ? row.querySelector('.model-fallback-custom-input')?.value.trim() || ''
+        : row.querySelector('.model-fallback-model')?.value.trim() || '',
+  }));
+}
+
 function readRoutingFallbackRows() {
-  return [...document.querySelectorAll('.routing-fallback-row')]
-    .map((row) => ({
-      provider: row.querySelector('.fallback-provider')?.value || '',
-      model:
-        row.querySelector('.fallback-model')?.value === CUSTOM_MODEL_VALUE
-          ? row.querySelector('.fallback-custom-model-input')?.value.trim() || ''
-          : row.querySelector('.fallback-model')?.value.trim() || '',
-    }))
-    .filter((item) => item.provider && item.model);
+  return getRoutingFallbackRowValues().filter((item) => item.provider && item.model);
 }
 
 function readModelFallbackRows() {
@@ -3840,15 +4016,7 @@ function readModelFallbackRows() {
   const existing = (state.settingsDraft?.config?.routing?.modelFallbacks || state.config.routing?.modelFallbacks || []).filter(
     (item) => item.provider !== visibleProvider,
   );
-  const visible = [...document.querySelectorAll('.model-fallback-row')]
-    .map((row) => ({
-      provider: row.dataset.provider || visibleProvider,
-      model:
-        row.querySelector('.model-fallback-model')?.value === CUSTOM_MODEL_VALUE
-          ? row.querySelector('.model-fallback-custom-input')?.value.trim() || ''
-          : row.querySelector('.model-fallback-model')?.value.trim() || '',
-    }))
-    .filter((item) => item.provider && item.model);
+  const visible = getModelFallbackRowValues().filter((item) => item.provider && item.model);
   return [...existing, ...visible];
 }
 

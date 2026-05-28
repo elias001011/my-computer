@@ -125,10 +125,15 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         executionTrace.push(createAssistantTraceEntry(assistantMessage, toolCalls, round + 1, 'tool_round'));
       }
       if (!toolCalls.length) {
-        const finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '');
+        const finalContent = cleanAssistantContent(assistantMessage.content || '');
         assistantOutcome = {
           status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-          content: finalContent || (isIncompleteFinishReason(assistantMessage.finishReason) ? 'A resposta foi interrompida antes de concluir.' : 'Terminei a execução, mas não recebi texto final.'),
+          content:
+            finalContent.content ||
+            (isIncompleteFinishReason(assistantMessage.finishReason)
+              ? 'A resposta foi interrompida antes de concluir.'
+              : 'Terminei a execução, mas não recebi texto final.'),
+          thinking: finalContent.thinking,
           finishReason: assistantMessage.finishReason || null,
           continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
           error: null,
@@ -151,9 +156,11 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
           if (toolUseHasExecutionFailure(toolUse)) {
+            const failedContent = cleanAssistantContent(assistantMessage.content || '');
             assistantOutcome = {
               status: 'incomplete',
               content: renderToolFailureMessage(toolUse),
+              thinking: failedContent.thinking,
               finishReason: assistantMessage.finishReason || null,
               continuationAvailable: true,
               error: toolUse.result?.error || describeToolFailure(toolUse),
@@ -215,9 +222,11 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
         if (toolUseHasExecutionFailure(toolUse)) {
+          const failedContent = cleanAssistantContent(assistantMessage.content || '');
           assistantOutcome = {
             status: 'incomplete',
             content: renderToolFailureMessage(toolUse),
+            thinking: failedContent.thinking,
             finishReason: assistantMessage.finishReason || null,
             continuationAvailable: true,
             error: toolUse.result?.error || describeToolFailure(toolUse),
@@ -227,9 +236,11 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       }
       if (assistantOutcome) break;
       if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
+        const actionContent = cleanAssistantContent(assistantMessage.content || '');
         assistantOutcome = {
           status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-          content: sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'Ação executada.',
+          content: actionContent.content || 'Ação executada.',
+          thinking: actionContent.thinking,
           finishReason: assistantMessage.finishReason || null,
           continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
           error: null,
@@ -252,10 +263,11 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         providerUsed = assistantMessage.providerUsed || providerUsed;
         modelUsed = assistantMessage.modelUsed || modelUsed;
         executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
-        const finalContent = sanitizeAssistantToolLikeText(assistantMessage.content || '');
+        const finalContent = cleanAssistantContent(assistantMessage.content || '');
         assistantOutcome = {
           status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-          content: finalContent || 'Terminei a execução das tools, mas não recebi texto final.',
+          content: finalContent.content || 'Terminei a execução das tools, mas não recebi texto final.',
+          thinking: finalContent.thinking,
           finishReason: assistantMessage.finishReason || null,
           continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
           error: null,
@@ -305,6 +317,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     executionTrace: executionTrace.length ? executionTrace : [],
     finishReason: assistantOutcome.finishReason,
     error: assistantOutcome.error,
+    thinking: assistantOutcome.thinking,
     continuationAvailable: assistantOutcome.continuationAvailable,
     continuationReason,
     continuationGroupId,
@@ -450,6 +463,9 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     findPreviousUserMessage(currentChat.messages, pendingMessage);
   const continuationGroupId = pendingState.continuationGroupId || getMessageContinuationGroupId(sourceUserMessage);
   const attemptIndex = Number(pendingState.attemptIndex || pendingMessage.attemptIndex || 1);
+  const continuationReason = pendingState.continuationReason || pendingMessage.continuationReason || 'initial';
+  const retryOfMessageId = pendingState.retryOfMessageId || pendingMessage.retryOfMessageId || null;
+  const continuedFromMessageId = pendingState.continuedFromMessageId || pendingMessage.continuedFromMessageId || null;
 
   await updateMessage(chatId, messageId, {
     status: 'running_tools',
@@ -468,7 +484,6 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     },
   });
 
-  let failedToolUse = null;
   for (const toolCall of toolCalls) {
     if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
     const toolUse =
@@ -479,145 +494,161 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     executionTrace.push(createToolTraceEntry(toolUse));
     appendToolResultForModel(workingMessages, toolCall, toolUse);
     if (toolUseHasExecutionFailure(toolUse)) {
-      failedToolUse = toolUse;
-      break;
-    }
-  }
-
-  if (failedToolUse) {
-    const finalTimestamp = new Date().toISOString();
-    await updateMessage(chatId, messageId, {
-      status: 'incomplete',
-      content: renderToolFailureMessage(failedToolUse),
-      toolUses,
-      executionTrace: executionTrace.length ? executionTrace : null,
-      pendingToolApproval: null,
-      modelUsed: pendingMessage.modelUsed || effectiveConfig.model,
-      providerUsed: pendingMessage.providerUsed || effectiveConfig.provider,
-      finishReason: pendingMessage.finishReason || null,
-      continuationAvailable: true,
-      error: failedToolUse.result?.error || describeToolFailure(failedToolUse),
-      interruptedAt: finalTimestamp,
-    });
-    await appendEvent({
-      type: 'chat.message.incomplete',
-      chatId,
-      details: {
+      await finalizeApprovedToolMessage({
+        chatId,
         messageId,
-        sourceUserMessageId: sourceUserMessage?.id || null,
-        groupId: continuationGroupId,
+        effectiveConfig,
+        sourceUserMessage,
+        continuationGroupId,
         attemptIndex,
-        approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
-        failedToolName: failedToolUse.name || null,
-        failedToolId: failedToolUse.id || null,
-        error: failedToolUse.result?.error || describeToolFailure(failedToolUse),
-        status: 'incomplete',
-      },
-    });
-    const updatedChat = await readChat(chatId);
-    const latestPersistentMemory = await readPersistentMemory();
-    await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
-    await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
-    return { chat: await readChat(chatId) };
+        outcome: buildToolFailureOutcome(toolUse, pendingMessage.finishReason, pendingMessage.thinking),
+        toolUses,
+        executionTrace,
+        providerUsed,
+        modelUsed,
+        approvedToolCount: toolUses.filter((item) => item.status !== 'denied').length,
+        failedToolUse: toolUse,
+      });
+      return { chat: await readChat(chatId) };
+    }
   }
 
   const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
   if (!toolOutputsRequested) {
     const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
     const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
-    const finalContent =
-      finalStatus === 'incomplete'
-        ? sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'A execução foi interrompida antes do final.'
-        : sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'Ação de tool concluída.';
-    const finalTimestamp = new Date().toISOString();
-    await updateMessage(chatId, messageId, {
-      status: finalStatus,
-      content: finalContent,
-      toolUses,
-      executionTrace: executionTrace.length ? executionTrace : null,
-      pendingToolApproval: null,
-      modelUsed: pendingMessage.modelUsed || effectiveConfig.model,
-      providerUsed: pendingMessage.providerUsed || effectiveConfig.provider,
-      finishReason: pendingMessage.finishReason || null,
-      continuationAvailable: finalStatus !== 'sent',
-      error: hasToolErrors ? 'Uma das tools aprovadas falhou.' : null,
-      completedAt: finalStatus === 'sent' ? finalTimestamp : undefined,
-      failedAt: finalStatus === 'failed' ? finalTimestamp : undefined,
-      interruptedAt: finalStatus === 'incomplete' ? finalTimestamp : undefined,
-    });
-    await appendEvent({
-      type: finalStatus === 'sent' ? 'chat.message.completed' : 'chat.message.incomplete',
+    const cleanedPendingContent = cleanAssistantContent(pendingMessage.content || '');
+    await finalizeApprovedToolMessage({
       chatId,
-      details: {
-        messageId,
-        sourceUserMessageId: sourceUserMessage?.id || null,
-        groupId: continuationGroupId,
-        attemptIndex,
-        approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
-        skippedFollowup: true,
+      messageId,
+      effectiveConfig,
+      sourceUserMessage,
+      continuationGroupId,
+      attemptIndex,
+      outcome: {
         status: finalStatus,
+        content:
+          finalStatus === 'incomplete'
+            ? cleanedPendingContent.content || 'A execução foi interrompida antes do final.'
+            : cleanedPendingContent.content || 'Ação de tool concluída.',
+        thinking: mergeThinkingSections(pendingMessage.thinking, cleanedPendingContent.thinking),
+        finishReason: pendingMessage.finishReason || null,
+        continuationAvailable: finalStatus !== 'sent',
+        error: hasToolErrors ? 'Uma das tools aprovadas falhou.' : null,
       },
+      toolUses,
+      executionTrace,
+      providerUsed,
+      modelUsed,
+      approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
+      skippedFollowup: true,
     });
-    const updatedChat = await readChat(chatId);
-    const latestPersistentMemory = await readPersistentMemory();
-    await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
-    await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
     return { chat: await readChat(chatId) };
   }
 
-  let finalStatus = 'sent';
-  let finalContent = '';
-  let finalError = null;
-  let finalFinishReason = null;
-
   try {
-    const assistantMessage = await callProviderChat({
-      config: effectiveConfig,
-      provider: effectiveConfig.provider,
-      model: effectiveConfig.model,
-      messages: workingMessages,
-      tools: [],
-      modelSettings: effectiveConfig.modelSettings,
+    const followup = await continueAssistantToolLoop({
       chatId,
+      messageId,
+      effectiveConfig,
+      workingMessages,
+      toolUses,
+      executionTrace,
+      providerUsed,
+      modelUsed,
+      sourceUserMessage,
+      continuationGroupId,
+      attemptIndex,
+      continuationReason,
+      retryOfMessageId,
+      continuedFromMessageId,
+      baseThinking: pendingMessage.thinking,
     });
-    finalFinishReason = assistantMessage.finishReason || null;
-    finalStatus = isIncompleteFinishReason(finalFinishReason) ? 'incomplete' : 'sent';
-    finalContent =
-      sanitizeAssistantToolLikeText(assistantMessage.content || '') ||
-      (finalStatus === 'incomplete'
-        ? 'Tools executadas, mas o provider interrompeu a resposta antes do final.'
-        : 'Tools executadas, mas o provider não retornou texto final.');
-    providerUsed = assistantMessage.providerUsed || effectiveConfig.provider;
-    modelUsed = assistantMessage.modelUsed || effectiveConfig.model;
-    executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
+    if (followup.awaitingApproval) return { chat: await readChat(chatId) };
+    await finalizeApprovedToolMessage({
+      chatId,
+      messageId,
+      effectiveConfig,
+      sourceUserMessage,
+      continuationGroupId,
+      attemptIndex,
+      outcome: followup.outcome,
+      toolUses: followup.toolUses,
+      executionTrace: followup.executionTrace,
+      providerUsed: followup.providerUsed,
+      modelUsed: followup.modelUsed,
+      approvedToolCount: followup.toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
+    });
   } catch (error) {
     const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
-    if (searchToolUse) {
-      finalStatus = 'incomplete';
-      finalContent = renderWebSearchFallbackAnswer(searchToolUse, error.message);
-      finalError = error.message;
-    } else {
-      finalStatus = 'failed';
-      finalContent = sanitizeAssistantToolLikeText(pendingMessage.content || '') || 'A execução falhou antes de concluir.';
-      finalError = error.message || 'Erro ao finalizar a resposta.';
-    }
+    const fallbackOutcome = searchToolUse
+      ? {
+          status: 'incomplete',
+          content: renderWebSearchFallbackAnswer(searchToolUse, error.message),
+          thinking: pendingMessage.thinking,
+          finishReason: null,
+          continuationAvailable: true,
+          error: error.message,
+        }
+      : {
+          status: 'failed',
+          content: cleanAssistantContent(pendingMessage.content || '').content || 'A execução falhou antes de concluir.',
+          thinking: pendingMessage.thinking,
+          finishReason: null,
+          continuationAvailable: true,
+          error: error.message || 'Erro ao finalizar a resposta.',
+        };
+    await finalizeApprovedToolMessage({
+      chatId,
+      messageId,
+      effectiveConfig,
+      sourceUserMessage,
+      continuationGroupId,
+      attemptIndex,
+      outcome: fallbackOutcome,
+      toolUses,
+      executionTrace,
+      providerUsed,
+      modelUsed,
+      approvedToolCount: toolUses.length,
+    });
   }
+  return { chat: await readChat(chatId) };
+}
 
+async function finalizeApprovedToolMessage({
+  chatId,
+  messageId,
+  effectiveConfig,
+  sourceUserMessage,
+  continuationGroupId,
+  attemptIndex,
+  outcome,
+  toolUses,
+  executionTrace,
+  providerUsed,
+  modelUsed,
+  approvedToolCount,
+  failedToolUse = null,
+  skippedFollowup = false,
+}) {
+  const status = outcome.status || 'sent';
   const finalTimestamp = new Date().toISOString();
   await updateMessage(chatId, messageId, {
-    status: finalStatus,
-    content: finalContent,
+    status,
+    content: outcome.content,
+    thinking: outcome.thinking || undefined,
     toolUses,
     executionTrace: executionTrace.length ? executionTrace : null,
     pendingToolApproval: null,
     modelUsed: modelUsed || effectiveConfig.model,
     providerUsed: providerUsed || effectiveConfig.provider,
-    finishReason: finalFinishReason,
-    continuationAvailable: finalStatus !== 'sent',
-    error: finalError,
-    completedAt: finalStatus === 'sent' ? finalTimestamp : undefined,
-    failedAt: finalStatus === 'failed' ? finalTimestamp : undefined,
-    interruptedAt: finalStatus === 'incomplete' ? finalTimestamp : undefined,
+    finishReason: outcome.finishReason || null,
+    continuationAvailable: Boolean(outcome.continuationAvailable),
+    error: outcome.error || null,
+    completedAt: status === 'sent' ? finalTimestamp : undefined,
+    failedAt: status === 'failed' ? finalTimestamp : undefined,
+    interruptedAt: status === 'incomplete' ? finalTimestamp : undefined,
   });
 
   const updatedChat = await readChat(chatId);
@@ -625,20 +656,22 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
   await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
   await appendEvent({
-    type: finalStatus === 'sent' ? 'chat.message.completed' : finalStatus === 'incomplete' ? 'chat.message.incomplete' : 'chat.message.failed',
+    type: status === 'sent' ? 'chat.message.completed' : status === 'incomplete' ? 'chat.message.incomplete' : 'chat.message.failed',
     chatId,
     details: {
       messageId,
       sourceUserMessageId: sourceUserMessage?.id || null,
       groupId: continuationGroupId,
       attemptIndex,
-      status: finalStatus,
-      approvedToolCount: toolUses.length,
-      finishReason: finalFinishReason,
-      error: finalError,
+      status,
+      approvedToolCount,
+      skippedFollowup,
+      failedToolName: failedToolUse?.name || null,
+      failedToolId: failedToolUse?.id || null,
+      finishReason: outcome.finishReason || null,
+      error: outcome.error || null,
     },
   });
-  return { chat: await readChat(chatId) };
 }
 
 async function withToolApprovalLock(chatId, messageId, action) {
@@ -673,21 +706,14 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
   const preapprovedToolUses = options.preapprovedToolUses || [];
   const approvalToolCalls = options.approvalToolCalls || toolCalls;
   const sourceUserMessage = options.sourceUserMessage || null;
+  const cleanedContent = cleanAssistantContent(assistantMessage.content || '');
   const toolUses = [
     ...preapprovedToolUses,
-    ...approvalToolCalls.map((toolCall) => ({
-      id: toolCall.id,
-      name: toolCall.function?.name || 'unknown_tool',
-      input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
-      status: 'pending_approval',
-      approvalRequired: true,
-      result: { action: 'pending_approval' },
-      createdAt: new Date().toISOString(),
-    })),
+    ...approvalToolCalls.map((toolCall) => createPendingApprovalToolUse(toolCall)),
   ];
   return createMessage(
     'assistant',
-    sanitizeAssistantToolLikeText(assistantMessage.content || '') || 'A IA solicitou uma tool e está aguardando aprovação.',
+    cleanedContent.content || 'A IA solicitou uma tool e está aguardando aprovação.',
     {
       status: 'needs_tool_approval',
       sourceUserMessageId: sourceUserMessage?.id || null,
@@ -699,6 +725,7 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
       continuedFromMessageId: options.continuedFromMessageId || null,
       modelUsed: options.modelUsed || assistantMessage.modelUsed || config.model,
       providerUsed: options.providerUsed || assistantMessage.providerUsed || config.provider,
+      thinking: mergeThinkingSections(options.thinking, cleanedContent.thinking) || undefined,
       toolUses,
       pendingToolApproval: {
         toolCalls,
@@ -717,6 +744,218 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
       executionTrace: options.executionTrace?.length ? options.executionTrace : undefined,
     },
   );
+}
+
+function createPendingApprovalToolUse(toolCall) {
+  return {
+    id: toolCall.id,
+    name: toolCall.function?.name || 'unknown_tool',
+    input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
+    status: 'pending_approval',
+    approvalRequired: true,
+    result: { action: 'pending_approval' },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function continueAssistantToolLoop({
+  chatId,
+  messageId,
+  effectiveConfig,
+  workingMessages,
+  toolUses,
+  executionTrace,
+  providerUsed,
+  modelUsed,
+  sourceUserMessage,
+  continuationGroupId,
+  attemptIndex,
+  continuationReason,
+  retryOfMessageId,
+  continuedFromMessageId,
+  baseThinking = '',
+}) {
+  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
+  let currentProviderUsed = providerUsed || effectiveConfig.provider;
+  let currentModelUsed = modelUsed || effectiveConfig.model;
+  let currentThinking = baseThinking || '';
+  const startingRound = executionTrace.filter((entry) => entry.type === 'assistant_output').length;
+  const maxRounds = getMaxToolRounds(effectiveConfig);
+
+  for (let round = startingRound; round < maxRounds; round += 1) {
+    const assistantMessage = await callProviderChat({
+      config: effectiveConfig,
+      provider: effectiveConfig.provider,
+      model: effectiveConfig.model,
+      messages: workingMessages,
+      tools: enabledTools,
+      modelSettings: effectiveConfig.modelSettings,
+      chatId,
+    });
+    currentProviderUsed = assistantMessage.providerUsed || currentProviderUsed;
+    currentModelUsed = assistantMessage.modelUsed || currentModelUsed;
+
+    const toolCalls = normalizeAssistantToolCalls(assistantMessage.tool_calls || [], assistantMessage.content, effectiveConfig.tools);
+    if (toolCalls.length || assistantMessage.content) {
+      executionTrace.push(createAssistantTraceEntry(assistantMessage, toolCalls, round + 1, 'tool_round'));
+    }
+
+    const cleanedContent = cleanAssistantContent(assistantMessage.content || '');
+    currentThinking = mergeThinkingSections(currentThinking, cleanedContent.thinking);
+    if (!toolCalls.length) {
+      const finalStatus = isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent';
+      return {
+        outcome: {
+          status: finalStatus,
+          content:
+            cleanedContent.content ||
+            (finalStatus === 'incomplete'
+              ? 'Tools executadas, mas o provider interrompeu a resposta antes do final.'
+              : 'Tools executadas, mas o provider não retornou texto final.'),
+          thinking: currentThinking,
+          finishReason: assistantMessage.finishReason || null,
+          continuationAvailable: finalStatus !== 'sent',
+          error: null,
+        },
+        providerUsed: currentProviderUsed,
+        modelUsed: currentModelUsed,
+        toolUses,
+        executionTrace,
+      };
+    }
+
+    workingMessages.push({
+      role: 'assistant',
+      content: cleanedContent.content,
+      tool_calls: toolCalls,
+    });
+
+    if (effectiveConfig.tools?.alwaysAllow !== true) {
+      const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, effectiveConfig));
+      const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, effectiveConfig));
+      for (const toolCall of safeToolCalls) {
+        const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+        toolUses.push(toolUse);
+        executionTrace.push(createToolTraceEntry(toolUse));
+        appendToolResultForModel(workingMessages, toolCall, toolUse);
+        if (toolUseHasExecutionFailure(toolUse)) {
+          return {
+            outcome: buildToolFailureOutcome(toolUse, assistantMessage.finishReason, currentThinking),
+            providerUsed: currentProviderUsed,
+            modelUsed: currentModelUsed,
+            toolUses,
+            executionTrace,
+          };
+        }
+      }
+
+      if (approvalToolCalls.length) {
+        const pendingToolUses = [...toolUses, ...approvalToolCalls.map((toolCall) => createPendingApprovalToolUse(toolCall))];
+        await updateMessage(chatId, messageId, {
+          status: 'needs_tool_approval',
+          content: cleanedContent.content || 'A IA solicitou outra tool e está aguardando aprovação.',
+          thinking: currentThinking || undefined,
+          toolUses: pendingToolUses,
+          executionTrace: executionTrace.length ? executionTrace : null,
+          pendingToolApproval: {
+            toolCalls,
+            approvalToolCalls,
+            providerMessages: workingMessages,
+            preapprovedToolUses: toolUses,
+            executionTrace,
+            decisions: {},
+            sourceUserMessageId: sourceUserMessage?.id || null,
+            continuationGroupId,
+            attemptIndex,
+            continuationReason,
+            retryOfMessageId,
+            continuedFromMessageId,
+          },
+          providerUsed: currentProviderUsed,
+          modelUsed: currentModelUsed,
+          continuationAvailable: true,
+          error: null,
+        });
+        await appendEvent({
+          type: 'tool.approval.requested',
+          chatId,
+          details: {
+            messageId,
+            sourceUserMessageId: sourceUserMessage?.id || null,
+            groupId: continuationGroupId,
+            attemptIndex,
+            continuationReason,
+            retryOfMessageId,
+            continuedFromMessageId,
+            toolCount: approvalToolCalls.length,
+            tools: approvalToolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
+          },
+        });
+        return { awaitingApproval: true };
+      }
+
+      continue;
+    }
+
+    for (const toolCall of toolCalls) {
+      const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+      toolUses.push(toolUse);
+      executionTrace.push(createToolTraceEntry(toolUse));
+      appendToolResultForModel(workingMessages, toolCall, toolUse);
+      if (toolUseHasExecutionFailure(toolUse)) {
+        return {
+          outcome: buildToolFailureOutcome(toolUse, assistantMessage.finishReason, currentThinking),
+          providerUsed: currentProviderUsed,
+          modelUsed: currentModelUsed,
+          toolUses,
+          executionTrace,
+        };
+      }
+    }
+
+    if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
+      return {
+        outcome: {
+          status: 'sent',
+          content: cleanedContent.content || 'Ação executada.',
+          thinking: currentThinking,
+          finishReason: assistantMessage.finishReason || null,
+          continuationAvailable: false,
+          error: null,
+        },
+        providerUsed: currentProviderUsed,
+        modelUsed: currentModelUsed,
+        toolUses,
+        executionTrace,
+      };
+    }
+  }
+
+  return {
+    outcome: {
+      status: 'incomplete',
+      content: 'A investigação atingiu o limite de rodadas de tools antes de uma resposta final. Use Continuar para retomar do último estado útil.',
+      thinking: currentThinking,
+      finishReason: null,
+      continuationAvailable: true,
+      error: 'Limite de rodadas de tools atingido.',
+    },
+    providerUsed: currentProviderUsed,
+    modelUsed: currentModelUsed,
+    toolUses,
+    executionTrace,
+  };
+}
+
+function buildToolFailureOutcome(toolUse, finishReason = null, thinking = '') {
+  return {
+    status: 'incomplete',
+    content: renderToolFailureMessage(toolUse),
+    thinking,
+    finishReason: finishReason || null,
+    continuationAvailable: true,
+    error: toolUse.result?.error || describeToolFailure(toolUse),
+  };
 }
 
 async function resetStaleRunningToolApproval(chatId, message) {
@@ -785,13 +1024,15 @@ function getRunningToolStaleMs() {
 }
 
 function createAssistantTraceEntry(assistantMessage, toolCalls = [], round = 1, phase = 'tool_round') {
+  const cleanedContent = cleanAssistantContent(assistantMessage.content || '');
   return {
     type: 'assistant_output',
     phase,
     round,
     provider: assistantMessage.providerUsed || null,
     model: assistantMessage.modelUsed || null,
-    content: truncate(sanitizeAssistantToolLikeText(assistantMessage.content || ''), 12000),
+    content: truncate(cleanedContent.content, 12000),
+    thinking: cleanedContent.thinking ? truncate(cleanedContent.thinking, 12000) : undefined,
     toolCalls: toolCalls.map((toolCall) => ({
       id: toolCall.id,
       name: toolCall.function?.name || 'unknown_tool',
@@ -934,7 +1175,8 @@ function toolUseHasExecutionFailure(toolUse = {}) {
   if (toolUse.result?.timedOut) return true;
   if (toolUse.result?.signal) return true;
   const exitCode = toolUse.result?.exitCode;
-  return typeof exitCode === 'number' && exitCode !== 0;
+  if (typeof exitCode !== 'number' || exitCode === 0) return false;
+  return toolUse.input?.returnOutput !== true;
 }
 
 function getLatestAssistantOutputContent(message = {}) {
@@ -1022,6 +1264,7 @@ function buildAssistantAttemptMessage({
   executionTrace = [],
   finishReason = null,
   error = null,
+  thinking = '',
   continuationAvailable = false,
   continuationReason = 'initial',
   continuationGroupId = null,
@@ -1030,7 +1273,9 @@ function buildAssistantAttemptMessage({
   continuedFromMessageId = null,
   pendingToolApproval = null,
 }) {
-  const safeContent = sanitizeAssistantToolLikeText(content || '');
+  const cleanedContent = cleanAssistantContent(content || '');
+  const safeContent = cleanedContent.content;
+  const safeThinking = mergeThinkingSections(thinking, cleanedContent.thinking);
   const timestamp = new Date().toISOString();
   const groupId = continuationGroupId || getMessageContinuationGroupId(sourceUserMessage);
   const completed = status !== 'needs_tool_approval';
@@ -1045,6 +1290,7 @@ function buildAssistantAttemptMessage({
     continuedFromMessageId: continuedFromMessageId || null,
     providerUsed: providerUsed || null,
     modelUsed: modelUsed || null,
+    thinking: safeThinking || undefined,
     toolUses,
     executionTrace: executionTrace.length ? executionTrace : undefined,
     pendingToolApproval,
@@ -1420,25 +1666,26 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     };
   }
 
+  const terminalInput = normalizeToolInput(name, input);
   await appendEvent({
     type: 'tool.run_terminal_command.requested',
     chatId,
     details: {
-      command: input.command,
-      timeoutSeconds: input.timeoutSeconds,
+      command: terminalInput.command,
+      timeoutSeconds: terminalInput.timeoutSeconds,
       terminalMode: config.tools?.terminalMode || 'standard',
     },
   });
-  const result = await runTerminalCommand(input.command, {
-    timeoutSeconds: input.timeoutSeconds,
+  const result = await runTerminalCommand(terminalInput.command, {
+    timeoutSeconds: terminalInput.timeoutSeconds,
     terminalMode: config.tools?.terminalMode,
   });
   await appendEvent({
     type: 'tool.run_terminal_command.completed',
     chatId,
     details: {
-      command: input.command,
-      timeoutSeconds: input.timeoutSeconds,
+      command: terminalInput.command,
+      timeoutSeconds: terminalInput.timeoutSeconds,
       terminalMode: result.terminalMode,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
@@ -1451,7 +1698,7 @@ async function executeToolCall(chatId, toolCall, config = {}) {
   return {
     id: toolCall.id,
     name,
-    input: { command: input.command },
+    input: terminalInput,
     result,
     createdAt: new Date().toISOString(),
   };
@@ -1544,6 +1791,10 @@ export function normalizeAssistantToolCalls(toolCalls = [], content = '', tools 
     .map((toolCall, index) => normalizeToolCall(toolCall, index))
     .filter(Boolean);
   if (normalized.length) return normalized;
+
+  const syntheticToolCalls = extractSyntheticToolCalls(content, tools);
+  if (syntheticToolCalls.length) return syntheticToolCalls;
+
   if (getSearchMode(tools) === 'off') return [];
 
   const fakeWebSearchInput = extractFakeWebSearchInput(content);
@@ -1578,6 +1829,55 @@ function normalizeToolCall(toolCall, index = 0) {
       arguments: JSON.stringify(normalizeToolInput(name, parseToolArguments(recovered.arguments || rawArguments))),
     },
   };
+}
+
+function extractSyntheticToolCalls(content = '', tools = {}) {
+  const text = String(content || '');
+  const candidates = [];
+  const tagPatterns = [
+    /<function\s*=\s*["']?([\w.-]+)["']?\s*>\s*([\s\S]*?)\s*<\/function>/gi,
+    /<function\b[^>]*\bname\s*=\s*["']?([\w.-]+)["']?[^>]*>\s*([\s\S]*?)\s*<\/function>/gi,
+  ];
+
+  for (const pattern of tagPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      candidates.push({ name: match[1], body: match[2] });
+    }
+  }
+
+  const inlinePattern =
+    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
+  for (const match of text.matchAll(inlinePattern)) {
+    candidates.push({ name: match[1], body: match[2] });
+  }
+
+  return candidates
+    .map((candidate, index) => {
+      const name = normalizeSyntheticToolName(candidate.name);
+      if (!name || !isToolEnabled(name, tools)) return null;
+      const parsed = extractJsonObject(candidate.body) || {};
+      if (!Object.keys(parsed).length && !['compact_context', 'rename_chat'].includes(name)) return null;
+      return normalizeToolCall(
+        {
+          id: `synthetic_${name}_${Date.now()}_${index}`,
+          type: 'function',
+          function: {
+            name,
+            arguments: JSON.stringify(parsed),
+          },
+          synthetic: true,
+        },
+        index,
+      );
+    })
+    .filter(Boolean);
+}
+
+function normalizeSyntheticToolName(name = '') {
+  const value = String(name || '').trim().split('.').pop();
+  return ['run_terminal_command', 'web_search', 'memory_chat', 'persistent_memory', 'compact_context', 'rename_chat'].includes(value)
+    ? value
+    : '';
 }
 
 function recoverMalformedToolCall(name, args) {
@@ -1619,11 +1919,47 @@ function extractFakeWebSearchInput(content = '') {
 }
 
 export function sanitizeAssistantToolLikeText(content = '') {
-  return String(content || '')
+  const { visible } = extractAssistantThinking(content);
+  return String(visible || '')
+    .replace(/<function\s*=\s*["']?[\w.-]+["']?\s*>\s*[\s\S]*?\s*<\/function>/gi, '[Tool solicitada como texto; o app processou isso como tool quando possível.]')
+    .replace(/<function\b[^>]*\bname\s*=\s*["']?[\w.-]+["']?[^>]*>\s*[\s\S]*?\s*<\/function>/gi, '[Tool solicitada como texto; o app processou isso como tool quando possível.]')
     .replace(/<web_search>\s*[\s\S]*?\s*<\/web_search>/gi, '[Busca web solicitada como texto; o app processou isso como tool quando possível.]')
     .replace(/\bweb_search\b\s*=?\s*\{[\s\S]*?\}(?=\s*$|\s*<\/|\s*\n)/gi, '[Busca web solicitada como texto; o app processou isso como tool quando possível.]')
     .replace(/^Tool used:\s*\w+[\s\S]*?(?:\n\s*\n|$)/gi, '')
     .trim();
+}
+
+function cleanAssistantContent(content = '') {
+  const thinking = extractAssistantThinking(content).thinking.join('\n\n').trim();
+  return {
+    content: sanitizeAssistantToolLikeText(content),
+    thinking,
+  };
+}
+
+function extractAssistantThinking(content = '') {
+  let visible = String(content || '');
+  const thinking = [];
+  visible = visible.replace(/<think>\s*([\s\S]*?)\s*<\/think>/gi, (_match, inner) => {
+    const clean = String(inner || '').trim();
+    if (clean) thinking.push(clean);
+    return '';
+  });
+  const danglingThinkIndex = visible.toLowerCase().lastIndexOf('<think>');
+  if (danglingThinkIndex >= 0) {
+    const clean = visible.slice(danglingThinkIndex + '<think>'.length).trim();
+    if (clean) thinking.push(clean);
+    visible = visible.slice(0, danglingThinkIndex);
+  }
+  return { visible, thinking };
+}
+
+function mergeThinkingSections(...sections) {
+  return sections
+    .flatMap((section) => (Array.isArray(section) ? section : [section]))
+    .map((section) => String(section || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function extractJsonObject(value) {

@@ -861,10 +861,10 @@ function normalizeContextSettings(context = {}) {
 function normalizeRoutingSettings(routing = {}) {
   const modelFallbacks = Array.isArray(routing.modelFallbacks)
     ? routing.modelFallbacks
-        .filter((item) => item?.provider && item?.model)
+        .filter((item) => item?.provider && String(item?.model || '').trim())
         .map((item) => {
           const provider = normalizeProviderId(item?.provider);
-          const model = String(item?.model || getDefaultModelForProvider(provider)).trim();
+          const model = String(item?.model || '').trim();
           return { provider, model };
         })
         .filter((item, index, items) =>
@@ -874,10 +874,10 @@ function normalizeRoutingSettings(routing = {}) {
     : [];
   const fallbacks = Array.isArray(routing.fallbacks)
     ? routing.fallbacks
-        .filter((item) => item?.provider)
+        .filter((item) => item?.provider && String(item?.model || '').trim())
         .map((item) => {
           const provider = normalizeProviderId(item?.provider);
-          const model = String(item?.model || getDefaultModelForProvider(provider)).trim();
+          const model = String(item?.model || '').trim();
           return { provider, model };
         })
         .filter((item, index, items) =>

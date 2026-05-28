@@ -34,6 +34,8 @@ export async function callProviderChat({
       models,
       source: route.source,
       pass: route.pass,
+      modelRotationEnabled: config.routing?.modelRotationEnabled === true,
+      providerRotationEnabled: config.routing?.providerRotationEnabled === true,
     });
 
     try {
@@ -292,6 +294,7 @@ async function callWithModelAndKeyRotation(provider, runtime, models, request, o
 
     for (let modelAttemptIndex = 0; modelAttemptIndex < orderedModels.length; modelAttemptIndex += 1) {
       const selectedModel = orderedModels[modelAttemptIndex];
+      const baseModelIndex = baseModels.indexOf(selectedModel);
       await appendProviderEvent(options.chatId, 'provider.request.started', {
         provider: provider.id,
         model: selectedModel,
@@ -300,8 +303,12 @@ async function callWithModelAndKeyRotation(provider, runtime, models, request, o
         pass: options.pass || null,
         keyIndex: displayKeyIndex,
         keyCount: apiKeys.length,
-        modelIndex: modelAttemptIndex + 1,
-        modelCount: orderedModels.length,
+        modelIndex: baseModelIndex >= 0 ? baseModelIndex + 1 : modelAttemptIndex + 1,
+        modelCount: baseModels.length,
+        modelAttemptIndex: modelAttemptIndex + 1,
+        modelAttemptCount: orderedModels.length,
+        modelOrder: orderedModels,
+        modelRotationEnabled: options.modelRotationEnabled === true,
       });
       await appendProviderEvent(options.chatId, 'provider.key_attempt.started', {
         provider: provider.id,
@@ -846,10 +853,10 @@ function buildProviderRoutes(config = {}, requestedProvider, requestedModel) {
         const provider = getProvider(fallback.provider);
         return {
           provider: provider.id,
-          model: String(fallback.model || provider.defaultModel).trim(),
+          model: String(fallback.model || '').trim(),
           source: 'fallback',
         };
-      })
+      }).filter((fallback) => fallback.model)
     : [];
   const unique = [primary, ...fallbacks].filter(
     (route, index, routes) =>
@@ -870,7 +877,8 @@ function buildRouteModels(config = {}, providerId, primaryModel) {
   if (config.routing?.modelRotationEnabled) {
     for (const fallback of config.routing.modelFallbacks || []) {
       if (getProvider(fallback.provider).id !== providerId) continue;
-      models.push(String(fallback.model || '').trim());
+      const model = String(fallback.model || '').trim();
+      if (model) models.push(model);
     }
   }
   return [...new Set(models.filter(Boolean))];

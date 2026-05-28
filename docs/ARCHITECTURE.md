@@ -80,7 +80,7 @@ Quando uma resposta falha ou para no meio:
 - o painel mostra `Tentar novamente` e `Continuar`
 - o backend aceita apenas um envio/retry/continue em andamento por chat e bloqueia retry/continue em tentativa superseded
 - o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
-- falhas reais de terminal/tool mantem a tentativa como incompleta ou falha, mesmo quando a tool foi aprovada manualmente
+- falhas reais de tool, timeout e signal mantem a tentativa como incompleta ou falha; exit code de terminal diferente de zero so interrompe automaticamente quando a IA nao pediu `returnOutput: true`
 
 ## Provider layer
 
@@ -126,8 +126,8 @@ Fluxo basico:
 2. O assistant valida se a tool esta habilitada.
 3. Se a aprovacao for exigida, a UI pede permissao.
 4. A tool roda.
-5. Se a tool falhar por erro, timeout, signal ou exit code diferente de zero, a tentativa fica incompleta e o provider nao transforma isso em sucesso.
-6. Se a tool concluir, o resultado volta como mensagem `tool`.
+5. Se a tool falhar por erro, timeout ou signal, a tentativa fica incompleta e o provider nao transforma isso em sucesso.
+6. Se terminal retornar exit code diferente de zero com `returnOutput: true`, o resultado volta como mensagem `tool` para o provider decidir o proximo passo.
 7. O provider recebe os resultados e continua a resposta.
 
 Para saidas longas ou execucoes demoradas:

@@ -23,6 +23,13 @@ test('normalizes web_search tool calls and fake tool text', async () => {
     assistant.sanitizeAssistantToolLikeText('Tool used: web_search Input: {"query":"x"}\nExit code: unknown\n\nResposta limpa.'),
     'Resposta limpa.',
   );
+  const functionText = 'Agora vou olhar isso.\n<function=run_terminal_command> {"command":"pwd","returnOutput":true} </function>';
+  const functionCalls = assistant.normalizeAssistantToolCalls([], functionText, { terminal: true, searchMode: 'off' });
+  assert.equal(functionCalls.length, 1);
+  assert.equal(functionCalls[0].function.name, 'run_terminal_command');
+  assert.deepEqual(JSON.parse(functionCalls[0].function.arguments), { command: 'pwd', returnOutput: true });
+  assert.doesNotMatch(assistant.sanitizeAssistantToolLikeText(functionText), /function=run_terminal_command/);
+  assert.equal(assistant.sanitizeAssistantToolLikeText('<think>não mostrar</think>Resposta limpa.'), 'Resposta limpa.');
 
   const malformedCalls = assistant.normalizeAssistantToolCalls(
     [
@@ -476,7 +483,7 @@ test('approved terminal command failures keep the pending assistant turn incompl
                     type: 'function',
                     function: {
                       name: 'run_terminal_command',
-                      arguments: JSON.stringify({ command: 'sh -c "exit 1"', returnOutput: true }),
+                      arguments: JSON.stringify({ command: 'sh -c "exit 1"', returnOutput: false }),
                     },
                   },
                 ],
@@ -537,6 +544,312 @@ test('approved terminal command failures keep the pending assistant turn incompl
     assert.match(updatedMessage.content, /terminal/i);
     assert.equal(updatedMessage.toolUses[0].result.exitCode, 1);
     assert.equal(providerCalls, 1);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('approved tool output returns to the model with tools still enabled', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-approved-tool-loop-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  const commandOne = `${process.execPath} -e ${JSON.stringify("console.log('one')")}`;
+  const commandTwo = `${process.execPath} -e ${JSON.stringify("console.log('two')")}`;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      if (calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou checar a primeira coisa.',
+                  tool_calls: [
+                    {
+                      id: 'tool-call-1',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command: commandOne, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      if (calls.length === 2) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Agora a segunda coisa.',
+                  tool_calls: [
+                    {
+                      id: 'tool-call-2',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command: commandTwo, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Final com one e two.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-approved-tool-loop-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-approved-tool-loop-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Approved tool loop', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Investigue em duas etapas.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+
+    const afterFirstApproval = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'tool-call-1',
+    });
+    const awaitingSecond = afterFirstApproval.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(awaitingSecond.status, 'needs_tool_approval');
+    assert.equal(awaitingSecond.toolUses.find((toolUse) => toolUse.id === 'tool-call-1').result.exitCode, 0);
+    assert.equal(awaitingSecond.toolUses.find((toolUse) => toolUse.id === 'tool-call-2').status, 'pending_approval');
+    assert.ok(calls[1].tools?.length > 0);
+
+    const afterSecondApproval = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'tool-call-2',
+    });
+    const completed = afterSecondApproval.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(completed.status, 'sent');
+    assert.match(completed.content, /one e two/);
+    assert.equal(calls.length, 3);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('terminal nonzero exit with returnOutput true is passed back to the model', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-terminal-nonzero-output-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [
+                    {
+                      id: 'tool-call-nonzero',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command: 'sh -c "echo partial; exit 1"', returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Vi a saída parcial e vou corrigir o comando.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-terminal-nonzero-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-terminal-nonzero-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: true,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Terminal nonzero output', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Rode um comando com saída parcial.');
+    assert.equal(result.assistantMessage.status, 'sent');
+    assert.equal(result.assistantMessage.toolUses[0].result.exitCode, 1);
+    assert.match(result.assistantMessage.toolUses[0].result.stdout, /partial/);
+    assert.match(result.assistantMessage.content, /saída parcial/);
+    assert.equal(providerCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('synthetic function tags are executed as tool calls instead of shown as final text', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-synthetic-function-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  global.fetch = async (url) => {
+    if (String(url).includes('/chat/completions')) {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'Agora vou verificar.\n<function=run_terminal_command> {"command":"printf synthetic","returnOutput":true} </function>',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Resultado synthetic confirmado.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-synthetic-function-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-synthetic-function-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatMemory: true,
+        persistentMemory: true,
+        autoCompact: true,
+        chatTitle: true,
+        webSearch: false,
+        searchMode: 'off',
+        searchTerminal: false,
+        alwaysAllow: true,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Synthetic function', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Use pseudo tool.');
+    assert.equal(result.assistantMessage.status, 'sent');
+    assert.equal(result.assistantMessage.toolUses[0].name, 'run_terminal_command');
+    assert.equal(result.assistantMessage.toolUses[0].result.stdout, 'synthetic');
+    assert.doesNotMatch(result.assistantMessage.content, /function=run_terminal_command/);
+    assert.match(result.assistantMessage.content, /synthetic confirmado/);
+    assert.equal(providerCalls, 2);
   } finally {
     global.fetch = originalFetch;
   }

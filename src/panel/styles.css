@@ -593,6 +593,28 @@ pre {
   line-height: 1.4;
 }
 
+.thinking-block {
+  width: min(820px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.thinking-block summary {
+  cursor: pointer;
+  padding: 8px 10px;
+}
+
+.thinking-block pre {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+  max-height: 280px;
+  font-size: 12px;
+}
+
 .message-actions {
   display: flex;
   gap: 8px;
@@ -1424,6 +1446,14 @@ pre {
 .routing-list {
   display: grid;
   gap: 8px;
+}
+
+.empty-routing-state {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px;
 }
 
 .model-index-list,

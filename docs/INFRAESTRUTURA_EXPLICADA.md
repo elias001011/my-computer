@@ -52,7 +52,7 @@ Se a resposta falhar ou parar no meio:
 - `Ver detalhes` abre o processo salvo da tentativa e a janela de eventos relacionados carregados
 - `Copiar eventos` leva os eventos carregados para analise
 
-Falha de tool ou terminal tambem conta como falha real da tentativa: timeout, signal e exit code diferente de zero deixam a resposta incompleta em vez de aparecerem como sucesso.
+Falha de tool ou terminal tambem conta como falha real da tentativa: timeout e signal deixam a resposta incompleta em vez de aparecerem como sucesso. Exit code diferente de zero aparece no historico; quando a IA pediu `returnOutput: true`, stdout/stderr voltam para ela continuar ou corrigir o comando.
 
 ## 3. O que entra no prompt
 

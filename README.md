@@ -248,7 +248,7 @@ O painel mostra:
 
 Isso existe para manter o historico visivel e reduzir perda de contexto quando uma resposta sai incompleta.
 Retry e Continue ficam disponiveis apenas na tentativa mais recente do grupo. O backend tambem rejeita envios, retries e continues simultaneos no mesmo chat para evitar cliques duplicados e side effects repetidos.
-Falhas de terminal e tools, incluindo timeout, signal e exit code diferente de zero, ficam marcadas como falhas reais da tentativa.
+Falhas reais de tools, timeout e signal deixam a tentativa incompleta. Em terminal, exit code diferente de zero ainda aparece destacado, mas se a IA pediu `returnOutput: true` o stdout/stderr volta para o modelo para ele poder corrigir o proximo passo.
 
 ## Rede local
 
