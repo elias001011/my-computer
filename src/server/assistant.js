@@ -119,6 +119,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       });
       providerUsed = assistantMessage.providerUsed || providerUsed;
       modelUsed = assistantMessage.modelUsed || modelUsed;
+      const selectedConfig = withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed);
 
       const toolCalls = normalizeAssistantToolCalls(assistantMessage.tool_calls || [], assistantMessage.content, effectiveConfig.tools);
       if (toolCalls.length || assistantMessage.content) {
@@ -148,10 +149,10 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       });
 
       if (effectiveConfig.tools?.alwaysAllow !== true) {
-        const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, effectiveConfig));
-        const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, effectiveConfig));
+        const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
+        const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
         for (const toolCall of safeToolCalls) {
-          const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+          const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -217,7 +218,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       }
 
       for (const toolCall of toolCalls) {
-        const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+        const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -458,6 +459,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const executionTrace = [...(pendingState.executionTrace || [])];
   let providerUsed = pendingMessage.providerUsed || effectiveConfig.provider;
   let modelUsed = pendingMessage.modelUsed || effectiveConfig.model;
+  const selectedConfig = withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed);
   const sourceUserMessage =
     currentChat.messages.find((message) => message.id === pendingState.sourceUserMessageId && message.role === 'user') ||
     findPreviousUserMessage(currentChat.messages, pendingMessage);
@@ -488,7 +490,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
     const toolUse =
       decisions[toolCall.id] === 'approve'
-        ? await executeToolCallSafely(chatId, toolCall, effectiveConfig)
+        ? await executeToolCallSafely(chatId, toolCall, selectedConfig)
         : createDeniedToolUse(toolCall);
     toolUses.push(toolUse);
     executionTrace.push(createToolTraceEntry(toolUse));
@@ -497,7 +499,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       await finalizeApprovedToolMessage({
         chatId,
         messageId,
-        effectiveConfig,
+        effectiveConfig: selectedConfig,
         sourceUserMessage,
         continuationGroupId,
         attemptIndex,
@@ -521,7 +523,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     await finalizeApprovedToolMessage({
       chatId,
       messageId,
-      effectiveConfig,
+      effectiveConfig: selectedConfig,
       sourceUserMessage,
       continuationGroupId,
       attemptIndex,
@@ -550,7 +552,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     const followup = await continueAssistantToolLoop({
       chatId,
       messageId,
-      effectiveConfig,
+      effectiveConfig: selectedConfig,
       workingMessages,
       toolUses,
       executionTrace,
@@ -568,7 +570,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     await finalizeApprovedToolMessage({
       chatId,
       messageId,
-      effectiveConfig,
+      effectiveConfig: selectedConfig,
       sourceUserMessage,
       continuationGroupId,
       attemptIndex,
@@ -601,7 +603,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     await finalizeApprovedToolMessage({
       chatId,
       messageId,
-      effectiveConfig,
+      effectiveConfig: selectedConfig,
       sourceUserMessage,
       continuationGroupId,
       attemptIndex,
@@ -794,6 +796,7 @@ async function continueAssistantToolLoop({
     });
     currentProviderUsed = assistantMessage.providerUsed || currentProviderUsed;
     currentModelUsed = assistantMessage.modelUsed || currentModelUsed;
+    const selectedConfig = withSelectedProviderConfig(effectiveConfig, currentProviderUsed, currentModelUsed);
 
     const toolCalls = normalizeAssistantToolCalls(assistantMessage.tool_calls || [], assistantMessage.content, effectiveConfig.tools);
     if (toolCalls.length || assistantMessage.content) {
@@ -831,10 +834,10 @@ async function continueAssistantToolLoop({
     });
 
     if (effectiveConfig.tools?.alwaysAllow !== true) {
-      const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, effectiveConfig));
-      const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, effectiveConfig));
+      const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
+      const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
       for (const toolCall of safeToolCalls) {
-        const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+        const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -898,7 +901,7 @@ async function continueAssistantToolLoop({
     }
 
     for (const toolCall of toolCalls) {
-      const toolUse = await executeToolCallSafely(chatId, toolCall, effectiveConfig);
+      const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
       toolUses.push(toolUse);
       executionTrace.push(createToolTraceEntry(toolUse));
       appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -1151,6 +1154,13 @@ function ensureNoActiveToolApproval(chat = {}) {
   error.statusCode = 409;
   error.details = { messageId: pendingMessage.id, status: pendingMessage.status };
   throw error;
+}
+
+function withSelectedProviderConfig(config = {}, providerUsed, modelUsed) {
+  const provider = providerUsed || config.provider;
+  const model = modelUsed || config.model;
+  if (provider === config.provider && model === config.model) return config;
+  return { ...config, provider, model };
 }
 
 function getAssistantAttempts(messages = [], groupId) {

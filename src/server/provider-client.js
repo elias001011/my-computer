@@ -129,7 +129,7 @@ export async function callProviderNativeWebSearch({
   const runtime = resolveProviderRuntime(config, provider);
   await appendProviderEvent(chatId, 'provider.native_search.started', {
     provider: provider.id,
-    model: provider.id === 'groq' ? 'groq/compound' : selectedModel,
+    model: provider.id === 'groq' ? 'groq/compound-mini' : selectedModel,
     query,
     maxResults,
   });
@@ -433,7 +433,7 @@ async function callResponsesNativeSearch(provider, runtime, apiKey, model, query
 }
 
 async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId = null) {
-  const candidateModels = ['groq/compound', 'groq/compound-mini'];
+  const candidateModels = ['groq/compound-mini', 'groq/compound'];
   let lastError = null;
 
   for (let index = 0; index < candidateModels.length; index += 1) {
@@ -468,7 +468,7 @@ async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults
       });
     } catch (error) {
       lastError = error;
-      const shouldFallback = isGroqRequestTooLarge(error) && index < candidateModels.length - 1;
+      const shouldFallback = !isAuthError(error) && shouldTryNextModel(error) && index < candidateModels.length - 1;
       if (!shouldFallback) throw error;
       await appendProviderEvent(chatId, 'provider.native_search.fallback', {
         provider: provider.id,
@@ -888,11 +888,6 @@ function nativeSearchSupported(providerId) {
   return ['openai', 'groq', 'gemini', 'anthropic', 'xai', 'openrouter'].includes(providerId);
 }
 
-function isGroqRequestTooLarge(error) {
-  const message = String(error?.message || '').toLowerCase();
-  return error?.statusCode === 413 || message.includes('request entity too large') || message.includes('payload too large');
-}
-
 function nativeSearchPrompt(query, maxResults) {
   return [
     'Use web search for the user query below.',
@@ -950,16 +945,27 @@ function extractResponsesSources(data = {}) {
       }
     }
   }
-  return sources.map((source) => ({
-    title: source.title || source.url || source.uri,
-    url: source.url || source.uri,
-    snippet: source.snippet || source.text || '',
-  }));
+  return sources.map((source) => {
+    if (typeof source === 'string') {
+      return { title: source, url: source, snippet: '' };
+    }
+    return {
+      title: source.title || source.url || source.uri,
+      url: source.url || source.uri,
+      snippet: source.snippet || source.text || '',
+    };
+  });
 }
 
 function extractGroqSearchResults(message = {}) {
   return (message.executed_tools || [])
-    .flatMap((tool) => tool.search_results || tool.results || [])
+    .flatMap((tool) => {
+      const searchResults = tool.search_results || tool.results || [];
+      if (Array.isArray(searchResults)) return searchResults;
+      if (Array.isArray(searchResults.results)) return searchResults.results;
+      if (Array.isArray(searchResults.items)) return searchResults.items;
+      return [];
+    })
     .map((item) => ({
       title: item.title || item.url,
       url: item.url,

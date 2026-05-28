@@ -89,19 +89,12 @@ test('bootstrap does not create a ghost chat when no chat exists', async () => {
   }
 });
 
-test('groq native search retries compound-mini on request-too-large', async () => {
+test('groq native search starts with compound-mini and parses nested search results', async () => {
   const originalFetch = global.fetch;
   const calls = [];
   global.fetch = async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : {};
     calls.push({ url, body, headers: options.headers || {} });
-    if (calls.length === 1) {
-      return {
-        ok: false,
-        status: 413,
-        json: async () => ({ error: 'Request Entity Too Large' }),
-      };
-    }
     return {
       ok: true,
       status: 200,
@@ -112,7 +105,9 @@ test('groq native search retries compound-mini on request-too-large', async () =
               content: 'Resumo com fontes',
               executed_tools: [
                 {
-                  search_results: [{ title: 'Exemplo', url: 'https://example.com', snippet: 'fonte' }],
+                  search_results: {
+                    results: [{ title: 'Exemplo', url: 'https://example.com', content: 'fonte' }],
+                  },
                 },
               ],
             },
@@ -143,9 +138,62 @@ test('groq native search retries compound-mini on request-too-large', async () =
     });
 
     assert.equal(result.method, 'groq/compound-mini-web_search');
-    assert.equal(calls[0].body.model, 'groq/compound');
-    assert.equal(calls[1].body.model, 'groq/compound-mini');
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0].url, 'https://example.com');
+    assert.equal(result.results[0].snippet, 'fonte');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.model, 'groq/compound-mini');
     assert.equal(calls[0].headers['Groq-Model-Version'], 'latest');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('xai native search keeps response citations as sources', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url, body, headers: options.headers || {} });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        output: [
+          {
+            type: 'message',
+            content: [{ type: 'output_text', text: 'Resumo com citacoes.' }],
+          },
+        ],
+        citations: ['https://x.ai/news', 'https://docs.x.ai/developers/tools/web-search'],
+        usage: {},
+      }),
+    };
+  };
+
+  try {
+    const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}-xai-citations`);
+    const result = await providerClient.callProviderNativeWebSearch({
+      config: {
+        provider: 'xai',
+        model: 'grok-4.3',
+        providerSettings: {
+          xai: {
+            baseUrl: 'https://api.x.ai/v1',
+            apiKeys: ['test-key'],
+          },
+        },
+      },
+      provider: 'xai',
+      model: 'grok-4.3',
+      query: 'What is xAI?',
+      maxResults: 5,
+    });
+
+    assert.equal(result.method, 'xai-responses-web_search');
+    assert.equal(result.results.length, 2);
+    assert.equal(result.results[0].url, 'https://x.ai/news');
+    assert.equal(calls[0].body.tools[0].type, 'web_search');
   } finally {
     global.fetch = originalFetch;
   }
