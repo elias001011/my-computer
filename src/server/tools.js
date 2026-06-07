@@ -135,6 +135,91 @@ export const persistentMemoryToolDefinition = {
   },
 };
 
+export const persistentMemoryUserToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'persistent_memory_user',
+    description:
+      'List or read user-added persistent memory files. Use this instead of terminal when the user memory file index suggests a file may contain durable context for the current answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'read'],
+          description: 'list returns the file index. read returns one compatible text file by fileId or fileName.',
+        },
+        fileId: {
+          type: 'string',
+          description: 'ID of the file to read. Prefer fileId from the index.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Name of the file to read when fileId is not available.',
+        },
+        offset: {
+          type: 'number',
+          description: 'Character offset for read pagination. Use nextOffset from a truncated read to continue.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum characters to return for read. Defaults to 20000; max 50000.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for reading user persistent memory files.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, because list/read results are meant to inform the next reasoning step.',
+        },
+      },
+      required: ['action', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const editPersistentMemoryUserToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'edit_persistent_memory_user',
+    description:
+      'Edit a user-added persistent memory text file by replacing an exact oldText snippet with newText. Use only when user memory files should be kept up to date and the edit tool is enabled.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fileId: {
+          type: 'string',
+          description: 'ID of the file to edit. Prefer fileId from persistent_memory_user list.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Name of the file to edit when fileId is not available.',
+        },
+        oldText: {
+          type: 'string',
+          description: 'Exact text currently present in the file. The app replaces only the first exact match.',
+        },
+        newText: {
+          type: 'string',
+          description: 'Replacement text.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for this memory-file edit.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Whether the app should send the edit result back to the model. Usually true when you will continue reasoning.',
+        },
+      },
+      required: ['oldText', 'newText', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const compactContextToolDefinition = {
   type: 'function',
   function: {
@@ -197,7 +282,8 @@ export async function runTerminalCommand(command, options = {}) {
   const outputLimit = Number(options.outputLimit || process.env.MC_SHELL_OUTPUT_LIMIT || 40000);
   const startedAt = Date.now();
   const terminalMode = options.terminalMode === 'isolated' ? 'isolated' : 'standard';
-  const isolatedHome = path.join(runtimeHome, 'isolated-terminal');
+  const isolatedBaseHome = options.runtimeHome || runtimeHome;
+  const isolatedHome = path.join(isolatedBaseHome, 'isolated-terminal');
   if (terminalMode === 'isolated') await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
   const cwd = options.cwd || (terminalMode === 'isolated' ? isolatedHome : process.env.HOME || os.homedir());
   const env =

@@ -29,6 +29,17 @@ test('normalizes web_search tool calls and fake tool text', async () => {
   assert.equal(functionCalls[0].function.name, 'run_terminal_command');
   assert.deepEqual(JSON.parse(functionCalls[0].function.arguments), { command: 'pwd', returnOutput: true });
   assert.doesNotMatch(assistant.sanitizeAssistantToolLikeText(functionText), /function=run_terminal_command/);
+  const userMemoryText =
+    '<function=persistent_memory_user> {"action":"read","fileId":"abc","reason":"usar memória do usuário","returnOutput":true} </function>';
+  const userMemoryCalls = assistant.normalizeAssistantToolCalls([], userMemoryText, { userMemory: true });
+  assert.equal(userMemoryCalls.length, 1);
+  assert.equal(userMemoryCalls[0].function.name, 'persistent_memory_user');
+  assert.deepEqual(JSON.parse(userMemoryCalls[0].function.arguments), {
+    action: 'read',
+    fileId: 'abc',
+    reason: 'usar memória do usuário',
+    returnOutput: true,
+  });
   assert.equal(assistant.sanitizeAssistantToolLikeText('<think>não mostrar</think>Resposta limpa.'), 'Resposta limpa.');
 
   const malformedCalls = assistant.normalizeAssistantToolCalls(
@@ -197,6 +208,47 @@ test('xai native search keeps response citations as sources', async () => {
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test('offline mode blocks online providers and native search', async () => {
+  const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}-offline`);
+  const config = {
+    provider: 'ollama',
+    model: 'llama3.2',
+    privacy: { offlineMode: true },
+    providerSettings: {
+      groq: {
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiKeys: [{ value: 'test-key' }],
+      },
+      ollama: {
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        apiKeys: [],
+      },
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      providerClient.callProviderChat({
+        config,
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: 'oi' }],
+        tools: [],
+      }),
+    /Modo offline ativo/,
+  );
+  await assert.rejects(
+    () =>
+      providerClient.callProviderNativeWebSearch({
+        config,
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        query: 'noticias',
+      }),
+    /Modo offline ativo/,
+  );
 });
 
 test('chat rotation tries alternate model before alternate api key', async () => {

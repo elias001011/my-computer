@@ -204,11 +204,14 @@ O backup exporta o runtime em grupos selecionáveis:
 
 - configuração completa, incluindo tema, providers, API keys, tools, contexto, rede e rotatórias
 - memória persistente
+- arquivos adicionais de memória persistente adicionados pelo usuário
 - chats, mensagens, memórias e contexto salvo
 - anexos
 - eventos recentes para diagnóstico
 
-Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico, mas não copia os arquivos anexados.
+Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico, mas não copia os arquivos anexados. Importar arquivos adicionais de memória substitui o conjunto de arquivos adicionais da seção ativa pela cópia do backup.
+
+A exclusão de todos os chats remove apenas a pasta de chats da seção ativa. Configurações, memória persistente global e arquivos adicionais de memória persistente permanecem no runtime da seção.
 
 ## 12. Update e manutenção
 

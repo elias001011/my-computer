@@ -22,6 +22,7 @@ export async function callProviderChat({
   modelSettings = {},
   chatId = null,
 }) {
+  ensureOfflineProviderAllowed(config, requestedProvider || config.provider);
   const routes = buildProviderRoutes(config, requestedProvider || config.provider, model || config.model);
   let lastError = null;
 
@@ -118,6 +119,11 @@ export async function callProviderNativeWebSearch({
   maxResults = 5,
   chatId = null,
 }) {
+  if (config.privacy?.offlineMode === true) {
+    const error = new Error('Modo offline ativo: busca web nativa do provider está bloqueada.');
+    error.nativeSearchUnavailable = true;
+    throw error;
+  }
   const provider = getProvider(requestedProvider || config.provider);
   const selectedModel = String(model || config.model || provider.defaultModel).trim();
   if (!nativeSearchSupported(provider.id)) {
@@ -820,6 +826,7 @@ async function ensureOllamaModel(model, openAIBaseUrl) {
 }
 
 function resolveProviderRuntime(config, provider, options = {}) {
+  ensureOfflineProviderAllowed(config, provider.id);
   const settings = config.providerSettings?.[provider.id] || {};
   const baseUrl = String(settings.baseUrl || provider.baseUrl || '').trim();
   const apiKeys = normalizeApiKeys(settings.apiKeys);
@@ -842,6 +849,18 @@ function resolveProviderRuntime(config, provider, options = {}) {
 }
 
 function buildProviderRoutes(config = {}, requestedProvider, requestedModel) {
+  if (config.privacy?.offlineMode === true) {
+    const provider = getProvider('ollama');
+    return [
+      {
+        provider: 'ollama',
+        model: String(requestedProvider === 'ollama' ? requestedModel || config.model || provider.defaultModel : config.model || provider.defaultModel).trim(),
+        source: requestedProvider === 'ollama' ? 'primary' : 'offline-forced',
+        models: [String(requestedProvider === 'ollama' ? requestedModel || config.model || provider.defaultModel : config.model || provider.defaultModel).trim()],
+        pass: 1,
+      },
+    ];
+  }
   const primaryProvider = getProvider(requestedProvider || config.provider);
   const primary = {
     provider: primaryProvider.id,
@@ -870,6 +889,14 @@ function buildProviderRoutes(config = {}, requestedProvider, requestedModel) {
     for (const route of unique) routes.push({ ...route, models: buildRouteModels(config, route.provider, route.model), pass });
   }
   return routes;
+}
+
+function ensureOfflineProviderAllowed(config = {}, providerId = '') {
+  if (config.privacy?.offlineMode !== true) return;
+  if (String(providerId || config.provider) === 'ollama') return;
+  const error = new Error('Modo offline ativo: somente o provider local Ollama pode ser usado nesta seção.');
+  error.statusCode = 403;
+  throw error;
 }
 
 function buildRouteModels(config = {}, providerId, primaryModel) {

@@ -59,16 +59,16 @@ Se o provider for Ollama, o setup mostra um bloco próprio com:
 - A resposta da IA aparece com botão de copiar.
 - Erros de request aparecem no próprio chat.
 - Retry reaproveita a mensagem do usuário que falhou.
-- Tentativas do assistente continuam visíveis quando há falha ou saída incompleta.
+- O chat mostra só a tentativa mais recente de cada grupo; tentativas antigas ficam no modal `Ver detalhes`.
 - `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
 - `Continuar` retoma a partir da última saída parcial e mostra a nova tentativa no mesmo grupo.
-- `Ver detalhes` abre um modal com o processo salvo e a janela de eventos carregados relacionada à tentativa.
+- `Ver detalhes` abre um modal com o processo salvo, timeline aberta de saídas da IA/tools e a janela de eventos carregados relacionada à tentativa.
 - `Copiar eventos` copia os eventos carregados do chat para auditoria ou debug.
 - O modelo ativo aparece no cabeçalho.
 - O usuário pode trocar provider e modelo no meio da conversa.
 - O texto não enviado fica salvo localmente por chat.
-- Tool calls são agrupadas, mostradas como blocos e podem ficar pendentes para aprovação.
-- Conteúdo em `<think>` é removido da bolha principal e aparece em um bloco recolhível `Think do modelo`.
+- Tool calls pendentes aparecem como um painel compacto de aprovação no chat, enquanto inputs completos, outputs e rodadas ficam em `Ver detalhes`.
+- Conteúdo em `<think>` é removido da bolha principal e aparece em `Ver detalhes`.
 
 ## Attachments
 
@@ -102,7 +102,8 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Tools: terminal local, search mode, memória, compactação e rename.
 - Rede: abertura em LAN com senha única e Basic Auth.
 - Atualizações: estado do Git, diff, pull e restart.
-- Export/import: backup e restauração seletivos de configuração completa, memória, chats, anexos e eventos.
+- Export/import: backup e restauração seletivos de configuração completa, memória persistente, arquivos adicionais de memória, chats, anexos e eventos.
+- Backup: botão de excluir todos os chats da seção atual com confirmação dupla, preservando configurações e memórias persistentes.
 - Segurança: avisos de sudo e de acesso remoto.
 
 ## Índice de modelos
@@ -158,7 +159,9 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 - Busca web pode ser `nativa`, `terminal`, `ambos` ou `desligada`.
 - Terminal local pode ser `sem restricoes` ou `isolamento leve`.
 - Tools locais podem exigir aprovação manual ou ficar em sempre permitir.
-- A UI mostra claramente o status de cada tool, incluindo requests pendentes, permitidas, negadas, timeout, exit code e erro.
+- A UI mostra no chat apenas a decisão/estado principal da tool; detalhes de requests pendentes, permitidas, negadas, timeout, exit code e erro ficam no modal de detalhes.
+- Arquivos adicionais de memória têm `Ver arquivo`, que abre um editor da cópia salva no My Computer; edições por `edit_persistent_memory_user` têm `Ver diff` com linhas adicionadas/removidas e botão para abrir o arquivo atual.
+- Leituras grandes de `persistent_memory_user` retornam `truncated`, `nextOffset` e faixa lida para a IA continuar com `offset`.
 
 ## Rede local e updates
 

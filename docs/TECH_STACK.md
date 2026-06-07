@@ -32,9 +32,9 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 
 ### Storage
 
-- Runtime do usuário em `~/.my-computer` por padrão.
-- Configurações, chats, memória e eventos ficam separados do código do projeto.
-- Export/import e update trabalham em cima desse runtime.
+- Runtime do usuário em `~/.my-computer` por padrão, com seções novas em `~/.my-computer/profiles/<id>`.
+- Configurações, chats, memória, arquivos adicionais de memória e eventos ficam separados do código do projeto.
+- Export/import trabalha sobre a seção ativa e cobre configuração, memória persistente, arquivos adicionais, chats, anexos e eventos selecionados.
 
 ### Integracoes opcionais
 
@@ -59,4 +59,4 @@ Quando a UI e o fluxo de tools ficarem mais complexos, essas escolhas podem ser 
 - `./uninstall.sh` remove o projeto local.
 - `./uninstall.sh --remove-data` apaga também o runtime do usuário.
 
-O split entre `install.sh`/`uninstall.sh` na raiz e `scripts/` por baixo existe para manter o entrypoint simples para o usuário final.
+Use os scripts da raiz como entrypoint do usuário final. `install.sh` chama `scripts/bootstrap.sh` por baixo; o arquivo em `scripts/` é implementação interna para manutenção/desenvolvimento, não um comando que o usuário precisa decorar.

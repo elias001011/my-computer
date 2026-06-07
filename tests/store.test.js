@@ -28,8 +28,13 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.tools.alwaysAllow, false);
   assert.equal(config.tools.terminalMode, 'standard');
   assert.equal(config.tools.deepInvestigation, false);
+  assert.equal(config.tools.userMemory, true);
+  assert.equal(config.tools.userMemoryEdit, false);
   assert.equal(config.tools.searchTerminal, false);
   assert.equal(config.tools.searchMode, 'native');
+  assert.equal(config.userMemory.sendFilesToPrompt, false);
+  assert.equal(config.userMemory.remindModelToUpdateFiles, false);
+  assert.equal(config.privacy.offlineMode, false);
   assert.equal(config.context.autoCompactEnabled, false);
   assert.equal(config.context.autoCompactChars, 24000);
   assert.equal(config.routing.modelRotationEnabled, false);
@@ -44,7 +49,15 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
     technicalLevel: 'beginner',
     technicalGuidanceEnabled: false,
     appearance: { theme: 'dark' },
-    tools: { ...config.tools, alwaysAllow: true, terminalMode: 'isolated', searchMode: 'both', deepInvestigation: true },
+    tools: {
+      ...config.tools,
+      alwaysAllow: true,
+      terminalMode: 'isolated',
+      searchMode: 'both',
+      deepInvestigation: true,
+      userMemoryEdit: true,
+    },
+    userMemory: { sendFilesToPrompt: true, remindModelToUpdateFiles: true },
     context: { autoCompactEnabled: true, autoCompactChars: 32000, autoCompactMinMessages: 5 },
     routing: {
       modelRotationEnabled: true,
@@ -62,8 +75,12 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
   assert.equal(securityConfig.tools.deepInvestigation, true);
+  assert.equal(securityConfig.tools.userMemory, true);
+  assert.equal(securityConfig.tools.userMemoryEdit, true);
   assert.equal(securityConfig.tools.searchMode, 'both');
   assert.equal(securityConfig.tools.searchTerminal, true);
+  assert.equal(securityConfig.userMemory.sendFilesToPrompt, true);
+  assert.equal(securityConfig.userMemory.remindModelToUpdateFiles, true);
   assert.equal(securityConfig.context.autoCompactEnabled, true);
   assert.equal(securityConfig.context.autoCompactChars, 32000);
   assert.equal(securityConfig.context.autoCompactMinMessages, 5);
@@ -73,6 +90,48 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(securityConfig.routing.maxProviderPasses, 3);
   assert.deepEqual(securityConfig.routing.fallbacks, [{ provider: 'gemini', model: 'gemini-2.5-flash' }]);
   assert.equal(securityConfig.server.networkEnabled, true);
+
+  await store.saveConfig({
+    provider: 'groq',
+    model: 'llama-3.3-70b-versatile',
+    privacy: { offlineMode: true },
+    tools: { searchMode: 'native', webSearch: true, searchTerminal: false },
+    routing: {
+      modelRotationEnabled: true,
+      modelFallbacks: [{ provider: 'groq', model: 'openai/gpt-oss-120b' }],
+      providerRotationEnabled: true,
+      maxProviderPasses: 3,
+      fallbacks: [{ provider: 'openai', model: 'gpt-4.1' }],
+    },
+  });
+  const offlineConfig = await store.loadConfig();
+  assert.equal(offlineConfig.privacy.offlineMode, true);
+  assert.equal(offlineConfig.provider, 'ollama');
+  assert.equal(offlineConfig.tools.searchMode, 'off');
+  assert.equal(offlineConfig.tools.webSearch, false);
+  assert.equal(offlineConfig.routing.providerRotationEnabled, false);
+  assert.deepEqual(offlineConfig.routing.fallbacks, []);
+  await store.saveConfig({
+    privacy: { offlineMode: false },
+    provider: 'openai-compatible',
+    model: 'llama-3.3-70b-versatile',
+    tools: securityConfig.tools,
+    userMemory: securityConfig.userMemory,
+    routing: securityConfig.routing,
+  });
+
+  const defaultRuntime = await store.getRuntimeInfo();
+  assert.equal(defaultRuntime.activeProfile.id, 'default');
+  const profile = await store.createProfile('Projeto Memória');
+  assert.equal(profile.id, 'projeto-memoria');
+  assert.equal((await store.getRuntimeInfo()).activeProfile.id, profile.id);
+  assert.equal((await store.listChats()).length, 0);
+  await store.saveConfig({ provider: 'ollama', model: 'llama3.2' });
+  assert.equal((await store.loadConfig()).provider, 'ollama');
+  await store.activateProfile('default');
+  assert.equal((await store.loadConfig()).provider, 'openai-compatible');
+  await store.deleteProfile(profile.id);
+  assert.equal((await store.getRuntimeInfo()).activeProfile.id, 'default');
 
   const chat = await store.createChat('Teste', {
     provider: securityConfig.provider,
@@ -98,6 +157,26 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
 
   await store.writePersistentMemory('# Global\n\n- cross-chat');
   assert.match(await store.readPersistentMemory(), /cross-chat/);
+
+  const userMemoryFile = await store.saveUserMemoryFile({
+    name: 'project.md',
+    content: '# Projeto\n\n- status antigo\n',
+  });
+  assert.equal((await store.listUserMemoryFiles()).length, 1);
+  assert.match((await store.readUserMemoryFile(userMemoryFile.id)).content, /status antigo/);
+  const userMemoryEdit = await store.replaceTextInUserMemoryFile(userMemoryFile.id, 'status antigo', 'status novo');
+  assert.match(userMemoryEdit.content, /status novo/);
+  const userMemoryManualEdit = await store.writeUserMemoryFileContent(userMemoryFile.id, '# Projeto\n\n- status manual\n');
+  assert.match(userMemoryManualEdit.content, /status manual/);
+  const userMemoryWithHints = await store.readUserMemoryFileWithHints(userMemoryFile.id);
+  assert.equal(userMemoryWithHints.title, 'Projeto');
+  assert.match(userMemoryWithHints.preview, /status manual/);
+  const userMemoryIndexOnly = await store.buildUserMemoryPromptContext({ userMemory: { sendFilesToPrompt: false } });
+  assert.equal(userMemoryIndexOnly.mode, 'index');
+  assert.equal(userMemoryIndexOnly.promptFiles.length, 0);
+  const userMemoryFull = await store.buildUserMemoryPromptContext({ userMemory: { sendFilesToPrompt: true } });
+  assert.equal(userMemoryFull.mode, 'full');
+  assert.match(userMemoryFull.promptFiles[0].content, /status manual/);
 
   const attachment = await store.saveAttachment(chat.id, {
     name: 'doc.html',
@@ -139,6 +218,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(await fs.readFile(snapshotPath, 'utf8'), '# Context');
 
   const exported = await store.exportRuntimeData();
+  assert.equal(exported.version, 2);
   assert.equal(exported.chats.length, 1);
   assert.equal(exported.config.provider, 'openai-compatible');
   assert.equal(exported.config.appearance.theme, 'dark');
@@ -148,6 +228,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.deepEqual(exported.config.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 3);
+  assert.equal(exported.persistentMemoryUserFiles.length, 1);
 
   await store.saveConfig({
     appearance: { theme: 'light' },
@@ -162,9 +243,12 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
     },
   });
   await store.writePersistentMemory('# Local\n\n- keep local memory');
+  await store.deleteUserMemoryFile(userMemoryFile.id);
+  await store.saveUserMemoryFile({ name: 'local.md', content: '# Local user file\n' });
   await store.importRuntimeData(exported, {
     config: true,
     persistentMemory: false,
+    persistentMemoryUser: false,
     chats: true,
     attachments: false,
     events: false,
@@ -174,6 +258,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const importedChat = await store.readChat(importedChats[0].id);
   assert.equal(importedChat.attachments.length, 0);
   assert.match(await store.readPersistentMemory(), /keep local memory/);
+  assert.match((await store.readUserMemoryFile('local.md')).content, /Local user file/);
   const importedConfig = await store.loadConfig();
   assert.equal(importedConfig.appearance.theme, 'dark');
   assert.equal(importedConfig.tools.deepInvestigation, true);
@@ -181,6 +266,20 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(importedConfig.routing.modelRotationEnabled, true);
   assert.deepEqual(importedConfig.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(importedConfig.routing.providerRotationEnabled, true);
+
+  await store.importRuntimeData(exported, {
+    config: false,
+    persistentMemory: false,
+    persistentMemoryUser: true,
+    chats: false,
+    attachments: false,
+    events: false,
+  });
+  const restoredUserMemory = await store.readUserMemoryFile('project.md');
+  assert.match(restoredUserMemory.content, /status manual/);
+  const restoredUserMemoryHints = await store.listUserMemoryFilesWithHints();
+  assert.equal(restoredUserMemoryHints[0].name, 'project.md');
+  assert.equal(restoredUserMemoryHints[0].title, 'Projeto');
 
   await store.saveConfig({
     customModels: {
@@ -251,5 +350,11 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.ok(chatEvents.every((event) => event.chatId === chat.id));
 
   await store.deleteChat(chat.id);
+  assert.equal((await store.listChats()).length, 0);
+
+  await store.createChat('Limpar 1');
+  await store.createChat('Limpar 2');
+  const deletedChats = await store.deleteAllChats();
+  assert.equal(deletedChats.count, 2);
   assert.equal((await store.listChats()).length, 0);
 });

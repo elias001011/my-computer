@@ -1,14 +1,19 @@
 import { runtimeHome } from './paths.js';
 import { callProviderChat, callProviderNativeWebSearch } from './provider-client.js';
-import { getModelMetadata, modelSupportsImages } from './models.js';
+import { getDefaultModelForProvider, getModelMetadata, modelSupportsImages } from './models.js';
 import {
   appendEvent,
   appendMessages,
   createMessage,
+  buildUserMemoryPromptContext,
+  getRuntimeInfo,
+  listUserMemoryFilesWithHints,
   readChat,
   readContextSummary,
   readMemory,
   readPersistentMemory,
+  readUserMemoryFile,
+  replaceTextInUserMemoryFile,
   loadConfig,
   readAttachmentFile,
   saveContextSnapshot,
@@ -21,8 +26,10 @@ import {
 } from './store.js';
 import {
   compactContextToolDefinition,
+  editPersistentMemoryUserToolDefinition,
   memoryChatToolDefinition,
   persistentMemoryToolDefinition,
+  persistentMemoryUserToolDefinition,
   renameChatToolDefinition,
   runTerminalCommand,
   runWebSearch,
@@ -76,12 +83,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   }
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = {
-    ...config,
-    provider: chat.provider || config.provider,
-    model: chat.model || config.model,
-    modelSettings: chat.modelSettings || {},
-  };
+  const runtimeInfo = await getRuntimeInfo();
+  const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo, { modelSettings: chat.modelSettings || {} });
+  const userMemoryContext = await buildUserMemoryPromptContext(effectiveConfig);
   const toolUses = [];
   const executionTrace = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
@@ -100,6 +104,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   try {
     const workingMessages = await buildProviderMessages(chat, effectiveConfig, persistentMemory, {
       strictImageSupportForMessageId: userMessage.id,
+      userMemoryContext,
     });
     if (continuationMode === 'continue') {
       workingMessages.push({
@@ -447,12 +452,8 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
 
   const config = await loadConfig();
   const currentChat = await readChat(chatId);
-  const effectiveConfig = {
-    ...config,
-    provider: currentChat.provider || config.provider,
-    model: currentChat.model || config.model,
-    modelSettings: currentChat.modelSettings || {},
-  };
+  const runtimeInfo = await getRuntimeInfo();
+  const effectiveConfig = buildEffectiveConfig(config, currentChat, runtimeInfo, { modelSettings: currentChat.modelSettings || {} });
   const workingMessages = pendingState.providerMessages || [];
   const toolCalls = pendingState.toolCalls || approvalToolCalls;
   const toolUses = [...(pendingState.preapprovedToolUses || [])];
@@ -1349,11 +1350,8 @@ export async function compactChat(chatId, options = {}) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = {
-    ...config,
-    provider: chat.provider || config.provider,
-    model: chat.model || config.model,
-  };
+  const runtimeInfo = await getRuntimeInfo();
+  const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo);
   const transcript = renderTranscript(chat.messages, MAX_CONTEXT_SAVE_CHARS);
   const contextSummary = await readContextSummary(chatId);
 
@@ -1408,11 +1406,8 @@ export async function editContextSummary(chatId, content) {
   const updatedChat = await writeContextSummary(chatId, content);
   const config = await loadConfig();
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = {
-    ...config,
-    provider: updatedChat.provider || config.provider,
-    model: updatedChat.model || config.model,
-  };
+  const runtimeInfo = await getRuntimeInfo();
+  const effectiveConfig = buildEffectiveConfig(config, updatedChat, runtimeInfo);
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, persistentMemory));
   return { chat: await readChat(chatId), path: updatedChat.paths.context };
 }
@@ -1421,11 +1416,8 @@ export async function saveContextWindow(chatId) {
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
-  const effectiveConfig = {
-    ...config,
-    provider: chat.provider || config.provider,
-    model: chat.model || config.model,
-  };
+  const runtimeInfo = await getRuntimeInfo();
+  const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo);
   const content = buildContextWindowMarkdown(chat, effectiveConfig, persistentMemory);
   const path = await saveContextSnapshot(chatId, content);
   await saveCurrentContextWindow(chatId, content);
@@ -1463,7 +1455,7 @@ export function buildContextWindowMarkdown(chat, config, persistentMemory = '') 
     `# Context window - ${chat.title}`,
     '',
     `- Chat: ${chat.id}`,
-    `- Runtime: ${runtimeHome}`,
+    `- Runtime: ${config.runtimeHome || runtimeHome}`,
     `- Provider: ${config.provider}`,
     `- Model: ${chat.model || config.model}`,
     `- Language: ${config.language}`,
@@ -1496,27 +1488,70 @@ export function buildContextWindowMarkdown(chat, config, persistentMemory = '') 
 }
 
 async function buildProviderMessages(chat, config, persistentMemory, options = {}) {
-  const systemPrompt = buildSystemPrompt(chat, config, persistentMemory);
+  const systemPrompt = buildSystemPrompt(chat, config, persistentMemory, options.userMemoryContext || null);
   return [{ role: 'system', content: systemPrompt }, ...(await selectRecentMessages(chat, config, options))];
 }
 
-function buildSystemPrompt(chat, config, persistentMemory) {
+function buildEffectiveConfig(config, chat = {}, runtimeInfo = {}, extra = {}) {
+  const offlineMode = config.privacy?.offlineMode === true;
+  const provider = offlineMode ? 'ollama' : chat.provider || config.provider;
+  const model = offlineMode
+    ? chat.provider === 'ollama'
+      ? chat.model || config.model || getDefaultModelForProvider('ollama')
+      : config.model || getDefaultModelForProvider('ollama')
+    : chat.model || config.model;
+  const searchMode = getSearchMode(config.tools);
+  const offlineSearchMode = offlineMode && ['native', 'both'].includes(searchMode) ? 'off' : searchMode;
+  return {
+    ...config,
+    ...extra,
+    provider,
+    model,
+    tools: {
+      ...(config.tools || {}),
+      searchMode: offlineSearchMode,
+      webSearch: offlineSearchMode !== 'off',
+      searchTerminal: offlineSearchMode === 'terminal' || offlineSearchMode === 'both',
+    },
+    routing: offlineMode
+      ? {
+          modelRotationEnabled: false,
+          modelFallbacks: [],
+          providerRotationEnabled: false,
+          maxProviderPasses: 1,
+          fallbacks: [],
+        }
+      : config.routing,
+    runtimeHome: runtimeInfo.runtimeHome,
+    activeProfile: runtimeInfo.activeProfile,
+  };
+}
+
+function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = null) {
   const languageInstruction =
     config.language === 'auto'
       ? 'Respond in the same language the user is using.'
       : `Respond in this language unless the user explicitly asks otherwise: ${config.language}.`;
 
   return [
-    'You are My Computer, a self-hosted AI assistant running on the user machine.',
+    'You are My Computer, a self-hosted AI assistant integrated with this local app, not a generic chatbot.',
+    'Use the app state, durable memories, user-added memory files, tools, provider settings, and current chat metadata as first-class context.',
     config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
     buildTechnicalLevelInstruction(config),
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
+    config.activeProfile?.name ? `Active isolated section/profile: ${config.activeProfile.name} (${config.activeProfile.id}).` : '',
+    config.privacy?.offlineMode
+      ? 'Offline privacy mode is enabled for this section. Do not use cloud AI providers, native provider web search, provider-side tools, provider rotation, or any workflow that sends user prompts, memories, files, paths, code, terminal output, or personal/project details to an external AI service. The only chat provider allowed is local Ollama.'
+      : '',
     'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
     'If you cannot finish cleanly, do not pretend the answer is complete. Stop with the best partial state you have; the UI will keep that attempt and expose a Continue action.',
     config.tools?.terminal
       ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
+    config.provider === 'ollama'
+      ? 'Current provider is Ollama/local. Do not ask for an API key for this provider. If the model is missing or Ollama seems unavailable, explain the local daemon/model step clearly and use available Ollama status/model-management UI assumptions before suggesting terminal commands.'
+      : '',
     config.tools?.deepInvestigation
       ? [
           'Deep investigation mode is enabled. For requests about the user machine, code, installed software, configuration, logs, scripts, provider behavior, or anything that can be inspected locally, investigate before answering.',
@@ -1533,8 +1568,11 @@ function buildSystemPrompt(chat, config, persistentMemory) {
       : 'The user disabled automatic tool execution. The app may ask the user to approve a tool before it actually runs.',
     'For every tool call, set returnOutput to true only when you need the tool result to continue reasoning. Use returnOutput false for pure side effects such as rename_chat, successful memory writes, or compacting when you do not need the summary.',
     getSearchMode(config.tools) !== 'off'
-      ? `Use web_search when current or source-backed information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means local terminal search, and both means native first with terminal fallback when the native search fails or returns no results. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.`
+      ? `Use web_search when current, time-sensitive, source-backed, legal/medical/financial, schedule, price, documentation, or news information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means local terminal search, and both means native first with terminal fallback when the native search fails or returns no results. Do not use web_search for purely local app state, files, or memories; use the local tools for those. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.`
       : 'Web search is disabled by user settings.',
+    config.privacy?.offlineMode && getSearchMode(config.tools) !== 'off'
+      ? 'Offline search privacy rule: if web_search is enabled, use only terminal-backed search and write neutral, generic queries. Never include user text verbatim, names, secrets, local paths, code snippets, private project names, memory contents, chat details, or terminal output in a web search query. If a useful query would reveal private context, ask the user to approve or provide a sanitized query.'
+      : '',
     getSearchMode(config.tools) === 'native'
       ? 'Terminal-backed search is disabled; web_search will not execute local terminal commands in this mode.'
       : '',
@@ -1544,6 +1582,15 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     config.tools?.persistentMemory
       ? 'When stable information should survive across all chats, use persistent_memory to read or update the global memory.'
       : 'Persistent memory editing through tools is disabled by user settings.',
+    config.tools?.userMemory !== false
+      ? 'User-added persistent memory files are managed by the app. When their index suggests useful context and full content was not injected, use persistent_memory_user to list or read files. Prefer this tool over terminal for those files. If a read result has truncated=true, continue reading with offset=nextOffset before relying on the missing part.'
+      : 'Reading user-added persistent memory files through tools is disabled by user settings.',
+    config.tools?.userMemoryEdit
+      ? 'The edit_persistent_memory_user tool is enabled. Use it to keep user-added Markdown/text memory files current when the conversation creates durable facts, decisions, preferences, project state, or TODOs that belong in those files.'
+      : 'Editing user-added persistent memory files through tools is disabled by user settings.',
+    config.tools?.userMemoryEdit && config.userMemory?.remindModelToUpdateFiles
+      ? 'Before a final answer, briefly consider whether any user-added memory file should be updated. If yes, call edit_persistent_memory_user with exact oldText and newText; the user can approve or deny the change in the UI.'
+      : '',
     config.tools?.autoCompact
       ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
       : 'Automatic context compaction through tools is disabled by user settings.',
@@ -1557,7 +1604,8 @@ function buildSystemPrompt(chat, config, persistentMemory) {
       ? 'For persistent_memory write operations, send the full edited Markdown memory file, using the current persistent memory below as the base.'
       : '',
     'Be careful with host actions, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
-    `Runtime folder: ${runtimeHome}`,
+    'Sudo and host actions: this app runs commands as the current OS user. If sudo needs a password, the browser cannot type it for the user; explain the exact command to run manually or suggest a narrow NOPASSWD sudoers rule only when appropriate. Never imply sudo is configured unless a command confirms it.',
+    `Runtime folder: ${config.runtimeHome || runtimeHome}`,
     `Current chat title: ${chat.title}`,
     `Chat memory file: ${chat.paths.memory}`,
     `Saved context file: ${chat.paths.context}`,
@@ -1568,6 +1616,8 @@ function buildSystemPrompt(chat, config, persistentMemory) {
     '<persistent_memory_md>',
     persistentMemory || 'Sem memória persistente.',
     '</persistent_memory_md>',
+    '',
+    renderUserMemoryPromptSection(userMemoryContext, config),
     '',
     '<chat_memory_md>',
     chat.memory || 'Sem memória de chat.',
@@ -1607,6 +1657,52 @@ function buildTechnicalLevelInstruction(config) {
   };
 
   return `${shared}\n${instructions[level] || instructions.balanced}`;
+}
+
+function renderUserMemoryPromptSection(userMemoryContext, config = {}) {
+  const files = userMemoryContext?.files || [];
+  if (!files.length) {
+    return ['<persistent_memory_user_files mode="empty">', 'Nenhum arquivo adicional de memória do usuário foi adicionado.', '</persistent_memory_user_files>'].join('\n');
+  }
+  const mode = userMemoryContext?.mode === 'full' ? 'full' : 'index';
+  const lines = [`<persistent_memory_user_files mode="${mode}" count="${files.length}">`];
+  lines.push('These files were explicitly added by the user as durable memory. Treat them as user-provided context, but prefer newer chat facts when there is a clear conflict.');
+  lines.push('');
+  lines.push('## Index');
+  for (const file of files) {
+    lines.push(`- id: ${file.id}`);
+    lines.push(`  name: ${file.name}`);
+    if (file.displayName && file.displayName !== file.name) lines.push(`  displayName: ${file.displayName}`);
+    if (file.title) lines.push(`  title: ${file.title}`);
+    if (file.preview) lines.push(`  preview: ${file.preview}`);
+    lines.push(`  size: ${file.size} bytes`);
+    lines.push(`  editable: ${file.editable ? 'yes' : 'no'}`);
+    lines.push(`  storageName: ${file.storageName || ''}`);
+  }
+  if (mode !== 'full') {
+    lines.push('');
+    if (config.tools?.userMemory !== false) {
+      lines.push('Only the index was injected because "send user-added files to every prompt" is off. Use name/title/preview to choose likely files, then call persistent_memory_user with action "read" using fileId or the original file name before answering when a file may matter.');
+    } else {
+      lines.push('Only the index was injected because "send user-added files to every prompt" is off, and persistent_memory_user is disabled. Do not claim to know file contents that were not injected; ask the user to enable file reading or provide the relevant file when needed.');
+    }
+  } else {
+    lines.push('');
+    lines.push('## File contents');
+    for (const file of userMemoryContext.promptFiles || []) {
+      lines.push('');
+      lines.push(`<user_memory_file id="${escapeXmlAttribute(file.id)}" name="${escapeXmlAttribute(file.name)}" editable="${file.editable ? 'yes' : 'no'}">`);
+      lines.push(file.content || (file.readError ? '[Read error]' : '[Empty file]'));
+      if (file.truncated) lines.push('\n[File content truncated for prompt budget.]');
+      lines.push('</user_memory_file>');
+    }
+  }
+  if (config.tools?.userMemoryEdit && config.userMemory?.remindModelToUpdateFiles) {
+    lines.push('');
+    lines.push('Memory upkeep reminder: update these files with edit_persistent_memory_user when durable information changes and the target file is editable.');
+  }
+  lines.push('</persistent_memory_user_files>');
+  return lines.join('\n');
 }
 
 async function selectRecentMessages(chat, config, options = {}) {
@@ -1654,6 +1750,14 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executePersistentMemoryToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'persistent_memory_user') {
+    return executePersistentMemoryUserToolCall(chatId, toolCall.id, input);
+  }
+
+  if (name === 'edit_persistent_memory_user') {
+    return executeEditPersistentMemoryUserToolCall(chatId, toolCall.id, input);
+  }
+
   if (name === 'compact_context') {
     return executeCompactContextToolCall(chatId, toolCall.id, input);
   }
@@ -1689,6 +1793,7 @@ async function executeToolCall(chatId, toolCall, config = {}) {
   const result = await runTerminalCommand(terminalInput.command, {
     timeoutSeconds: terminalInput.timeoutSeconds,
     terminalMode: config.tools?.terminalMode,
+    runtimeHome: config.runtimeHome,
   });
   await appendEvent({
     type: 'tool.run_terminal_command.completed',
@@ -1791,6 +1896,8 @@ function buildEnabledToolDefinitions(tools = {}) {
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
+    tools.userMemory !== false ? persistentMemoryUserToolDefinition : null,
+    tools.userMemoryEdit === true ? editPersistentMemoryUserToolDefinition : null,
     tools.autoCompact !== false ? compactContextToolDefinition : null,
     tools.chatTitle !== false ? renameChatToolDefinition : null,
   ].filter(Boolean);
@@ -1856,7 +1963,7 @@ function extractSyntheticToolCalls(content = '', tools = {}) {
   }
 
   const inlinePattern =
-    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
+    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
   for (const match of text.matchAll(inlinePattern)) {
     candidates.push({ name: match[1], body: match[2] });
   }
@@ -1885,7 +1992,16 @@ function extractSyntheticToolCalls(content = '', tools = {}) {
 
 function normalizeSyntheticToolName(name = '') {
   const value = String(name || '').trim().split('.').pop();
-  return ['run_terminal_command', 'web_search', 'memory_chat', 'persistent_memory', 'compact_context', 'rename_chat'].includes(value)
+  return [
+    'run_terminal_command',
+    'web_search',
+    'memory_chat',
+    'persistent_memory',
+    'persistent_memory_user',
+    'edit_persistent_memory_user',
+    'compact_context',
+    'rename_chat',
+  ].includes(value)
     ? value
     : '';
 }
@@ -1893,7 +2009,7 @@ function normalizeSyntheticToolName(name = '') {
 function recoverMalformedToolCall(name, args) {
   const trimmedName = String(name || '').trim();
   const trimmedArgs = String(args || '').trim();
-  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|compact_context|rename_chat)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
+  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|compact_context|rename_chat)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
   if (directTool) return { name: directTool[1], arguments: directTool[2] };
   if (trimmedName === 'web_search' || trimmedName.endsWith('.web_search')) return { name: 'web_search', arguments: trimmedArgs };
   return { name: trimmedName, arguments: trimmedArgs };
@@ -1904,6 +2020,13 @@ function normalizeToolInput(name, input = {}) {
   const returnOutput = normalizeBooleanLike(normalizedInput.returnOutput);
   if (returnOutput !== undefined) normalizedInput.returnOutput = returnOutput;
   if (name === 'web_search') return normalizeWebSearchInput(normalizedInput);
+  if (name === 'persistent_memory_user') {
+    normalizedInput.action = ['list', 'read'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'list';
+    if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 2_000_000, 0);
+    if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 50000, 20000);
+  }
   return normalizedInput;
 }
 
@@ -2005,6 +2128,8 @@ function describeEnabledTools(tools = {}) {
     getSearchMode(tools) !== 'off' ? 'web_search' : null,
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
+    tools.userMemory !== false ? 'persistent_memory_user' : null,
+    tools.userMemoryEdit === true ? 'edit_persistent_memory_user' : null,
     tools.autoCompact !== false ? 'compact_context' : null,
     tools.chatTitle !== false ? 'rename_chat' : null,
   ].filter(Boolean);
@@ -2015,6 +2140,8 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'web_search') return getSearchMode(tools) !== 'off';
   if (name === 'memory_chat') return tools.chatMemory !== false;
   if (name === 'persistent_memory') return tools.persistentMemory !== false;
+  if (name === 'persistent_memory_user') return tools.userMemory !== false;
+  if (name === 'edit_persistent_memory_user') return tools.userMemoryEdit === true;
   if (name === 'compact_context') return tools.autoCompact !== false;
   if (name === 'rename_chat') return tools.chatTitle !== false;
   return true;
@@ -2024,7 +2151,14 @@ function toolRequiresApproval(toolCall, config = {}) {
   const name = toolCall?.function?.name;
   if (config.tools?.alwaysAllow === true) return false;
   if (name === 'run_terminal_command') return true;
-  if (name === 'memory_chat' || name === 'persistent_memory' || name === 'compact_context' || name === 'rename_chat') {
+  if (name === 'memory_chat' || name === 'persistent_memory') {
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return input.action !== 'read';
+  }
+  if (name === 'persistent_memory_user') {
+    return false;
+  }
+  if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat') {
     return true;
   }
   if (name === 'web_search') {
@@ -2080,11 +2214,12 @@ function shouldReturnToolOutput(toolCall) {
 
 function appendToolResultForModel(messages, toolCall, toolUse) {
   if (!shouldReturnToolOutput(toolCall)) return false;
+  const outputLimit = toolUse.name === 'persistent_memory_user' ? 30000 : 12000;
   messages.push({
     role: 'tool',
     tool_call_id: toolCall.id,
     name: toolUse.name,
-    content: truncate(JSON.stringify(toolUse.result), 12000),
+    content: truncate(JSON.stringify(toolUse.result), outputLimit),
   });
   return true;
 }
@@ -2344,6 +2479,145 @@ async function executePersistentMemoryToolCall(chatId, toolCallId, input) {
       action,
       previousContent: truncate(previous, 4000),
       content: truncate(next, 12000),
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function executePersistentMemoryUserToolCall(chatId, toolCallId, input) {
+  const action = String(input.action || 'list').trim();
+  if (action === 'list') {
+    const files = (await listUserMemoryFilesWithHints()).map(serializeUserMemoryFileForTool);
+    await appendEvent({ type: 'tool.persistent_memory_user.list', chatId, details: { reason: input.reason, fileCount: files.length } });
+    return {
+      id: toolCallId,
+      name: 'persistent_memory_user',
+      input,
+      result: {
+        action,
+        files,
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  if (action !== 'read') {
+    return {
+      id: toolCallId,
+      name: 'persistent_memory_user',
+      input,
+      status: 'failed',
+      result: {
+        action,
+        error: 'action must be list or read',
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const identifier = input.fileId || input.fileName;
+  if (!identifier) {
+    return {
+      id: toolCallId,
+      name: 'persistent_memory_user',
+      input,
+      status: 'failed',
+      result: {
+        action,
+        error: 'fileId or fileName is required for read',
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const normalizedInput = normalizeToolInput('persistent_memory_user', input);
+  const offset = normalizedInput.offset || 0;
+  const limit = normalizedInput.limit || 20000;
+  const file = await readUserMemoryFile(identifier);
+  const totalChars = file.content.length;
+  const content = file.content.slice(offset, offset + limit);
+  const nextOffset = offset + content.length;
+  const truncated = nextOffset < totalChars;
+  await appendEvent({
+    type: 'tool.persistent_memory_user.read',
+    chatId,
+    details: { reason: input.reason, fileId: file.id, name: file.name, offset, limit, truncated, nextOffset: truncated ? nextOffset : null },
+  });
+  return {
+    id: toolCallId,
+    name: 'persistent_memory_user',
+    input: normalizedInput,
+    result: {
+      action,
+      file: serializeUserMemoryFileForTool(file),
+      offset,
+      limit,
+      totalChars,
+      nextOffset: truncated ? nextOffset : null,
+      truncated,
+      content,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function serializeUserMemoryFileForTool(file = {}) {
+  return {
+    id: file.id,
+    name: file.name,
+    displayName: file.displayName || file.name,
+    storageName: file.storageName || String(file.path || '').split(/[\\/]/).pop() || '',
+    size: file.size,
+    editable: file.editable,
+    title: file.title || '',
+    preview: file.preview || '',
+  };
+}
+
+async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input) {
+  const identifier = input.fileId || input.fileName;
+  if (!identifier) {
+    return {
+      id: toolCallId,
+      name: 'edit_persistent_memory_user',
+      input,
+      status: 'failed',
+      result: { error: 'fileId or fileName is required' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+  const oldText = String(input.oldText ?? '');
+  if (!oldText) {
+    return {
+      id: toolCallId,
+      name: 'edit_persistent_memory_user',
+      input,
+      status: 'failed',
+      result: { error: 'oldText is required' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const update = await replaceTextInUserMemoryFile(identifier, oldText, String(input.newText ?? ''));
+  await appendEvent({
+    type: 'tool.edit_persistent_memory_user',
+    chatId,
+    details: {
+      reason: input.reason,
+      fileId: update.file.id,
+      name: update.file.name,
+      path: update.path,
+    },
+  });
+  return {
+    id: toolCallId,
+    name: 'edit_persistent_memory_user',
+    input,
+    result: {
+      action: 'replace',
+      file: serializeUserMemoryFileForTool(update.file),
+      previousContent: truncate(update.previousContent, 4000),
+      content: truncate(update.content, 12000),
     },
     createdAt: new Date().toISOString(),
   };

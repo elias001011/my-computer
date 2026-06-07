@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { panelDir, runtimeHome } from './paths.js';
+import { panelDir } from './paths.js';
 import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage } from './assistant.js';
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
@@ -10,23 +10,34 @@ import { runTerminalCommand } from './tools.js';
 import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
 import {
   appendEvent,
+  activateProfile,
   createChat,
+  createProfile,
+  deleteAllChats,
   deleteChat,
   deleteAttachment,
+  deleteProfile,
+  deleteUserMemoryFile,
   ensureRuntime,
   exportRuntimeData,
+  getRuntimeInfo,
   importRuntimeData,
   listChats,
+  listUserMemoryFilesWithHints,
   loadConfig,
   readAttachmentFile,
   readChat,
   readContextSummary,
   readEvents,
   readPersistentMemory,
+  readUserMemoryFileWithHints,
+  saveUserMemoryFile,
   saveAttachment,
   sanitizeConfig,
   saveConfig,
+  updateProfile,
   updateChatMetadata,
+  writeUserMemoryFileContent,
   writePersistentMemory,
   writeMemory,
 } from './store.js';
@@ -45,6 +56,7 @@ let currentLaunch = { port: null, requestedHost: null, actualHost: null };
 export async function startServer({ port = Number(process.env.PORT || 8787), host = null } = {}) {
   await ensureRuntime();
   const config = await loadConfig();
+  const runtimeInfo = await getRuntimeInfo();
   const actualHost = host || (config.server?.networkEnabled ? '0.0.0.0' : '127.0.0.1');
   const auth = config.server?.networkEnabled && config.server?.authPassword ? { password: config.server.authPassword } : null;
   const handler = (request, response) => {
@@ -61,7 +73,7 @@ export async function startServer({ port = Number(process.env.PORT || 8787), hos
   const { server, actualPort } = await listen(handler, actualHost, port);
   currentLaunch = { port: actualPort, requestedHost: host, actualHost };
   const url = `http://${actualHost === '0.0.0.0' ? '127.0.0.1' : actualHost}:${actualPort}`;
-  return { server, url, runtimeHome, networkStatus: getNetworkStatus(config) };
+  return { server, url, runtimeHome: runtimeInfo.runtimeHome, networkStatus: getNetworkStatus(config) };
 }
 
 async function handleRequest(request, response) {
@@ -80,27 +92,17 @@ async function handleApi(request, response, url) {
   const method = request.method || 'GET';
 
   if (method === 'GET' && parts[1] === 'bootstrap') {
-    const config = await loadConfig();
-    const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
-    const chats = await listChats();
-    const activeChat = chats[0] ? await readChat(chats[0].id) : null;
-    sendJson(response, 200, {
-      config: sanitizeConfig(config),
-      providers,
-      models,
-      ollamaInstalledModels,
-      chats,
-      activeChat,
-      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
-      persistentMemory: await readPersistentMemory(),
-      runtimeHome,
-      networkStatus: getNetworkStatus(config),
-    });
+    sendJson(response, 200, await buildBootstrapPayload());
     return;
   }
 
   if (method === 'GET' && parts[1] === 'network' && parts[2] === 'status') {
     sendJson(response, 200, { networkStatus: getNetworkStatus(await loadConfig()) });
+    return;
+  }
+
+  if (parts[1] === 'profiles') {
+    await handleProfilesApi(request, response, parts);
     return;
   }
 
@@ -121,6 +123,8 @@ async function handleApi(request, response, url) {
       systemPromptExtra: body.systemPromptExtra,
       appearance: body.appearance,
       tools: body.tools,
+      userMemory: body.userMemory,
+      privacy: body.privacy,
       context: body.context,
       routing: body.routing,
       server: body.server,
@@ -156,21 +160,9 @@ async function handleApi(request, response, url) {
     const payload = body?.data && body?.options ? body.data : body;
     const options = body?.data && body?.options ? body.options : {};
     const imported = await importRuntimeData(payload, options);
-    const config = await loadConfig();
-    const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
-    const chats = await listChats();
-    const activeChat = chats[0] ? await readChat(chats[0].id) : null;
     sendJson(response, 200, {
       imported,
-      config: sanitizeConfig(config),
-      providers,
-      models,
-      ollamaInstalledModels,
-      chats,
-      activeChat,
-      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
-      persistentMemory: await readPersistentMemory(),
-      networkStatus: getNetworkStatus(config),
+      ...(await buildBootstrapPayload()),
     });
     return;
   }
@@ -179,6 +171,11 @@ async function handleApi(request, response, url) {
     const body = await readBody(request);
     const persistentMemory = await writePersistentMemory(body.content || '');
     sendJson(response, 200, { persistentMemory });
+    return;
+  }
+
+  if (parts[1] === 'persistent-memory-user') {
+    await handleUserMemoryApi(request, response, parts);
     return;
   }
 
@@ -238,6 +235,22 @@ async function handleChatsApi(request, response, parts) {
     return;
   }
 
+  if (method === 'DELETE' && !chatId) {
+    const body = await readBody(request);
+    if (body.confirmText !== 'APAGAR TODOS OS CHATS') {
+      sendJson(response, 400, { error: 'Confirmação obrigatória para apagar todos os chats.' });
+      return;
+    }
+    const deleted = await deleteAllChats();
+    sendJson(response, 200, {
+      deleted,
+      chats: await listChats(),
+      activeChat: null,
+      activeChatEvents: [],
+    });
+    return;
+  }
+
   if (method === 'POST' && !chatId) {
     const config = await loadConfig();
     const chat = await createChat('Novo chat', { provider: config.provider, model: config.model });
@@ -250,10 +263,12 @@ async function handleChatsApi(request, response, parts) {
     if (body.modelCapabilities) {
       await saveConfig({ modelCapabilities: body.modelCapabilities, setupComplete: true });
     }
+    const config = await loadConfig();
+    const offlineMode = config.privacy?.offlineMode === true;
     await updateChatMetadata(chatId, {
       title: body.title,
-      provider: body.provider,
-      model: body.model,
+      provider: offlineMode ? 'ollama' : body.provider,
+      model: offlineMode && body.provider !== 'ollama' ? config.model : body.model,
       modelSettings: body.modelSettings,
       systemPromptExtra: body.systemPromptExtra,
     });
@@ -382,6 +397,121 @@ async function handleChatsApi(request, response, parts) {
   }
 
   sendJson(response, 404, { error: 'Endpoint de chat nao encontrado.' });
+}
+
+async function handleProfilesApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const profileId = parts[2];
+
+  if (method === 'GET' && !profileId) {
+    const runtimeInfo = await getRuntimeInfo();
+    sendJson(response, 200, {
+      profiles: runtimeInfo.profiles,
+      activeProfile: runtimeInfo.activeProfile,
+      runtimeHome: runtimeInfo.runtimeHome,
+    });
+    return;
+  }
+
+  if (method === 'POST' && !profileId) {
+    const body = await readBody(request);
+    await createProfile(body.name || 'Nova seção');
+    sendJson(response, 201, await buildBootstrapPayload());
+    return;
+  }
+
+  if (method === 'POST' && profileId && parts[3] === 'activate') {
+    await activateProfile(profileId);
+    sendJson(response, 200, await buildBootstrapPayload());
+    return;
+  }
+
+  if (method === 'PUT' && profileId && parts.length === 3) {
+    const body = await readBody(request);
+    await updateProfile(profileId, { name: body.name });
+    const runtimeInfo = await getRuntimeInfo();
+    sendJson(response, 200, {
+      profiles: runtimeInfo.profiles,
+      activeProfile: runtimeInfo.activeProfile,
+      runtimeHome: runtimeInfo.runtimeHome,
+    });
+    return;
+  }
+
+  if (method === 'DELETE' && profileId && parts.length === 3) {
+    await deleteProfile(profileId);
+    sendJson(response, 200, await buildBootstrapPayload());
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de seção não encontrado.' });
+}
+
+async function handleUserMemoryApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const fileId = parts[2];
+
+  if (method === 'GET' && !fileId) {
+    sendJson(response, 200, { files: await listUserMemoryFilesWithHints() });
+    return;
+  }
+
+  if (method === 'GET' && fileId) {
+    const file = await readUserMemoryFileWithHints(fileId);
+    sendJson(response, 200, { file });
+    return;
+  }
+
+  if (method === 'PUT' && fileId) {
+    const body = await readBody(request, { limit: 8_000_000 });
+    const update = await writeUserMemoryFileContent(fileId, body.content || '');
+    const file = await readUserMemoryFileWithHints(update.file.id);
+    sendJson(response, 200, {
+      file,
+      previousContent: update.previousContent,
+      files: await listUserMemoryFilesWithHints(),
+    });
+    return;
+  }
+
+  if (method === 'POST' && !fileId) {
+    const body = await readBody(request, { limit: 8_000_000 });
+    const file = await saveUserMemoryFile(body);
+    sendJson(response, 201, { file, files: await listUserMemoryFilesWithHints() });
+    return;
+  }
+
+  if (method === 'DELETE' && fileId) {
+    await deleteUserMemoryFile(fileId);
+    sendJson(response, 200, { files: await listUserMemoryFilesWithHints() });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de arquivo de memória não encontrado.' });
+}
+
+async function buildBootstrapPayload() {
+  const config = await loadConfig();
+  const runtimeInfo = await getRuntimeInfo();
+  const { providers, models, ollamaInstalledModels } = await buildClientCatalog(config);
+  const chats = await listChats();
+  const activeChat = chats[0] ? await readChat(chats[0].id) : null;
+  return {
+    config: sanitizeConfig(config),
+    providers,
+    models,
+    ollamaInstalledModels,
+    chats,
+    activeChat,
+    activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
+    persistentMemory: await readPersistentMemory(),
+    userMemoryFiles: await listUserMemoryFilesWithHints(),
+    runtimeHome: runtimeInfo.runtimeHome,
+    rootRuntimeHome: runtimeInfo.rootRuntimeHome,
+    profiles: runtimeInfo.profiles,
+    activeProfile: runtimeInfo.activeProfile,
+    networkStatus: getNetworkStatus(config),
+  };
 }
 
 async function buildClientCatalog(config) {

@@ -7,7 +7,11 @@ const state = {
   activeChat: null,
   activeChatEvents: [],
   persistentMemory: '',
+  userMemoryFiles: [],
+  profiles: [],
+  activeProfile: null,
   runtimeHome: '',
+  rootRuntimeHome: '',
   networkStatus: null,
   busy: false,
   settingsOpen: false,
@@ -30,6 +34,8 @@ const state = {
   setupDraft: null,
   pendingAttachments: [],
   attachmentViewer: null,
+  userMemoryViewer: null,
+  userMemoryDiff: null,
   messageDetailsOpen: false,
   messageDetailsMessageId: null,
   importDraft: null,
@@ -61,12 +67,20 @@ bootstrap();
 async function bootstrap() {
   try {
     const data = await api('/api/bootstrap');
-    Object.assign(state, data);
+    applyBootstrapData(data);
     applyTheme(state.config?.appearance?.theme);
     render();
   } catch (error) {
     renderError(error);
   }
+}
+
+function applyBootstrapData(data = {}) {
+  Object.assign(state, data);
+  state.userMemoryFiles = data.userMemoryFiles || state.userMemoryFiles || [];
+  state.profiles = data.profiles || state.profiles || [];
+  state.activeProfile = data.activeProfile || state.activeProfile || null;
+  state.rootRuntimeHome = data.rootRuntimeHome || state.rootRuntimeHome || '';
 }
 
 function render() {
@@ -89,14 +103,18 @@ function applyTheme(theme = 'light') {
 
 function renderSetup() {
   const setupConfig = state.setupDraft || state.config || {};
-  const providerId = setupConfig.provider || 'groq';
+  const setupOffline = isOfflineMode(setupConfig);
+  const providerId = setupOffline ? 'ollama' : setupConfig.provider || 'groq';
   const provider = getProvider(providerId);
-  const model = setupConfig.model || provider.defaultModel;
+  const model = setupOffline && setupConfig.provider !== 'ollama' ? provider.defaultModel : setupConfig.model || provider.defaultModel;
   const providerSettings = setupConfig.providerSettings?.[providerId] || {};
   const setupApiKeys = providerSettings.apiKeys?.length ? providerSettings.apiKeys : [{ id: 'setup-empty', value: '' }];
   const showCustomModel = !isKnownModel(providerId, model);
   const showBaseUrl = provider.id === 'openai-compatible' || provider.id === 'ollama';
   const modelCanSeeImages = modelSupportsImages(providerId, model);
+  const setupUserMemoryReadEnabled = setupConfig.tools?.userMemory !== false;
+  const setupUserMemoryEditEnabled = setupUserMemoryReadEnabled && setupConfig.tools?.userMemoryEdit === true;
+  const setupUserMemoryReminderEnabled = setupUserMemoryEditEnabled && setupConfig.userMemory?.remindModelToUpdateFiles === true;
   if (!state.setupWizardStarted) {
     app.innerHTML = `
       <main class="setup-screen">
@@ -141,11 +159,19 @@ function renderSetup() {
             <section class="setup-step-panel">
               <h2>Qual provider você pretende usar primeiro?</h2>
               <p class="help-text">Isso vira o padrão dos chats novos. Você pode trocar por chat depois.</p>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="offlineMode" id="setup-offline-mode" ${setupOffline ? 'checked' : ''} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Modo offline desta seção</strong>
+                  <small>Força Ollama local, bloqueia providers online, desliga busca nativa e remove rotatórias para serviços externos.</small>
+                </span>
+              </label>
               <div class="setup-grid">
             <label>
               Provider
               <select name="provider" id="setup-provider">
-                ${renderProviderOptions(providerId)}
+                ${renderProviderOptions(providerId, { offlineOnly: setupOffline })}
               </select>
             </label>
             <label>
@@ -236,7 +262,7 @@ function renderSetup() {
           ${step === 'tools' ? `
           <section class="setup-assist">
             <h2>Como a IA pode usar tools?</h2>
-            <p class="help-text">Busca nativa não executa comando local. Terminal e tools locais continuam sob aprovação quando “sempre permitir” estiver desligado.</p>
+            <p class="help-text">${setupOffline ? 'Modo offline: busca nativa fica indisponível. Se habilitar pesquisa, use apenas busca via terminal com consulta neutra, sem dados privados.' : 'Busca nativa não executa comando local. Terminal e tools locais continuam sob aprovação quando “sempre permitir” estiver desligado.'}</p>
             <label class="toggle-row switch-row">
               <input type="checkbox" name="alwaysAllowTools" ${setupConfig.tools?.alwaysAllow ? 'checked' : ''} />
               <span class="switch" aria-hidden="true"></span>
@@ -254,9 +280,46 @@ function renderSetup() {
               </span>
             </label>
             <div class="settings-subpanel">
+              <h2>Memória persistente</h2>
+              <p class="help-text">Você pode adicionar arquivos Markdown/texto depois. O índice sempre ajuda a IA a saber que os arquivos existem; leitura e edição são permissões separadas.</p>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="userMemoryReadTool" id="setup-user-memory-read-tool" ${setupUserMemoryReadEnabled ? 'checked' : ''} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Permitir que a IA liste e leia arquivos adicionais</strong>
+                  <small>Habilita <code>persistent_memory_user</code>. Sem isso, ela não abre arquivos por conta própria; usa só o que foi enviado ao prompt.</small>
+                </span>
+              </label>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="userMemorySendFilesToPrompt" ${setupConfig.userMemory?.sendFilesToPrompt ? 'checked' : ''} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Enviar arquivos adicionados a todo prompt</strong>
+                  <small>Útil para poucos arquivos curtos. Desligado economiza contexto; se a leitura acima estiver ligada, a IA abre só o que precisar.</small>
+                </span>
+              </label>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="userMemoryEditTool" id="setup-user-memory-edit-tool" ${setupUserMemoryEditEnabled ? 'checked' : ''} ${setupUserMemoryReadEnabled ? '' : 'disabled'} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Permitir edição de arquivos de memória</strong>
+                  <small>Habilita <code>edit_persistent_memory_user</code>. A IA propõe substituições em arquivos texto; você aprova ou nega antes de aplicar.</small>
+                </span>
+              </label>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="userMemoryUpdateReminder" ${setupUserMemoryReminderEnabled ? 'checked' : ''} ${setupUserMemoryEditEnabled ? '' : 'disabled'} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Lembrar a IA de manter esses arquivos atualizados</strong>
+                  <small>Só funciona com edição ligada. Reforça no prompt que decisões duráveis devem ser gravadas nos arquivos editáveis.</small>
+                </span>
+              </label>
+              ${!setupUserMemoryReadEnabled ? '<p class="help-text">Leitura/listagem desligada: edição fica indisponível porque a IA não consegue localizar nem conferir o trecho atual dos arquivos.</p>' : ''}
+            </div>
+            <div class="settings-subpanel">
               <h2>Pesquisa web</h2>
             <p class="help-text">Busca nativa usa o provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a máquina local.</p>
-              ${renderSearchModeControl(getSearchMode(setupConfig.tools), { setup: true })}
+              ${renderSearchModeControl(getSearchMode(setupConfig.tools), { setup: true, offlineMode: setupOffline })}
             </div>
           </section>
           ` : ''}
@@ -298,10 +361,33 @@ function renderSetup() {
     state.setupDraft.model = getProvider(event.target.value).defaultModel;
     renderSetup();
   });
+  document.querySelector('#setup-offline-mode')?.addEventListener('change', (event) => {
+    syncSetupApiDraft();
+    if (!state.setupDraft) state.setupDraft = buildSetupDraft();
+    state.setupDraft.privacy = {
+      ...(state.setupDraft.privacy || {}),
+      offlineMode: event.target.checked,
+    };
+    if (event.target.checked) {
+      state.setupDraft.provider = 'ollama';
+      state.setupDraft.model = getProvider('ollama').defaultModel;
+      state.setupDraft.tools = normalizeOfflineToolsForClient(state.setupDraft.tools || {});
+      state.setupDraft.routing = normalizeOfflineRoutingForClient();
+    }
+    renderSetup();
+  });
   document.querySelector('#setup-model')?.addEventListener('change', toggleSetupCustomModel);
   document.querySelector('#setup-technical-guidance')?.addEventListener('change', () => toggleTechnicalLevelField('setup'));
   document.querySelector('#setup-network-enabled')?.addEventListener('change', () => toggleNetworkPasswordField('setup'));
   document.querySelector('#setup-search-enabled')?.addEventListener('change', () => toggleSearchModeField('setup'));
+  document.querySelector('#setup-user-memory-read-tool')?.addEventListener('change', () => {
+    captureSetupDraftFromForm();
+    renderSetup();
+  });
+  document.querySelector('#setup-user-memory-edit-tool')?.addEventListener('change', () => {
+    captureSetupDraftFromForm();
+    renderSetup();
+  });
   document.querySelector('#setup-add-api-key')?.addEventListener('click', addSetupApiKeyRow);
   document.querySelector('#setup-toggle-api-key')?.addEventListener('click', toggleSetupApiKeyVisibility);
   document.querySelectorAll('.setup-remove-api-key').forEach((button) => {
@@ -318,8 +404,9 @@ function renderSetup() {
 
 function renderApp() {
   const chat = getActiveChatView();
-  const chatProviderId = chat?.provider || state.config.provider;
-  const chatModel = chat?.model || state.config.model;
+  const offlineMode = isOfflineMode(state.config);
+  const chatProviderId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
+  const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
   const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
   const composerDisabled = !chat || state.busy || toolApprovalBlocksComposer;
   const composerPlaceholder = toolApprovalBlocksComposer
@@ -331,6 +418,15 @@ function renderApp() {
         <div class="brand">
           <h1>My Computer</h1>
           <span>${escapeHtml(providerLabel(state.config.provider))} · ${escapeHtml(state.config.model || '')}</span>
+        </div>
+        <div class="profile-switcher">
+          <label>
+            Seção
+            <select id="active-profile-select" ${state.busy ? 'disabled' : ''}>
+              ${renderProfileOptions()}
+            </select>
+          </label>
+          <button type="button" class="icon-button small-icon" id="quick-create-profile" title="Criar seção" aria-label="Criar seção">+</button>
         </div>
         <div class="sidebar-actions">
           <button class="primary" id="new-chat">Novo chat</button>
@@ -356,7 +452,7 @@ function renderApp() {
         </header>
         <section class="messages" id="messages">
           ${state.error ? renderErrorBanner() : ''}
-          ${chat?.messages?.length ? chat.messages.map(renderMessage).join('') : '<p class="empty">Comece uma conversa.</p>'}
+          ${chat?.messages?.length ? getVisibleChatMessages(chat).map(renderMessage).join('') : '<p class="empty">Comece uma conversa.</p>'}
           ${renderContextEventCards()}
           ${state.busy ? renderPending() : ''}
         </section>
@@ -391,7 +487,7 @@ function renderApp() {
             <label>
               Provider deste chat
               <select id="chat-provider-input" ${!chat ? 'disabled' : ''}>
-                ${renderProviderOptions(chatProviderId)}
+                ${renderProviderOptions(chatProviderId, { offlineOnly: offlineMode })}
               </select>
             </label>
             <label>
@@ -446,6 +542,8 @@ function renderApp() {
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
     ${state.messageDetailsOpen ? renderMessageDetailsModal() : ''}
     ${state.attachmentViewer ? renderAttachmentViewerModal() : ''}
+    ${state.userMemoryDiff ? renderUserMemoryDiffModal() : ''}
+    ${state.userMemoryViewer ? renderUserMemoryViewerModal() : ''}
     ${state.importModalOpen ? renderImportModal() : ''}
     ${state.confirmDialog ? renderConfirmDialog() : ''}
   `;
@@ -456,15 +554,19 @@ function renderApp() {
 function renderSettingsModal() {
   const draftConfig = state.settingsDraft?.config || state.config;
   const draftMemory = state.settingsDraft?.persistentMemory ?? state.persistentMemory;
-  const defaultProvider = draftConfig.provider || 'groq';
-  const defaultModel = draftConfig.model || getProvider(defaultProvider).defaultModel;
-  const apiProvider = state.settingsProvider || defaultProvider;
+  const offlineMode = isOfflineMode(draftConfig);
+  const defaultProvider = offlineMode ? 'ollama' : draftConfig.provider || 'groq';
+  const defaultModel = offlineMode && draftConfig.provider !== 'ollama' ? getProvider('ollama').defaultModel : draftConfig.model || getProvider(defaultProvider).defaultModel;
+  const apiProvider = offlineMode ? 'ollama' : state.settingsProvider || defaultProvider;
   const apiProviderInfo = getProvider(apiProvider);
   const apiSettings = draftConfig.providerSettings?.[apiProvider] || {};
   const apiKeys = apiSettings.apiKeys?.length ? apiSettings.apiKeys : [];
   const ollamaModelForSettings = defaultProvider === 'ollama' ? defaultModel : getProvider('ollama').defaultModel;
   const activeSection = state.settingsSection || 'identity';
   const dirtyText = state.settingsDirty ? '<span class="dirty-note">Alterações não salvas</span>' : '';
+  const userMemoryReadEnabled = draftConfig.tools?.userMemory !== false;
+  const userMemoryEditEnabled = userMemoryReadEnabled && draftConfig.tools?.userMemoryEdit === true;
+  const userMemoryReminderEnabled = userMemoryEditEnabled && draftConfig.userMemory?.remindModelToUpdateFiles === true;
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -482,9 +584,28 @@ function renderSettingsModal() {
               ${renderSettingsNav(activeSection)}
             </nav>
             <div class="settings-content">
+            <section class="modal-section settings-panel ${activeSection === 'profiles' ? 'active' : ''}" data-section="profiles">
+              <h3>Seções e usuários</h3>
+              <p class="help-text">Cada seção usa chats, configurações, memória persistente, arquivos de memória e eventos isolados. A seção Default preserva o runtime antigo.</p>
+              <div class="profile-list">
+                ${renderProfileRows()}
+              </div>
+              <div class="button-row">
+                <button type="button" id="create-profile">Criar seção</button>
+              </div>
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'identity' ? 'active' : ''}" data-section="identity">
               <h3>Identidade e padrão</h3>
               <p class="help-text">Essas escolhas viram padrão para chats novos; cada chat ainda pode ter provider/modelo próprios.</p>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="offlineMode" id="settings-offline-mode" ${offlineMode ? 'checked' : ''} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Modo offline desta seção</strong>
+                  <small>Força provider/modelo local via Ollama, bloqueia providers online, desliga busca nativa e impede rotatórias externas.</small>
+                </span>
+              </label>
               <div class="setup-grid">
                 <label>
                   Apelido
@@ -493,7 +614,7 @@ function renderSettingsModal() {
                 <label>
                   Provider padrão
                   <select name="provider" id="default-provider-input">
-                    ${renderProviderOptions(defaultProvider)}
+                    ${renderProviderOptions(defaultProvider, { offlineOnly: offlineMode })}
                   </select>
                 </label>
               </div>
@@ -558,7 +679,7 @@ function renderSettingsModal() {
                 <label>
                   Provider para editar
                   <select id="api-provider-input">
-                    ${renderProviderOptions(apiProvider)}
+                    ${renderProviderOptions(apiProvider, { offlineOnly: offlineMode })}
                   </select>
                 </label>
                 <label>
@@ -584,6 +705,7 @@ function renderSettingsModal() {
                     </div>
                   `
               }
+              ${offlineMode ? '<div class="notice-card"><strong>Modo offline ativo</strong><p>Rotatórias de modelo/provider ficam desligadas nesta seção para evitar fallback em serviços online.</p></div>' : `
               <div class="settings-subpanel">
                 <label class="toggle-row switch-row">
                   <input type="checkbox" name="modelRotationEnabled" ${draftConfig.routing?.modelRotationEnabled ? 'checked' : ''} />
@@ -616,6 +738,7 @@ function renderSettingsModal() {
                 </div>
                 <button type="button" id="add-provider-fallback">Adicionar fallback</button>
               </div>
+              `}
               ${
                 apiProviderInfo.id === 'openai-compatible'
                   ? '<p class="help-text">Use este provider para Minimax, Together, Fireworks, servidores próprios ou qualquer API que aceite o formato /v1/chat/completions.</p>'
@@ -633,8 +756,54 @@ function renderSettingsModal() {
 
             <section class="modal-section settings-panel ${activeSection === 'memory' ? 'active' : ''}" data-section="memory">
               <h3>Memória persistente</h3>
-              <p class="help-text">Entra no prompt de todos os chats. A IA pode ler, anexar ou reescrever este Markdown quando a tool estiver ligada.</p>
+              <p class="help-text">O Markdown global entra no prompt de todos os chats desta seção. Arquivos adicionais podem entrar completos ou apenas como índice para leitura por tool.</p>
               <textarea name="persistentMemory" class="memory-editor persistent-memory-editor">${escapeHtml(draftMemory || '')}</textarea>
+              <div class="settings-subpanel">
+                <h4>Arquivos adicionais</h4>
+                <p class="help-text">Esses arquivos são memória persistente adicionada por você. O app pode só mostrar o índice no prompt, ou enviar o conteúdo completo quando você ligar essa opção.</p>
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_userMemory" id="memory-user-read-toggle" ${userMemoryReadEnabled ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Permitir que a IA liste e leia arquivos adicionais</strong>
+                    <small>Habilita a tool <code>persistent_memory_user</code>. Sem isso, a IA só usa o que já foi injetado no prompt e não consegue abrir arquivos por conta própria.</small>
+                  </span>
+                </label>
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="userMemorySendFilesToPrompt" ${draftConfig.userMemory?.sendFilesToPrompt ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Enviar os arquivos adicionados por você a todo prompt</strong>
+                    <small>Quando desligado, a IA recebe só o índice. Se a leitura acima estiver ligada, ela usa <code>persistent_memory_user</code> para abrir apenas o que precisar.</small>
+                  </span>
+                </label>
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_userMemoryEdit" id="memory-user-edit-toggle" ${userMemoryEditEnabled ? 'checked' : ''} ${userMemoryReadEnabled ? '' : 'disabled'} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Permitir que a IA edite arquivos adicionais</strong>
+                    <small>Habilita a tool <code>edit_persistent_memory_user</code>. Ela substitui um trecho exato em arquivos de texto/Markdown e pede aprovação quando tools automáticas estão desligadas.</small>
+                  </span>
+                </label>
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="userMemoryUpdateReminder" ${userMemoryReminderEnabled ? 'checked' : ''} ${userMemoryEditEnabled ? '' : 'disabled'} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Lembrar a IA de manter seus arquivos de memória atualizados</strong>
+                    <small>Só funciona quando a edição está ligada. Injeta uma instrução para atualizar arquivos editáveis conforme os chats avançam.</small>
+                  </span>
+                </label>
+                ${!userMemoryReadEnabled ? '<p class="help-text">Leitura/listagem desligada: edição também fica indisponível, porque a IA não tem como localizar arquivos nem confirmar trechos atuais.</p>' : ''}
+                <div class="button-row">
+                  <label class="file-button">
+                    Adicionar arquivos
+                    <input type="file" id="user-memory-file-input" multiple accept="${escapeAttr(getUserMemoryAccept())}" ${state.busy ? 'disabled' : ''} />
+                  </label>
+                </div>
+                <div class="user-memory-file-list">
+                  ${renderUserMemoryFileRows()}
+                </div>
+              </div>
             </section>
 
             <section class="modal-section settings-panel ${activeSection === 'tools' ? 'active' : ''}" data-section="tools">
@@ -649,8 +818,8 @@ function renderSettingsModal() {
               </label>
               <div class="settings-subpanel">
                 <h4>Pesquisa web</h4>
-                <p class="help-text">Busca nativa roda no servidor do provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a tool local e segue permissão.</p>
-                ${renderSearchModeControl(getSearchMode(draftConfig.tools))}
+              <p class="help-text">${offlineMode ? 'Modo offline: busca nativa e modo Ambos ficam indisponíveis. Se habilitar pesquisa, use terminal com consulta neutra e sem dados privados.' : 'Busca nativa roda no servidor do provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a tool local e segue permissão.'}</p>
+                ${renderSearchModeControl(getSearchMode(draftConfig.tools), { offlineMode })}
               </div>
               <div class="toggle-list">
                 ${renderToolToggle('terminal', 'Terminal local', 'Permite que a IA execute comandos no terminal por run_terminal_command.')}
@@ -714,7 +883,7 @@ function renderSettingsModal() {
               <h3>Rede local</h3>
               <div class="notice-card">
                 <strong>Como funciona</strong>
-                <p>Por padrão o My Computer escuta só em 127.0.0.1. Ao abrir para a rede, o próximo restart passa a escutar em 0.0.0.0 e o navegador pede Basic Auth. Não existe usuário separado agora: qualquer usuário funciona se a senha estiver certa.</p>
+                <p>Por padrão o My Computer escuta só em 127.0.0.1. Ao abrir para a rede, o próximo restart passa a escutar em 0.0.0.0 e o navegador pede Basic Auth. Essa senha de rede é única; seções/usuários internos isolam dados do app, mas não criam contas de login separadas.</p>
               </div>
               ${renderNetworkStatusCard()}
               <label class="toggle-row switch-row">
@@ -744,13 +913,18 @@ function renderSettingsModal() {
 
             <section class="modal-section settings-panel ${activeSection === 'backup' ? 'active' : ''}" data-section="backup">
               <h3>Backup</h3>
-              <p class="help-text">Exporta ou importa configurações, chats, memórias e contexto salvo do runtime local.</p>
+              <p class="help-text">Exporta ou importa configurações, chats, memórias, arquivos adicionais, anexos e contexto salvo da seção atual.</p>
               <div class="button-row">
                 <button type="button" id="export-data" ${state.busy ? 'disabled' : ''}>Exportar dados</button>
                 <label class="file-button">
                   Importar dados
                   <input type="file" id="import-data" accept="application/json" ${state.busy ? 'disabled' : ''} />
                 </label>
+              </div>
+              <div class="settings-subpanel danger-subpanel">
+                <h4>Limpeza de chats</h4>
+                <p class="help-text">Apaga todos os chats, mensagens, anexos e memórias de chat da seção atual. Configurações, memória persistente global e arquivos adicionais de memória ficam preservados.</p>
+                <button type="button" id="delete-all-chats" class="danger-button" ${(state.busy || !(state.chats || []).length) ? 'disabled' : ''}>Excluir todos os chats</button>
               </div>
             </section>
 
@@ -779,6 +953,7 @@ function renderSettingsModal() {
 
 function renderSettingsNav(activeSection) {
   const sections = [
+    ['profiles', 'Seções'],
     ['identity', 'Identidade'],
     ['providers', 'Providers'],
     ['modelIndex', 'Modelos'],
@@ -796,6 +971,42 @@ function renderSettingsNav(activeSection) {
         <button type="button" class="settings-nav-button ${activeSection === id ? 'active' : ''}" data-settings-section="${escapeAttr(id)}">
           ${escapeHtml(label)}
         </button>
+      `,
+    )
+    .join('');
+}
+
+function renderProfileOptions() {
+  const profiles = state.profiles?.length ? state.profiles : [{ id: 'default', name: 'Default' }];
+  const activeId = state.activeProfile?.id || 'default';
+  return profiles
+    .map(
+      (profile) => `
+        <option value="${escapeAttr(profile.id)}" ${profile.id === activeId ? 'selected' : ''}>
+          ${escapeHtml(profile.name || profile.id)}
+        </option>
+      `,
+    )
+    .join('');
+}
+
+function renderProfileRows() {
+  const profiles = state.profiles?.length ? state.profiles : [{ id: 'default', name: 'Default', runtimeHome: state.runtimeHome }];
+  const activeId = state.activeProfile?.id || 'default';
+  return profiles
+    .map(
+      (profile) => `
+        <div class="profile-row ${profile.id === activeId ? 'active' : ''}">
+          <div>
+            <strong>${escapeHtml(profile.name || profile.id)}</strong>
+            <small>${escapeHtml(profile.id)} · ${escapeHtml(profile.runtimeHome || '')}</small>
+          </div>
+          <div class="profile-row-actions">
+            <button type="button" class="activate-profile" data-profile-id="${escapeAttr(profile.id)}" ${profile.id === activeId || state.busy ? 'disabled' : ''}>Ativar</button>
+            <button type="button" class="rename-profile" data-profile-id="${escapeAttr(profile.id)}" ${state.busy ? 'disabled' : ''}>Renomear</button>
+            <button type="button" class="delete-profile danger-button" data-profile-id="${escapeAttr(profile.id)}" ${profile.id === 'default' || state.busy ? 'disabled' : ''}>Apagar</button>
+          </div>
+        </div>
       `,
     )
     .join('');
@@ -846,7 +1057,12 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
   const form = new FormData(formElement);
   const draft = state.setupDraft;
   if (form.has('provider')) {
-    const provider = form.get('provider') || draft.provider || 'groq';
+    const offlineMode = form.get('offlineMode') === 'on';
+    draft.privacy = {
+      ...(draft.privacy || {}),
+      offlineMode,
+    };
+    const provider = offlineMode ? 'ollama' : form.get('provider') || draft.provider || 'groq';
     draft.provider = provider;
     draft.model = getModelValue('#setup-model', '[name="customModel"]', provider);
     draft.customModels = withCustomModel(draft.customModels, provider, draft.model);
@@ -880,14 +1096,25 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
     };
   }
   if (form.has('alwaysAllowTools') || form.has('searchEnabled') || form.has('searchMode')) {
+    const offlineMode = isOfflineMode(draft);
     const searchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draft.tools) : 'off';
+    const safeSearchMode = offlineMode && ['native', 'both'].includes(searchMode) ? 'off' : searchMode;
+    const userMemoryRead = form.has('userMemoryReadTool') ? form.get('userMemoryReadTool') === 'on' : draft.tools?.userMemory !== false;
+    const userMemoryEdit = userMemoryRead && form.get('userMemoryEditTool') === 'on';
     draft.tools = {
       ...(draft.tools || {}),
       alwaysAllow: form.get('alwaysAllowTools') === 'on',
       deepInvestigation: form.get('deepInvestigation') === 'on',
-      searchMode,
-      webSearch: searchMode !== 'off',
-      searchTerminal: searchMode === 'terminal' || searchMode === 'both',
+      userMemory: userMemoryRead,
+      userMemoryEdit,
+      searchMode: safeSearchMode,
+      webSearch: safeSearchMode !== 'off',
+      searchTerminal: safeSearchMode === 'terminal' || safeSearchMode === 'both',
+    };
+    draft.userMemory = {
+      ...(draft.userMemory || {}),
+      sendFilesToPrompt: form.get('userMemorySendFilesToPrompt') === 'on',
+      remindModelToUpdateFiles: userMemoryEdit && form.get('userMemoryUpdateReminder') === 'on',
     };
   }
   if (document.querySelector('#setup-network-enabled')) {
@@ -905,7 +1132,10 @@ function renderSearchModeOptions(selectedMode) {
     ['terminal', 'Terminal', 'Usa terminal local e pede permissão quando necessário.'],
     ['both', 'Ambos', 'Tenta web nativa primeiro e cai no terminal se a busca falhar ou vier vazia.'],
   ];
-  return options
+  const filtered = isOfflineMode(state.settingsDraft?.config || state.setupDraft || state.config)
+    ? options.filter(([value]) => value === 'terminal')
+    : options;
+  return filtered
     .map(
       ([value, title, description]) => `
         <label class="choice-card">
@@ -921,8 +1151,10 @@ function renderSearchModeOptions(selectedMode) {
 }
 
 function renderSearchModeControl(selectedMode, options = {}) {
-  const enabled = selectedMode !== 'off';
-  const mode = enabled && selectedMode !== 'off' ? selectedMode : 'native';
+  const offlineMode = options.offlineMode === true;
+  const safeSelectedMode = offlineMode && ['native', 'both'].includes(selectedMode) ? 'off' : selectedMode;
+  const enabled = safeSelectedMode !== 'off';
+  const mode = enabled && safeSelectedMode !== 'off' ? safeSelectedMode : offlineMode ? 'terminal' : 'native';
   const prefix = options.setup ? 'setup' : 'settings';
   return `
     <label class="toggle-row switch-row">
@@ -1023,7 +1255,8 @@ function renderRoutingFallbackRows(fallbacks = []) {
 }
 
 function renderModelIndex(config = {}) {
-  return (state.providers || [])
+  const providers = isOfflineMode(config) ? (state.providers || []).filter((provider) => provider.id === 'ollama') : state.providers || [];
+  return providers
     .map((provider) => `
       <section class="model-index-provider">
         <div class="model-index-provider-header">
@@ -1104,8 +1337,9 @@ function renderModelFallbackRows(fallbacks = [], providerId = '') {
 
 function renderChatSettingsModal() {
   const chat = getActiveChatView();
-  const chatProviderId = chat?.provider || state.config.provider;
-  const chatModel = chat?.model || state.config.model;
+  const offlineMode = isOfflineMode(state.config);
+  const chatProviderId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
+  const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="mobile-chat-settings-title">
@@ -1127,7 +1361,7 @@ function renderChatSettingsModal() {
                 <label>
                   Provider deste chat
                   <select id="mobile-chat-provider-input" ${!chat ? 'disabled' : ''}>
-                    ${renderProviderOptions(chatProviderId)}
+                    ${renderProviderOptions(chatProviderId, { offlineOnly: offlineMode })}
                   </select>
                 </label>
                 <label>
@@ -1236,8 +1470,9 @@ function renderContextEditorModal() {
 
 function renderModelSettingsModal() {
   const chat = state.activeChat;
-  const providerId = chat?.provider || state.config.provider;
-  const modelId = chat?.model || state.config.model;
+  const offlineMode = isOfflineMode(state.config);
+  const providerId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
+  const modelId = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
   const settings = chat?.modelSettings || {};
   const support = getModelSettingSupport(providerId, modelId);
   const metadata = getModelMetadata(providerId, modelId);
@@ -1392,6 +1627,65 @@ function renderAttachmentViewerModal() {
   `;
 }
 
+function renderUserMemoryViewerModal() {
+  const file = state.userMemoryViewer;
+  if (!file) return '';
+  const editable = file.editable !== false;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wide-modal user-memory-viewer-modal" role="dialog" aria-modal="true" aria-labelledby="user-memory-viewer-title">
+        <form id="user-memory-viewer-form">
+          <header class="modal-header">
+            <div>
+              <h2 id="user-memory-viewer-title">${escapeHtml(file.displayName || file.name || 'Arquivo de memória')}</h2>
+              <p>${escapeHtml(file.title || file.id || '')} · ${escapeHtml(formatBytes(file.size || file.content?.length || 0))} · cópia salva no My Computer</p>
+            </div>
+            <button type="button" id="close-user-memory-viewer" aria-label="Fechar">×</button>
+          </header>
+          <div class="modal-body viewer-body">
+            <textarea id="user-memory-viewer-input" class="viewer-text user-memory-viewer-text" ${editable ? '' : 'readonly'}>${escapeHtml(file.content || '')}</textarea>
+            <p class="help-text">${editable ? 'Edite a cópia salva dentro do My Computer. O arquivo original enviado de fora não é alterado.' : 'Este arquivo está como somente leitura para edição manual.'}</p>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" id="cancel-user-memory-viewer">Cancelar</button>
+            <button type="submit" class="primary" ${!editable || state.busy ? 'disabled' : ''}>Salvar arquivo</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderUserMemoryDiffModal() {
+  const diff = state.userMemoryDiff;
+  if (!diff) return '';
+  const lines = buildLineDiff(diff.oldText || '', diff.newText || '');
+  const fileIdentifier = diff.fileId || diff.fileName || '';
+  const knownFile = resolveKnownUserMemoryFile(fileIdentifier);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wide-modal user-memory-diff-modal" role="dialog" aria-modal="true" aria-labelledby="user-memory-diff-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="user-memory-diff-title">Diff da memória</h2>
+            <p>${escapeHtml(diff.fileName || diff.fileId || 'Arquivo de memória')} ${diff.reason ? `· ${escapeHtml(diff.reason)}` : ''}</p>
+          </div>
+          <div class="modal-header-actions">
+            ${knownFile ? `<button type="button" class="preview-user-memory-file" data-file-id="${escapeAttr(knownFile.id)}">Ver arquivo</button>` : ''}
+            <button type="button" id="close-user-memory-diff" aria-label="Fechar">×</button>
+          </div>
+        </header>
+        <div class="modal-body">
+          ${fileIdentifier && !knownFile ? '<p class="help-text">Arquivo não encontrado no índice da seção ativa. O diff ainda mostra o trecho que a IA tentou substituir.</p>' : ''}
+          <div class="diff-viewer" role="table" aria-label="Diff da alteração proposta">
+            ${lines.map(renderDiffLine).join('')}
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderImportModal() {
   const draft = state.importDraft;
   if (!draft) return '';
@@ -1411,6 +1705,7 @@ function renderImportModal() {
             <div class="toggle-list">
               ${renderImportOption('config', 'Configurações e providers', 'Inclui provider padrão, API keys, tema, tools, contexto, rede e rotatórias.', true)}
               ${renderImportOption('persistentMemory', 'Memória persistente', 'Substitui a memória global compartilhada entre chats.', true)}
+              ${renderImportOption('persistentMemoryUser', 'Arquivos de memória persistente', 'Restaura os arquivos adicionais adicionados pelo usuário nesta seção.', true)}
               ${renderImportOption('chats', 'Chats e mensagens', 'Importa metadados, histórico, memória e contexto dos chats.', true)}
               ${renderImportOption('attachments', 'Anexos', 'Inclui arquivos salvos dentro dos chats importados.', true)}
               ${renderImportOption('events', 'Eventos', 'Anexa eventos do backup ao log local para diagnóstico.', false)}
@@ -1464,7 +1759,7 @@ function renderOllamaSetup(model) {
     <section class="setup-assist">
       <h2>Ollama local</h2>
       <p>${escapeHtml(statusText)}</p>
-      <p>Instale pelo terminal usando o comando oficial abaixo e depois clique em verificar. O painel só baixa/remove modelos quando detectar o Ollama instalado.</p>
+      <p>Instale pelo terminal usando o comando oficial abaixo e depois clique em verificar. Se o comando pedir sudo/senha, rode no terminal; o navegador não consegue digitar essa senha por você. O painel baixa/remove modelos quando detectar o Ollama instalado.</p>
       <div class="button-row">
         <button type="button" id="check-ollama">Verificar Ollama</button>
         ${isInstalled ? `<button type="button" id="pull-ollama-model">${installed ? 'Modelo instalado' : 'Baixar modelo selecionado'}</button>` : ''}
@@ -1523,6 +1818,16 @@ function getMessageContinuationGroupId(message) {
   return message?.continuationGroupId || message?.sourceUserMessageId || message?.id || null;
 }
 
+function getVisibleChatMessages(chat) {
+  const messages = chat?.messages || [];
+  const latestAssistantByGroup = new Map();
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    latestAssistantByGroup.set(getMessageContinuationGroupId(message), message.id);
+  }
+  return messages.filter((message) => message.role !== 'assistant' || latestAssistantByGroup.get(getMessageContinuationGroupId(message)) === message.id);
+}
+
 function chatHasActiveToolApproval(chat) {
   return Boolean(
     chat?.messages?.some(
@@ -1577,6 +1882,14 @@ function renderAttemptBadge(message) {
   return `<span class="message-attempt">${index + 1}/${attempts.length}</span>`;
 }
 
+function formatAttemptTraceSummary(message = {}) {
+  const trace = Array.isArray(message.executionTrace) ? message.executionTrace : [];
+  const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
+  const modelSteps = trace.filter((entry) => entry.type === 'assistant_output').length;
+  const toolCount = toolUses.length || trace.filter((entry) => entry.type === 'tool_result').length;
+  return [`${modelSteps} saída(s)`, `${toolCount} tool(s)`].join(' · ');
+}
+
 function isLatestAssistantAttempt(message) {
   if (message?.role !== 'assistant') return true;
   const attempts = getAssistantAttemptsForMessage(message);
@@ -1597,6 +1910,46 @@ function renderMessageActions(message) {
   return `<div class="message-actions">${actions.join('')}</div>`;
 }
 
+function renderToolApprovalPanel(message) {
+  if (message?.role !== 'assistant') return '';
+  const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
+  const pendingTool = toolUses.find((toolUse) => toolUse.status === 'pending_approval');
+  const runningTool = toolUses.find((toolUse) => ['approved_pending_execution', 'pending_approval'].includes(toolUse.status));
+  const toolUse = pendingTool || (message.status === 'running_tools' ? runningTool : null);
+  if (!toolUse) return '';
+
+  const decisionBusy = state.toolDecisionInFlight.has(`${message.id}:${toolUse.id}`);
+  const disabled = state.busy || decisionBusy ? 'disabled' : '';
+  const isPending = toolUse.status === 'pending_approval' && message.status !== 'running_tools';
+  const inputSummary = formatToolInputSummary(toolUse);
+  const title = isPending ? 'A IA quer usar uma tool' : 'Tool aprovada em execução';
+  const description = isPending
+    ? 'Confira o resumo abaixo. O input completo e o histórico ficam em Ver detalhes.'
+    : 'O app está aguardando o resultado. Use verificar se a execução ficou presa.';
+  const actions = isPending
+    ? `
+      <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Permitir</button>
+      <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Negar</button>
+      ${renderUserMemoryToolButtons(toolUse)}
+    `
+    : `
+      <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Verificar execução</button>
+      ${renderUserMemoryToolButtons(toolUse)}
+    `;
+  return `
+    <div class="tool-approval-panel ${isPending ? 'needs-decision' : 'running'}">
+      <div class="tool-approval-copy">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(toolUse.name)} · ${escapeHtml(formatToolUseState(toolUse))}</span>
+        <small>${escapeHtml(description)}</small>
+        ${inputSummary ? `<code title="${escapeAttr(formatToolInputFullSummary(toolUse))}">${escapeHtml(inputSummary)}</code>` : ''}
+        ${renderToolInputDetails(toolUse)}
+      </div>
+      <div class="tool-approval-actions">${actions}</div>
+    </div>
+  `;
+}
+
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
   const modelUsed = message.modelUsed
@@ -1615,9 +1968,9 @@ function renderMessage(message) {
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
       <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
-      ${renderExecutionHistory(message)}
-      ${renderThinkingBlock(getMessageThinking(message))}
       <div class="bubble">${formatContent(getVisibleMessageContent(message), message.role)}</div>
+      ${renderToolApprovalPanel(message)}
+      ${renderUserMemoryChangeChips(message)}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
       ${renderMessageActions(message)}
       ${renderMessageSources(message)}
@@ -1743,7 +2096,7 @@ function renderContextEventCards() {
     .join('');
 }
 
-function renderExecutionHistory(message) {
+function renderExecutionHistory(message, options = {}) {
   if (message.role !== 'assistant') return '';
   const trace = Array.isArray(message.executionTrace) ? message.executionTrace : [];
   const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
@@ -1756,10 +2109,12 @@ function renderExecutionHistory(message) {
     ['needs_tool_approval', 'running_tools', 'failed', 'incomplete'].includes(message.status) ||
     toolUses.some((toolUse) => toolUse.status === 'pending_approval') ||
     message.continuationAvailable;
+  const open = options.forceOpen || shouldOpen;
+  const title = options.title || 'Histórico da execução';
   return `
-    <details class="execution-history" ${shouldOpen ? 'open' : ''}>
+    <details class="execution-history ${options.forceOpen ? 'pinned-history' : ''}" ${open ? 'open' : ''}>
       <summary class="execution-summary">
-        <span>Histórico da execução</span>
+        <span>${escapeHtml(title)}</span>
         <span>${escapeHtml(String(toolCount))} tool(s) · ${escapeHtml(String(modelSteps))} saída(s) da IA</span>
       </summary>
       <div class="execution-body">
@@ -1777,29 +2132,35 @@ function renderExecutionTraceEntry(entry, message) {
   if (entry.type !== 'assistant_output') return '';
   const title = entry.phase === 'final' ? 'Resposta final do modelo' : 'Saída intermediária da IA';
   const toolCalls = Array.isArray(entry.toolCalls) ? entry.toolCalls : [];
+  const metadata = [entry.provider && providerLabel(entry.provider), entry.model, entry.round ? `rodada ${entry.round}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  const open = entry.phase === 'final';
   return `
-    <div class="trace-entry model-trace">
-      <div class="trace-title">
+    <details class="trace-entry model-trace" ${open ? 'open' : ''}>
+      <summary class="trace-title">
         <strong>${escapeHtml(title)}</strong>
-        <span>${escapeHtml([entry.provider && providerLabel(entry.provider), entry.model, entry.round ? `rodada ${entry.round}` : ''].filter(Boolean).join(' · '))}</span>
+        <span>${escapeHtml(metadata)}</span>
+      </summary>
+      <div class="trace-body">
+        ${renderThinkingBlock(entry.thinking, 'Think desta saída')}
+        ${entry.content ? `<div><div class="message-label">Output</div><pre>${escapeHtml(entry.content)}</pre></div>` : ''}
+        ${
+          toolCalls.length
+            ? `<div class="trace-tool-calls">${toolCalls
+                .map(
+                  (toolCall) => `
+                    <div>
+                      <div class="message-label">Tool solicitada: ${escapeHtml(toolCall.name)}</div>
+                      <pre>${escapeHtml(JSON.stringify(toolCall.input || {}, null, 2))}</pre>
+                    </div>
+                  `,
+                )
+                .join('')}</div>`
+            : ''
+        }
       </div>
-      ${renderThinkingBlock(entry.thinking, 'Think desta saída')}
-      ${entry.content ? `<div><div class="message-label">Output</div><pre>${escapeHtml(entry.content)}</pre></div>` : ''}
-      ${
-        toolCalls.length
-          ? `<div class="trace-tool-calls">${toolCalls
-              .map(
-                (toolCall) => `
-                  <div>
-                    <div class="message-label">Tool solicitada: ${escapeHtml(toolCall.name)}</div>
-                    <pre>${escapeHtml(JSON.stringify(toolCall.input || {}, null, 2))}</pre>
-                  </div>
-                `,
-              )
-              .join('')}</div>`
-          : ''
-      }
-    </div>
+    </details>
   `;
 }
 
@@ -1839,6 +2200,7 @@ function renderToolUse(toolUse, message = null) {
       </summary>
       <div class="tool-body">
         ${approvalActions}
+        ${renderUserMemoryToolCard(toolUse)}
         ${
           command
             ? `<div><div class="message-label">Comando</div><pre>${escapeHtml(command)}</pre></div>`
@@ -1864,6 +2226,169 @@ function renderToolUse(toolUse, message = null) {
       </div>
     </details>
   `;
+}
+
+function formatToolInputSummary(toolUse = {}) {
+  const input = toolUse.input || {};
+  const parts = [];
+  if (toolUse.name === 'run_terminal_command' && input.command) parts.push(input.command);
+  if (toolUse.name === 'web_search' && input.query) parts.push(`query: ${input.query}`);
+  if (toolUse.name === 'persistent_memory_user') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.fileId) parts.push(`arquivo: ${input.fileId}`);
+  }
+  if (toolUse.name === 'edit_persistent_memory_user') {
+    if (input.fileId) parts.push(`arquivo: ${input.fileId}`);
+    if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
+  }
+  if (!parts.length) {
+    try {
+      parts.push(JSON.stringify(input));
+    } catch {
+      parts.push('');
+    }
+  }
+  return compactText(parts.filter(Boolean).join(' · '), 180);
+}
+
+function formatToolInputFullSummary(toolUse = {}) {
+  try {
+    return JSON.stringify(toolUse.input || {}, null, 2);
+  } catch {
+    return String(toolUse.input || '');
+  }
+}
+
+function renderToolInputDetails(toolUse = {}) {
+  const full = formatToolInputFullSummary(toolUse);
+  if (!full || full.length <= 220) return '';
+  return `
+    <details class="tool-input-details">
+      <summary>Ver input completo</summary>
+      <pre>${escapeHtml(full)}</pre>
+    </details>
+  `;
+}
+
+function renderUserMemoryChangeChips(message = {}) {
+  if (message.role !== 'assistant') return '';
+  const edits = (message.toolUses || []).filter((toolUse) => toolUse.name === 'edit_persistent_memory_user' && toolUse.result?.action === 'replace');
+  if (!edits.length) return '';
+  return `
+    <div class="memory-change-chips">
+      ${edits
+        .slice(0, 3)
+        .map((toolUse) => {
+          const file = getUserMemoryToolFile(toolUse);
+          const knownFile = resolveKnownUserMemoryFile(file.identifier);
+          return `
+            <div class="memory-change-chip">
+              <span>Memória atualizada: ${escapeHtml(file.label || 'arquivo')}</span>
+              <button type="button" class="open-user-memory-diff" data-tool-use-id="${escapeAttr(toolUse.id)}">Ver diff</button>
+              ${knownFile ? `<button type="button" class="preview-user-memory-file" data-file-id="${escapeAttr(knownFile.id)}">Ver arquivo</button>` : ''}
+            </div>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function renderUserMemoryToolCard(toolUse = {}) {
+  if (!['persistent_memory_user', 'edit_persistent_memory_user'].includes(toolUse.name)) return '';
+  const file = getUserMemoryToolFile(toolUse);
+  const isEdit = toolUse.name === 'edit_persistent_memory_user';
+  const title = isEdit
+    ? toolUse.result?.action === 'replace'
+      ? 'Arquivo de memória atualizado'
+      : 'Alteração de memória proposta'
+    : 'Arquivo de memória consultado';
+  const detail = isEdit
+    ? 'Veja o diff antes/depois da substituição exata.'
+    : getUserMemoryReadRangeLabel(toolUse) || 'Abra a cópia atual salva dentro do My Computer.';
+  const buttons = renderUserMemoryToolButtons(toolUse);
+  const missingFileNote = file.identifier && !resolveKnownUserMemoryFile(file.identifier)
+    ? '<small>Arquivo não encontrado no índice da seção ativa. Ele pode ter sido removido, estar em outra seção ou ter sido informado incorretamente pela IA.</small>'
+    : '';
+  if (!buttons && !missingFileNote) return '';
+  return `
+    <div class="user-memory-tool-card">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(file.label || 'Arquivo de memória')} ${toolUse.input?.reason ? `· ${escapeHtml(toolUse.input.reason)}` : ''}</span>
+        <small>${escapeHtml(detail)}</small>
+        ${missingFileNote}
+      </div>
+      <div class="button-row">${buttons}</div>
+    </div>
+  `;
+}
+
+function renderUserMemoryToolButtons(toolUse = {}) {
+  const file = getUserMemoryToolFile(toolUse);
+  const buttons = [];
+  if (toolUse.name === 'edit_persistent_memory_user' && getUserMemoryEditDiffData(toolUse)) {
+    buttons.push(`<button type="button" class="open-user-memory-diff" data-tool-use-id="${escapeAttr(toolUse.id)}">Ver diff</button>`);
+  }
+  const knownFile = resolveKnownUserMemoryFile(file.identifier);
+  if (knownFile) {
+    buttons.push(`<button type="button" class="preview-user-memory-file" data-file-id="${escapeAttr(knownFile.id)}">Ver arquivo</button>`);
+  }
+  return buttons.join('');
+}
+
+function getUserMemoryToolFile(toolUse = {}) {
+  const input = toolUse.input || {};
+  const result = toolUse.result || {};
+  const file = result.file || {};
+  const identifier = input.fileId || file.id || input.fileName || file.name || '';
+  const label = input.fileName || file.name || input.fileId || file.id || '';
+  return { identifier, label };
+}
+
+function getUserMemoryReadRangeLabel(toolUse = {}) {
+  if (toolUse.name !== 'persistent_memory_user' || toolUse.result?.action !== 'read') return '';
+  const result = toolUse.result || {};
+  const offset = Number(result.offset || 0);
+  const contentLength = String(result.content || '').length;
+  const total = Number(result.totalChars || 0);
+  const end = offset + contentLength;
+  const range = total ? `Trecho ${offset}-${end} de ${total} caractere(s).` : `Trecho a partir de ${offset}.`;
+  return result.truncated ? `${range} Resultado truncado; a IA deve continuar com offset ${result.nextOffset}.` : `${range} Arquivo lido até o fim.`;
+}
+
+function resolveKnownUserMemoryFile(identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return null;
+  return (
+    (state.userMemoryFiles || []).find(
+      (file) =>
+        file.id === value ||
+        file.name === value ||
+        file.displayName === value ||
+        file.storageName === value ||
+        String(file.path || '').split('/').pop() === value,
+    ) ||
+    null
+  );
+}
+
+function getUserMemoryEditDiffData(toolUse = {}) {
+  if (toolUse.name !== 'edit_persistent_memory_user') return null;
+  const input = toolUse.input || {};
+  const result = toolUse.result || {};
+  const file = getUserMemoryToolFile(toolUse);
+  const oldText = input.oldText ?? result.previousContent ?? '';
+  const newText = input.newText ?? result.content ?? '';
+  if (!String(oldText) && !String(newText)) return null;
+  return {
+    toolUseId: toolUse.id,
+    fileId: file.identifier,
+    fileName: file.label,
+    reason: input.reason || '',
+    oldText: String(oldText),
+    newText: String(newText),
+  };
 }
 
 function toolUseHasFailure(toolUse = {}) {
@@ -1919,29 +2444,29 @@ function renderAttachmentCard(attachment, options = {}) {
 }
 
 function renderPending() {
-  const liveEvents = state.activeChatEvents
-    .filter((event) => event.type?.startsWith('tool.') || event.type?.startsWith('chat.context.auto'))
-    .slice(0, 5);
+  const liveEvents = state.activeChatEvents.filter((event) => event.type?.startsWith('tool.') || event.type?.startsWith('chat.context.auto'));
+  const latestEvent = liveEvents[0];
   return `
     <article class="message assistant pending">
       <div class="message-label">Assistente</div>
       <div class="bubble">${escapeHtml(state.status || 'Pensando...')}</div>
       ${
-        liveEvents.length
-          ? `<div class="live-events">${liveEvents
-              .map(
-                (event) => `
-                  <div>
-                    <strong>${escapeHtml(event.type)}</strong>
-                    <span>${escapeHtml(formatEventSummary(event))}</span>
-                  </div>
-                `,
-              )
-              .join('')}</div>`
+        latestEvent
+          ? `<div class="live-activity">
+              <strong>${escapeHtml(formatLiveEventTitle(latestEvent))}</strong>
+              <span>${escapeHtml(formatEventSummary(latestEvent) || latestEvent.type)}</span>
+              <small>O histórico completo fica em Ver detalhes quando a resposta terminar.</small>
+            </div>`
           : ''
       }
     </article>
   `;
+}
+
+function formatLiveEventTitle(event = {}) {
+  if (event.type?.startsWith('tool.')) return 'Atividade de tool';
+  if (event.type?.startsWith('chat.context.auto')) return 'Contexto sendo organizado';
+  return 'Atividade';
 }
 
 function renderEvent(event) {
@@ -1957,17 +2482,20 @@ function renderEvent(event) {
   `;
 }
 
-function renderMessageDetailsModal() {
-  const selectedMessage = state.activeChat?.messages?.find((message) => message.id === state.messageDetailsMessageId);
-  if (!selectedMessage || selectedMessage.role !== 'assistant') return '';
-  const attempts = getAssistantAttemptsForMessage(selectedMessage);
-  const selectedAttempt = attempts.find((attempt) => attempt.id === selectedMessage.id) || attempts[attempts.length - 1] || selectedMessage;
+function getRelatedEventsForAttempt(selectedAttempt) {
+  if (!selectedAttempt || !state.activeChat) return [];
   const sourceUserMessage = getSourceUserMessageForAttempt(selectedAttempt);
   const groupId = getMessageContinuationGroupId(selectedAttempt);
   const sourceUserMessageId = sourceUserMessage?.id || null;
   const startedAt = new Date(sourceUserMessage?.createdAt || selectedAttempt.createdAt).getTime();
-  const finishedAt = new Date(selectedAttempt.updatedAt || selectedAttempt.completedAt || selectedAttempt.interruptedAt || selectedAttempt.failedAt || selectedAttempt.createdAt).getTime();
-  const relatedEvents = (state.activeChatEvents || []).filter((event) => {
+  const finishedAt = new Date(
+    selectedAttempt.updatedAt ||
+      selectedAttempt.completedAt ||
+      selectedAttempt.interruptedAt ||
+      selectedAttempt.failedAt ||
+      selectedAttempt.createdAt,
+  ).getTime();
+  return (state.activeChatEvents || []).filter((event) => {
     const eventTime = new Date(event.createdAt).getTime();
     if (event.chatId !== state.activeChat?.id) return false;
     const details = event.details || {};
@@ -1976,9 +2504,18 @@ function renderMessageDetailsModal() {
     if (details.groupId && details.groupId === groupId) return true;
     if (sourceUserMessageId && details.sourceUserMessageId === sourceUserMessageId) return true;
     if (details.retryOfMessageId === selectedAttempt.id || details.continuedFromMessageId === selectedAttempt.id) return true;
-    if (!Number.isFinite(eventTime)) return false;
+    if (!Number.isFinite(eventTime) || !Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return false;
     return eventTime >= startedAt - 1000 && eventTime <= finishedAt + 3000;
   });
+}
+
+function renderMessageDetailsModal() {
+  const selectedMessage = state.activeChat?.messages?.find((message) => message.id === state.messageDetailsMessageId);
+  if (!selectedMessage || selectedMessage.role !== 'assistant') return '';
+  const attempts = getAssistantAttemptsForMessage(selectedMessage);
+  const selectedAttempt = attempts.find((attempt) => attempt.id === selectedMessage.id) || attempts[attempts.length - 1] || selectedMessage;
+  const sourceUserMessage = getSourceUserMessageForAttempt(selectedAttempt);
+  const relatedEvents = getRelatedEventsForAttempt(selectedAttempt);
   const selectedIndex = attempts.findIndex((attempt) => attempt.id === selectedAttempt.id);
   const selectedStatus = renderMessageStatus(selectedAttempt.status) || 'concluído';
   return `
@@ -2002,7 +2539,7 @@ function renderMessageDetailsModal() {
                     (attempt, index) => `
                       <button type="button" class="attempt-selector ${attempt.id === selectedAttempt.id ? 'active' : ''}" data-message-id="${escapeAttr(attempt.id)}">
                         <strong>${index + 1}/${attempts.length}</strong>
-                        <span>${escapeHtml(renderMessageStatus(attempt.status) || 'concluído')}</span>
+                        <span>${escapeHtml(renderMessageStatus(attempt.status) || 'concluído')} · ${escapeHtml(formatAttemptTraceSummary(attempt))}</span>
                       </button>
                     `,
                   )
@@ -2032,11 +2569,14 @@ function renderMessageDetailsModal() {
               <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">${formatContent(getVisibleMessageContent(selectedAttempt), 'assistant')}</div>
               ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
               ${renderMessageSources(selectedAttempt)}
-              ${renderExecutionHistory(selectedAttempt)}
+              ${renderExecutionHistory(selectedAttempt, { forceOpen: true, title: 'Linha do tempo da tentativa' })}
             </article>
 
             <article class="details-panel">
-              <h3>Eventos relacionados</h3>
+              <div class="section-heading">
+                <h3>Eventos relacionados</h3>
+                <button type="button" id="copy-related-events" class="event-copy-button" ${!relatedEvents.length ? 'disabled' : ''}>Copiar relacionados</button>
+              </div>
               <p class="help-text">Os eventos abaixo pertencem a esta tentativa e ao prompt que a originou.</p>
               ${relatedEvents.length ? `<div class="event-list details-event-list">${relatedEvents.map(renderEvent).join('')}</div>` : '<p class="help-text">Nenhum evento relacionado encontrado ainda.</p>'}
             </article>
@@ -2118,6 +2658,63 @@ function formatEventDetails(details = {}) {
     .join(' · ');
 }
 
+function compactText(text, maxLength = 160) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxLength) return clean;
+  return `${clean.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function buildLineDiff(oldText = '', newText = '') {
+  const oldLines = String(oldText).split('\n');
+  const newLines = String(newText).split('\n');
+  if (oldLines.length * newLines.length > 40000) {
+    return [
+      ...oldLines.map((content, index) => ({ type: 'remove', oldNumber: index + 1, newNumber: null, content })),
+      ...newLines.map((content, index) => ({ type: 'add', oldNumber: null, newNumber: index + 1, content })),
+    ];
+  }
+
+  const dp = Array.from({ length: oldLines.length + 1 }, () => Array(newLines.length + 1).fill(0));
+  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      dp[oldIndex][newIndex] =
+        oldLines[oldIndex] === newLines[newIndex]
+          ? dp[oldIndex + 1][newIndex + 1] + 1
+          : Math.max(dp[oldIndex + 1][newIndex], dp[oldIndex][newIndex + 1]);
+    }
+  }
+
+  const lines = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < oldLines.length || newIndex < newLines.length) {
+    if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
+      lines.push({ type: 'context', oldNumber: oldIndex + 1, newNumber: newIndex + 1, content: oldLines[oldIndex] });
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (newIndex < newLines.length && (oldIndex === oldLines.length || dp[oldIndex][newIndex + 1] >= dp[oldIndex + 1]?.[newIndex])) {
+      lines.push({ type: 'add', oldNumber: null, newNumber: newIndex + 1, content: newLines[newIndex] });
+      newIndex += 1;
+    } else if (oldIndex < oldLines.length) {
+      lines.push({ type: 'remove', oldNumber: oldIndex + 1, newNumber: null, content: oldLines[oldIndex] });
+      oldIndex += 1;
+    }
+  }
+  return lines;
+}
+
+function renderDiffLine(line = {}) {
+  const sign = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+  const content = line.content === '' ? ' ' : line.content;
+  return `
+    <div class="diff-line ${escapeAttr(line.type || 'context')}" role="row">
+      <span class="diff-number">${line.oldNumber || ''}</span>
+      <span class="diff-number">${line.newNumber || ''}</span>
+      <span class="diff-code"><span class="diff-sign">${escapeHtml(sign)}</span>${escapeHtml(content)}</span>
+    </div>
+  `;
+}
+
 function renderApiKeyRow(key, index, options = {}) {
   const inputClass = options.setup ? 'setup-api-key-input' : 'api-key-input';
   const removeClass = options.setup ? 'setup-remove-api-key' : 'remove-api-key';
@@ -2132,8 +2729,13 @@ function renderApiKeyRow(key, index, options = {}) {
   `;
 }
 
-function renderProviderOptions(selectedProvider) {
-  return (state.providers?.length ? state.providers : [{ id: 'groq', label: 'Groq' }])
+function renderProviderOptions(selectedProvider, options = {}) {
+  const providers = options.offlineOnly
+    ? (state.providers?.length ? state.providers : [{ id: 'ollama', label: 'Ollama' }]).filter((provider) => provider.id === 'ollama')
+    : state.providers?.length
+      ? state.providers
+      : [{ id: 'groq', label: 'Groq' }];
+  return providers
     .map((provider) => {
       const selected = provider.id === selectedProvider ? 'selected' : '';
       return `<option value="${escapeAttr(provider.id)}" ${selected}>${escapeHtml(provider.label)}</option>`;
@@ -2252,6 +2854,31 @@ function getSearchMode(tools = {}) {
   if (tools.webSearch === false) return 'off';
   if (tools.searchTerminal === true) return 'terminal';
   return 'native';
+}
+
+function isOfflineMode(config = {}) {
+  return config?.privacy?.offlineMode === true;
+}
+
+function normalizeOfflineToolsForClient(tools = {}) {
+  const mode = getSearchMode(tools);
+  const searchMode = ['native', 'both'].includes(mode) ? 'off' : mode;
+  return {
+    ...(tools || {}),
+    searchMode,
+    webSearch: searchMode !== 'off',
+    searchTerminal: searchMode === 'terminal',
+  };
+}
+
+function normalizeOfflineRoutingForClient() {
+  return {
+    modelRotationEnabled: false,
+    modelFallbacks: [],
+    providerRotationEnabled: false,
+    maxProviderPasses: 1,
+    fallbacks: [],
+  };
 }
 
 function getModelMetadata(providerId, model) {
@@ -2462,6 +3089,35 @@ function formatBytes(size) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function renderUserMemoryFileRows() {
+  const files = state.userMemoryFiles || [];
+  if (!files.length) {
+    return '<p class="empty small-empty">Nenhum arquivo adicional de memória.</p>';
+  }
+  return files
+    .map(
+      (file) => {
+        const title = file.title && file.title !== file.name ? file.title : '';
+        const preview = file.preview && file.preview !== title ? file.preview : '';
+        return `
+          <div class="user-memory-file-row">
+            <div>
+              <strong>${escapeHtml(file.displayName || file.name)}</strong>
+              ${title ? `<span class="user-memory-file-title">${escapeHtml(title)}</span>` : ''}
+              ${preview ? `<span class="user-memory-file-preview">${escapeHtml(preview)}</span>` : ''}
+              <small>ID interno: ${escapeHtml(file.id)} · ${formatBytes(file.size)} · ${file.editable ? 'editável' : 'somente leitura'}</small>
+            </div>
+            <div class="profile-row-actions">
+              <button type="button" class="preview-user-memory-file" data-file-id="${escapeAttr(file.id)}" ${state.busy ? 'disabled' : ''}>Ver arquivo</button>
+              <button type="button" class="remove-user-memory-file danger-button" data-file-id="${escapeAttr(file.id)}" ${state.busy ? 'disabled' : ''}>Remover</button>
+            </div>
+          </div>
+        `;
+      },
+    )
+    .join('');
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2475,22 +3131,79 @@ function guessMimeType(name) {
   const extension = String(name || '').split('.').pop()?.toLowerCase();
   const byExtension = {
     md: 'text/markdown',
+    markdown: 'text/markdown',
     txt: 'text/plain',
+    log: 'text/plain',
     csv: 'text/csv',
+    tsv: 'text/tab-separated-values',
     json: 'application/json',
+    jsonl: 'application/json',
     html: 'text/html',
     htm: 'text/html',
     xml: 'application/xml',
     yaml: 'application/x-yaml',
     yml: 'application/x-yaml',
     pdf: 'application/pdf',
+    js: 'text/javascript',
+    mjs: 'text/javascript',
+    cjs: 'text/javascript',
+    ts: 'text/typescript',
+    tsx: 'text/typescript',
+    jsx: 'text/javascript',
+    css: 'text/css',
+    py: 'text/x-python',
+    sh: 'text/x-shellscript',
+    toml: 'text/plain',
+    ini: 'text/plain',
+    sql: 'text/plain',
   };
   return byExtension[extension] || 'application/octet-stream';
+}
+
+function getUserMemoryAccept() {
+  return [
+    'text/*',
+    '.md',
+    '.markdown',
+    '.txt',
+    '.log',
+    '.json',
+    '.jsonl',
+    '.csv',
+    '.tsv',
+    '.html',
+    '.htm',
+    '.xml',
+    '.yaml',
+    '.yml',
+    '.js',
+    '.mjs',
+    '.cjs',
+    '.ts',
+    '.tsx',
+    '.jsx',
+    '.css',
+    '.py',
+    '.rb',
+    '.go',
+    '.rs',
+    '.java',
+    '.c',
+    '.cpp',
+    '.h',
+    '.hpp',
+    '.sh',
+    '.sql',
+    '.ini',
+    '.toml',
+  ].join(',');
 }
 
 function bindAppEvents() {
   document.querySelector('#new-chat').addEventListener('click', createNewChat);
   document.querySelector('#open-settings').addEventListener('click', openSettings);
+  document.querySelector('#active-profile-select')?.addEventListener('change', (event) => switchProfile(event.target.value));
+  document.querySelector('#quick-create-profile')?.addEventListener('click', createProfileFromPrompt);
   document.querySelector('#open-chat-settings-mobile')?.addEventListener('click', openChatSettings);
   document.querySelectorAll('[data-chat-id]').forEach((button) => {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
@@ -2508,6 +3221,16 @@ function bindAppEvents() {
   document.querySelectorAll('.preview-attachment').forEach((button) => {
     button.addEventListener('click', () => openAttachmentViewer(button.dataset.attachmentId));
   });
+  document.querySelectorAll('.preview-user-memory-file').forEach((button) => {
+    button.addEventListener('click', () => openUserMemoryFileViewer(button.dataset.fileId));
+  });
+  document.querySelectorAll('.open-user-memory-diff').forEach((button) => {
+    button.addEventListener('click', () => openUserMemoryDiff(button.dataset.toolUseId));
+  });
+  document.querySelector('#user-memory-viewer-form')?.addEventListener('submit', saveUserMemoryViewer);
+  document.querySelector('#close-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
+  document.querySelector('#cancel-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
+  document.querySelector('#close-user-memory-diff')?.addEventListener('click', closeUserMemoryDiff);
   document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
   document.querySelector('#chat-model-input')?.addEventListener('change', () => toggleChatCustomModel());
   document.querySelector('#chat-title-input')?.addEventListener('input', markChatSettingsDirty);
@@ -2544,6 +3267,7 @@ function bindAppEvents() {
     button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'deny', button.dataset.toolCallId, button));
   });
   document.querySelector('#copy-events')?.addEventListener('click', copyEvents);
+  document.querySelector('#copy-related-events')?.addEventListener('click', copyRelatedEvents);
   document.querySelector('#close-message-details')?.addEventListener('click', closeMessageDetails);
   document.querySelectorAll('.attempt-selector').forEach((button) => {
     button.addEventListener('click', () => openMessageDetails(button.dataset.messageId));
@@ -2565,15 +3289,40 @@ function bindAppEvents() {
       });
     });
     document.querySelector('#default-provider-input').addEventListener('change', changeDefaultProviderDraft);
+    document.querySelector('#settings-offline-mode')?.addEventListener('change', toggleSettingsOfflineMode);
     document.querySelector('#default-model-input').addEventListener('change', toggleDefaultCustomModel);
     document.querySelector('#settings-technical-guidance')?.addEventListener('change', () => toggleTechnicalLevelField('settings'));
     document.querySelector('#settings-network-enabled')?.addEventListener('change', () => toggleNetworkPasswordField('settings'));
     document.querySelector('#settings-search-enabled')?.addEventListener('change', () => toggleSearchModeField('settings'));
+    document.querySelector('#memory-user-read-toggle')?.addEventListener('change', () => {
+      captureSettingsDraftFromForm();
+      state.settingsDirty = true;
+      renderPreservingVisualState();
+    });
+    document.querySelector('#memory-user-edit-toggle')?.addEventListener('change', () => {
+      captureSettingsDraftFromForm();
+      state.settingsDirty = true;
+      renderPreservingVisualState();
+    });
     document.querySelector('#api-provider-input').addEventListener('change', changeApiProviderDraft);
     document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
     document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
     document.querySelector('#add-model-fallback')?.addEventListener('click', addModelFallbackRow);
     document.querySelector('#add-provider-fallback')?.addEventListener('click', addProviderFallbackRow);
+    document.querySelector('#create-profile')?.addEventListener('click', createProfileFromPrompt);
+    document.querySelectorAll('.activate-profile').forEach((button) => {
+      button.addEventListener('click', () => switchProfile(button.dataset.profileId));
+    });
+    document.querySelectorAll('.rename-profile').forEach((button) => {
+      button.addEventListener('click', () => renameProfileFromPrompt(button.dataset.profileId));
+    });
+    document.querySelectorAll('.delete-profile').forEach((button) => {
+      button.addEventListener('click', () => deleteProfileFromButton(button.dataset.profileId));
+    });
+    document.querySelector('#user-memory-file-input')?.addEventListener('change', uploadUserMemoryFiles);
+    document.querySelectorAll('.remove-user-memory-file').forEach((button) => {
+      button.addEventListener('click', () => deleteUserMemoryFile(button.dataset.fileId));
+    });
     document.querySelectorAll('.fallback-provider').forEach((select) => {
       select.addEventListener('change', () => {
         captureSettingsDraftFromForm();
@@ -2603,6 +3352,7 @@ function bindAppEvents() {
     });
     document.querySelector('#export-data').addEventListener('click', exportData);
     document.querySelector('#import-data').addEventListener('change', importData);
+    document.querySelector('#delete-all-chats')?.addEventListener('click', deleteAllChatsWithDoubleConfirm);
     document.querySelector('#check-update').addEventListener('click', checkUpdate);
     document.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
     document.querySelector('#shutdown-app').addEventListener('click', shutdownApp);
@@ -2676,7 +3426,8 @@ async function saveSetup(event) {
   if (state.busy) return;
   captureSetupDraftFromForm(event.currentTarget);
   const draft = state.setupDraft || buildSetupDraft();
-  const provider = draft.provider || 'groq';
+  const offlineMode = isOfflineMode(draft);
+  const provider = offlineMode ? 'ollama' : draft.provider || 'groq';
   const model = draft.model || getProvider(provider).defaultModel;
   if (draft.server?.networkEnabled && !String(draft.server?.authPassword || '').trim()) {
     state.error = 'Defina uma senha para abrir o painel na rede local.';
@@ -2719,6 +3470,8 @@ async function saveSetup(event) {
         systemPromptExtra: draft.systemPromptExtra,
         appearance: draft.appearance,
         tools: draft.tools,
+        userMemory: draft.userMemory,
+        privacy: draft.privacy,
         context: draft.context,
         routing: draft.routing,
         server: draft.server,
@@ -2747,6 +3500,8 @@ async function skipSetup() {
         systemPromptExtra: state.config.systemPromptExtra || '',
         appearance: state.config.appearance,
         tools: state.config.tools,
+        userMemory: state.config.userMemory,
+        privacy: state.config.privacy,
         context: state.config.context,
         routing: state.config.routing,
         server: state.config.server,
@@ -2873,6 +3628,110 @@ async function uninstallOllama() {
   });
 }
 
+async function switchProfile(profileId) {
+  if (!profileId || profileId === state.activeProfile?.id || state.busy) return;
+  if ((state.settingsDirty || state.chatSettingsDirty || state.chatContextDirty || state.modelSettingsDirty) && !window.confirm('Trocar de seção e descartar alterações não salvas?')) {
+    renderPreservingVisualState();
+    return;
+  }
+  await runAction('Trocando seção...', async () => {
+    const data = await api(`/api/profiles/${encodeURIComponent(profileId)}/activate`, { method: 'POST' });
+    applyBootstrapData(data);
+    state.settingsOpen = false;
+    state.settingsDraft = null;
+    state.settingsDirty = false;
+    state.chatSettingsOpen = false;
+    state.chatSettingsDraft = null;
+    state.chatSettingsDirty = false;
+    state.chatContextOpen = false;
+    state.chatContextDirty = false;
+    state.modelSettingsOpen = false;
+    state.modelSettingsDirty = false;
+    state.pendingAttachments = [];
+    state.status = `Seção ativa: ${state.activeProfile?.name || profileId}`;
+  });
+}
+
+async function createProfileFromPrompt() {
+  if (state.busy) return;
+  const name = window.prompt('Nome da nova seção/usuário:', 'Nova seção');
+  if (!name?.trim()) return;
+  await runAction('Criando seção...', async () => {
+    const data = await api('/api/profiles', {
+      method: 'POST',
+      body: { name: name.trim() },
+    });
+    applyBootstrapData(data);
+    state.settingsOpen = false;
+    state.settingsDraft = null;
+    state.settingsDirty = false;
+    state.status = `Seção criada: ${state.activeProfile?.name || name.trim()}`;
+  });
+}
+
+async function renameProfileFromPrompt(profileId) {
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile) return;
+  const name = window.prompt('Novo nome da seção:', profile.name || profile.id);
+  if (!name?.trim()) return;
+  await runAction('Renomeando seção...', async () => {
+    const data = await api(`/api/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'PUT',
+      body: { name: name.trim() },
+    });
+    state.profiles = data.profiles || state.profiles;
+    state.activeProfile = data.activeProfile || state.activeProfile;
+    state.runtimeHome = data.runtimeHome || state.runtimeHome;
+  });
+}
+
+async function deleteProfileFromButton(profileId) {
+  const profile = state.profiles.find((item) => item.id === profileId);
+  if (!profile) return;
+  const confirmed = window.confirm(`Apagar a seção "${profile.name}" e todos os seus chats, configurações e memórias?`);
+  if (!confirmed) return;
+  await runAction('Apagando seção...', async () => {
+    const data = await api(`/api/profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' });
+    applyBootstrapData(data);
+    state.settingsOpen = false;
+    state.settingsDraft = null;
+    state.settingsDirty = false;
+  });
+}
+
+async function uploadUserMemoryFiles(event) {
+  const files = [...(event.target.files || [])];
+  event.target.value = '';
+  if (!files.length || state.busy) return;
+  for (const file of files) {
+    await runAction(`Adicionando ${file.name} à memória...`, async () => {
+      const dataBase64 = await fileToBase64(file);
+      const data = await api('/api/persistent-memory-user', {
+        method: 'POST',
+        body: {
+          name: file.name,
+          mimeType: file.type || guessMimeType(file.name),
+          size: file.size,
+          dataBase64,
+        },
+      });
+      state.userMemoryFiles = data.files || state.userMemoryFiles;
+      if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+    });
+  }
+}
+
+async function deleteUserMemoryFile(fileId) {
+  const file = state.userMemoryFiles.find((item) => item.id === fileId);
+  if (!file) return;
+  const confirmed = window.confirm(`Remover "${file.name}" dos arquivos de memória persistente?`);
+  if (!confirmed) return;
+  await runAction('Removendo arquivo de memória...', async () => {
+    const data = await api(`/api/persistent-memory-user/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+    state.userMemoryFiles = data.files || [];
+  });
+}
+
 async function uploadSelectedFiles(event) {
   const files = [...(event.target.files || [])];
   event.target.value = '';
@@ -2915,6 +3774,78 @@ function openAttachmentViewer(attachmentId) {
 function closeAttachmentViewer() {
   state.attachmentViewer = null;
   renderPreservingVisualState();
+}
+
+async function openUserMemoryFileViewer(fileId) {
+  if (!fileId || state.busy) return;
+  await runAction('Carregando arquivo de memória...', async () => {
+    const data = await api(`/api/persistent-memory-user/${encodeURIComponent(fileId)}`);
+    state.userMemoryViewer = data.file;
+  });
+}
+
+function hasUserMemoryViewerUnsavedChanges() {
+  const textarea = document.querySelector('#user-memory-viewer-input');
+  if (!state.userMemoryViewer || !textarea) return false;
+  return textarea.value !== String(state.userMemoryViewer.content || '');
+}
+
+async function saveUserMemoryViewer(event) {
+  event.preventDefault();
+  const file = state.userMemoryViewer;
+  const textarea = document.querySelector('#user-memory-viewer-input');
+  if (!file || !textarea || state.busy) return;
+  await runAction('Salvando arquivo de memória...', async () => {
+    const data = await api(`/api/persistent-memory-user/${encodeURIComponent(file.id)}`, {
+      method: 'PUT',
+      body: { content: textarea.value },
+    });
+    state.userMemoryViewer = data.file;
+    state.userMemoryFiles = data.files || state.userMemoryFiles || [];
+    state.status = `Arquivo "${data.file?.name || file.name}" salvo.`;
+  });
+}
+
+function closeUserMemoryViewer() {
+  if (hasUserMemoryViewerUnsavedChanges()) {
+    const confirmed = window.confirm('Descartar alterações não salvas neste arquivo de memória?');
+    if (!confirmed) return;
+  }
+  state.userMemoryViewer = null;
+  renderPreservingVisualState();
+}
+
+function openUserMemoryDiff(toolUseId) {
+  const toolUse = findToolUseById(toolUseId);
+  const diff = getUserMemoryEditDiffData(toolUse);
+  if (!diff) {
+    state.error = 'Diff da edição de memória não encontrado.';
+    renderPreservingVisualState();
+    return;
+  }
+  state.userMemoryDiff = diff;
+  renderPreservingVisualState();
+}
+
+function closeUserMemoryDiff() {
+  state.userMemoryDiff = null;
+  renderPreservingVisualState();
+}
+
+function findToolUseById(toolUseId) {
+  const id = String(toolUseId || '');
+  if (!id) return null;
+  const messages = state.activeChat?.messages || [];
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    for (const toolUse of message.toolUses || []) {
+      if (toolUse.id === id) return toolUse;
+    }
+    for (const entry of message.executionTrace || []) {
+      if (entry.toolUse?.id === id) return entry.toolUse;
+    }
+  }
+  return null;
 }
 
 function getSupportedUploadAccept() {
@@ -3016,12 +3947,40 @@ function toggleSetupCustomModel() {
 function changeDefaultProviderDraft(event) {
   syncProviderApiDraft();
   if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  if (isOfflineMode(state.settingsDraft.config)) {
+    state.settingsDraft.config.provider = 'ollama';
+    state.settingsDraft.config.model = getProvider('ollama').defaultModel;
+    state.settingsProvider = 'ollama';
+    state.settingsDirty = true;
+    renderPreservingVisualState();
+    return;
+  }
   state.settingsDraft.config = {
     ...state.settingsDraft.config,
     provider: event.target.value,
     model: getProvider(event.target.value).defaultModel,
   };
   state.settingsProvider = event.target.value;
+  state.settingsDirty = true;
+  renderPreservingVisualState();
+}
+
+function toggleSettingsOfflineMode(event) {
+  captureSettingsDraftFromForm();
+  if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  const enabled = event.target.checked;
+  const draftConfig = state.settingsDraft.config;
+  draftConfig.privacy = {
+    ...(draftConfig.privacy || {}),
+    offlineMode: enabled,
+  };
+  if (enabled) {
+    draftConfig.provider = 'ollama';
+    draftConfig.model = getProvider('ollama').defaultModel;
+    draftConfig.tools = normalizeOfflineToolsForClient(draftConfig.tools || {});
+    draftConfig.routing = normalizeOfflineRoutingForClient();
+    state.settingsProvider = 'ollama';
+  }
   state.settingsDirty = true;
   renderPreservingVisualState();
 }
@@ -3114,7 +4073,7 @@ function toggleSetupApiKeyVisibility() {
 
 function changeApiProviderDraft(event) {
   captureSettingsDraftFromForm();
-  state.settingsProvider = event.target.value;
+  state.settingsProvider = isOfflineMode(state.settingsDraft?.config) ? 'ollama' : event.target.value;
   renderPreservingVisualState();
 }
 
@@ -3296,6 +4255,8 @@ async function sendMessageContent(content, options = {}) {
       }
       state.activeChat = data.chat;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+      const latestMessage = state.activeChat?.messages?.[Math.max(0, (state.activeChat?.messages?.length || 1) - 1)];
+      if (messageHasCompletedUserMemoryEdit(latestMessage)) await refreshUserMemoryFiles();
       const fresh = await api('/api/chats');
       state.chats = fresh.chats;
       if (data.assistantStatus === 'failed') {
@@ -3351,6 +4312,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
       state.chats = data.chats || state.chats;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
       const updatedMessage = state.activeChat?.messages?.find((message) => message.id === messageId);
+      if (messageHasCompletedUserMemoryEdit(updatedMessage)) await refreshUserMemoryFiles();
       if (updatedMessage?.status === 'failed') {
         state.status = 'A tool aprovada falhou antes de concluir.';
       } else if (updatedMessage?.status === 'incomplete') {
@@ -3521,6 +4483,23 @@ async function copyEvents() {
   }
 }
 
+async function copyRelatedEvents() {
+  const selectedMessage = state.activeChat?.messages?.find((message) => message.id === state.messageDetailsMessageId);
+  if (!selectedMessage || selectedMessage.role !== 'assistant') return;
+  const attempts = getAssistantAttemptsForMessage(selectedMessage);
+  const selectedAttempt = attempts.find((attempt) => attempt.id === selectedMessage.id) || attempts[attempts.length - 1] || selectedMessage;
+  const events = getRelatedEventsForAttempt(selectedAttempt);
+  if (!events.length) return;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(events, null, 2));
+    state.status = 'Eventos relacionados copiados.';
+    renderPreservingVisualState();
+  } catch (error) {
+    state.error = error.message || 'Falha ao copiar eventos relacionados.';
+    renderPreservingVisualState();
+  }
+}
+
 async function deleteActiveChat() {
   if (!state.activeChat) return;
   const confirmed = window.confirm(`Apagar o chat "${state.activeChat.title}"?`);
@@ -3535,6 +4514,36 @@ async function deleteActiveChat() {
     state.activeChatEvents = data.activeChatEvents || [];
     state.messageDetailsOpen = false;
     state.messageDetailsMessageId = null;
+  });
+}
+
+async function deleteAllChatsWithDoubleConfirm() {
+  const count = (state.chats || []).length;
+  if (!count || state.busy) return;
+  const firstConfirm = window.confirm(
+    `Excluir todos os ${count} chat(s) desta seção? Isso apaga mensagens, anexos, memória e contexto dos chats. Faça um backup antes se quiser preservar algo.`,
+  );
+  if (!firstConfirm) return;
+  const phrase = window.prompt('Para confirmar, digite exatamente: APAGAR TODOS OS CHATS');
+  if (phrase !== 'APAGAR TODOS OS CHATS') {
+    state.status = 'Exclusão de todos os chats cancelada.';
+    renderPreservingVisualState();
+    return;
+  }
+  await runAction('Excluindo todos os chats...', async () => {
+    const data = await api('/api/chats', {
+      method: 'DELETE',
+      body: { confirmText: phrase },
+    });
+    state.chats = data.chats || [];
+    state.activeChat = null;
+    state.activeChatEvents = [];
+    state.pendingAttachments = [];
+    state.chatSettingsOpen = false;
+    state.chatContextOpen = false;
+    state.messageDetailsOpen = false;
+    state.messageDetailsMessageId = null;
+    state.status = `${data.deleted?.count ?? count} chat(s) excluído(s).`;
   });
 }
 
@@ -3691,8 +4700,9 @@ async function saveChatSettings(event, options = {}) {
   const draft = captureChatSettingsDraftFromForm() || {};
   const prefix = getChatSettingsPrefix();
   const title = draft.title || '';
-  const provider = draft.provider || state.activeChat.provider || state.config.provider;
-  const model = draft.model || state.activeChat.model || getProvider(provider).defaultModel;
+  const offlineMode = isOfflineMode(state.config);
+  const provider = offlineMode ? 'ollama' : draft.provider || state.activeChat.provider || state.config.provider;
+  const model = offlineMode && state.activeChat.provider !== 'ollama' ? state.config.model : draft.model || state.activeChat.model || getProvider(provider).defaultModel;
   const supportsImagesInput =
     document.querySelector(`#${prefix}chat-custom-model-images`) ||
     document.querySelector('#chat-custom-model-images') ||
@@ -3734,7 +4744,8 @@ async function saveGeneralSettings(event, options = {}) {
   if (!formElement) return;
   const form = new FormData(formElement);
   const draftConfig = state.settingsDraft?.config || state.config;
-  const provider = form.get('provider') || draftConfig.provider;
+  const offlineMode = form.get('offlineMode') === 'on';
+  const provider = offlineMode ? 'ollama' : form.get('provider') || draftConfig.provider;
   const model = getModelValue('#default-model-input', '#default-custom-model-input', provider);
   const customModels = withCustomModel(draftConfig.customModels, provider, model);
   const modelCapabilities = withCustomModelCapabilities(
@@ -3755,20 +4766,27 @@ async function saveGeneralSettings(event, options = {}) {
     renderPreservingVisualState();
     return;
   }
-    await runAction('Salvando configurações gerais...', async () => {
+  await runAction('Salvando configurações gerais...', async () => {
+    const userMemoryRead = form.get('tool_userMemory') === 'on';
+    const userMemoryEdit = userMemoryRead && form.get('tool_userMemoryEdit') === 'on';
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
       deepInvestigation: form.get('tool_deepInvestigation') === 'on',
-      searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || 'native' : 'off',
+      searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || (offlineMode ? 'terminal' : 'native') : 'off',
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
       autoCompact: form.get('tool_autoCompact') === 'on',
       chatTitle: form.get('tool_chatTitle') === 'on',
+      userMemory: userMemoryRead,
+      userMemoryEdit,
       alwaysAllow: form.get('tool_alwaysAllow') === 'on',
       terminalMode: form.get('terminalMode') || 'standard',
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
+    if (offlineMode) {
+      Object.assign(tools, normalizeOfflineToolsForClient(tools));
+    }
     if (provider === 'ollama') {
       await ensureOllamaModelAvailable(model);
     }
@@ -3786,17 +4804,28 @@ async function saveGeneralSettings(event, options = {}) {
           theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
         },
         tools,
+        userMemory: {
+          sendFilesToPrompt: form.get('userMemorySendFilesToPrompt') === 'on',
+          remindModelToUpdateFiles: userMemoryEdit && form.get('userMemoryUpdateReminder') === 'on',
+        },
+        privacy: {
+          offlineMode,
+        },
         context: {
           autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
           autoCompactChars: Number(form.get('autoCompactChars')),
           autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
         },
         routing: {
-          modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
-          modelFallbacks: readModelFallbackRows(),
-          providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
-          maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
-          fallbacks: readRoutingFallbackRows(),
+          ...(offlineMode
+            ? normalizeOfflineRoutingForClient()
+            : {
+                modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
+                modelFallbacks: readModelFallbackRows(),
+                providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
+                maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
+                fallbacks: readRoutingFallbackRows(),
+              }),
         },
         server: {
           networkEnabled: form.get('networkEnabled') === 'on',
@@ -3853,6 +4882,7 @@ function syncProviderApiDraft() {
 }
 
 function markSettingsDirty(event) {
+  if (event?.target?.id === 'user-memory-file-input') return;
   if (event?.target?.name === 'theme') {
     captureSettingsDraftFromForm();
     state.settingsDirty = true;
@@ -3889,7 +4919,12 @@ function captureSettingsDraftFromForm() {
   syncProviderApiDraft();
   const form = new FormData(formElement);
   const draftConfig = state.settingsDraft.config;
-  const provider = form.get('provider') || draftConfig.provider || state.config.provider;
+  const offlineMode = form.get('offlineMode') === 'on';
+  const provider = offlineMode ? 'ollama' : form.get('provider') || draftConfig.provider || state.config.provider;
+  draftConfig.privacy = {
+    ...(draftConfig.privacy || {}),
+    offlineMode,
+  };
   draftConfig.provider = provider;
   draftConfig.model = getModelValue('#default-model-input', '#default-custom-model-input', provider);
   draftConfig.language = form.get('language') || 'auto';
@@ -3901,7 +4936,10 @@ function captureSettingsDraftFromForm() {
     ...(draftConfig.appearance || {}),
     theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
   };
-  const searchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
+  const rawSearchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
+  const searchMode = offlineMode && ['native', 'both'].includes(rawSearchMode) ? 'off' : rawSearchMode;
+  const userMemoryRead = form.get('tool_userMemory') === 'on';
+  const userMemoryEdit = userMemoryRead && form.get('tool_userMemoryEdit') === 'on';
   draftConfig.tools = {
     ...(draftConfig.tools || {}),
     terminal: form.get('tool_terminal') === 'on',
@@ -3910,24 +4948,33 @@ function captureSettingsDraftFromForm() {
     persistentMemory: form.get('tool_persistentMemory') === 'on',
     autoCompact: form.get('tool_autoCompact') === 'on',
     chatTitle: form.get('tool_chatTitle') === 'on',
+    userMemory: userMemoryRead,
+    userMemoryEdit,
     alwaysAllow: form.get('tool_alwaysAllow') === 'on',
     terminalMode: form.get('terminalMode') || 'standard',
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',
   };
+  draftConfig.userMemory = {
+    ...(draftConfig.userMemory || {}),
+    sendFilesToPrompt: form.get('userMemorySendFilesToPrompt') === 'on',
+    remindModelToUpdateFiles: userMemoryEdit && form.get('userMemoryUpdateReminder') === 'on',
+  };
   draftConfig.context = {
     autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
     autoCompactChars: Number(form.get('autoCompactChars') || 24000),
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
   };
-  draftConfig.routing = {
-    modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
-    modelFallbacks: readModelFallbackRows(),
-    providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
-    maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
-    fallbacks: readRoutingFallbackRows(),
-  };
+  draftConfig.routing = offlineMode
+    ? normalizeOfflineRoutingForClient()
+    : {
+        modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
+        modelFallbacks: readModelFallbackRows(),
+        providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
+        maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
+        fallbacks: readRoutingFallbackRows(),
+      };
   draftConfig.server = {
     networkEnabled: form.get('networkEnabled') === 'on',
     authPassword: form.get('authPassword') || '',
@@ -3945,6 +4992,7 @@ function updateDirtyIndicators() {
 
 function validateGeneralSettingsForm(form, defaultProvider) {
   const draftConfig = state.settingsDraft?.config || state.config;
+  if (form.get('offlineMode') === 'on') return '';
   const providerInfo = getProvider(defaultProvider);
   const providerSettings = draftConfig.providerSettings?.[defaultProvider] || {};
   const baseUrl = String(providerSettings.baseUrl || providerInfo.baseUrl || '').trim();
@@ -4121,6 +5169,7 @@ async function importData(event) {
       options: {
         config: true,
         persistentMemory: true,
+        persistentMemoryUser: true,
         chats: true,
         attachments: true,
         events: false,
@@ -4162,6 +5211,11 @@ async function confirmImportData() {
     state.activeChat = data.activeChat;
     state.activeChatEvents = data.activeChatEvents || [];
     state.persistentMemory = data.persistentMemory || '';
+    state.userMemoryFiles = data.userMemoryFiles || [];
+    state.profiles = data.profiles || state.profiles;
+    state.activeProfile = data.activeProfile || state.activeProfile;
+    state.runtimeHome = data.runtimeHome || state.runtimeHome;
+    state.rootRuntimeHome = data.rootRuntimeHome || state.rootRuntimeHome;
     state.networkStatus = data.networkStatus || state.networkStatus;
     state.importModalOpen = false;
     state.importDraft = null;
@@ -4207,17 +5261,20 @@ async function saveContext() {
 
 async function refreshBootstrapData() {
   const data = await api('/api/bootstrap');
-  state.config = data.config;
-  state.providers = data.providers || state.providers;
-  state.models = data.models;
-  state.ollamaInstalledModels = data.ollamaInstalledModels || [];
-  state.chats = data.chats;
-  state.persistentMemory = data.persistentMemory;
-  state.networkStatus = data.networkStatus || state.networkStatus;
+  applyBootstrapData(data);
   if (!state.activeChat && data.activeChat) {
     state.activeChat = data.activeChat;
     state.activeChatEvents = data.activeChatEvents || [];
   }
+}
+
+async function refreshUserMemoryFiles() {
+  const data = await api('/api/persistent-memory-user');
+  state.userMemoryFiles = data.files || state.userMemoryFiles || [];
+}
+
+function messageHasCompletedUserMemoryEdit(message) {
+  return Boolean((message?.toolUses || []).some((toolUse) => toolUse.name === 'edit_persistent_memory_user' && toolUse.result?.action === 'replace'));
 }
 
 async function refreshActiveChatData() {
@@ -4231,7 +5288,7 @@ function openSettings() {
   state.settingsOpen = true;
   state.settingsDraft = buildSettingsDraft();
   state.settingsDirty = false;
-  state.settingsProvider = state.settingsDraft.config.provider;
+  state.settingsProvider = isOfflineMode(state.settingsDraft.config) ? 'ollama' : state.settingsDraft.config.provider;
   state.settingsSection = state.settingsSection || 'identity';
   renderPreservingVisualState();
 }
