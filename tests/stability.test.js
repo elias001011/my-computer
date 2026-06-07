@@ -388,7 +388,7 @@ test('config endpoint persists appearance theme changes', async () => {
   try {
     const response = await fetch(`${url}/api/config`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-My-Computer-Request': 'panel' },
       body: JSON.stringify({
         provider: 'openai-compatible',
         model: 'gpt-5.5',
@@ -453,7 +453,7 @@ test('config endpoint preserves existing fields on partial appearance update', a
   try {
     const response = await fetch(`${url}/api/config`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-My-Computer-Request': 'panel' },
       body: JSON.stringify({
         appearance: { theme: 'system' },
         providerSettings: {
@@ -475,6 +475,24 @@ test('config endpoint preserves existing fields on partial appearance update', a
     assert.equal(data.config.tools.deepInvestigation, true);
     assert.equal(data.config.providerSettings['openai-compatible'].baseUrl, 'https://example.test/changed/v1');
     assert.equal(data.config.providerSettings['openai-compatible'].apiKeys[0].value, 'test-key');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('mutating api requests require panel csrf header', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-csrf-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const serverModule = await import(`../src/server/server.js?test=${Date.now()}-csrf-server`);
+  const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+
+  try {
+    const response = await fetch(`${url}/api/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appearance: { theme: 'dark' } }),
+    });
+    assert.equal(response.status, 403);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

@@ -54,7 +54,9 @@ Por padrão, os dados do usuário ficam em `~/.my-computer`:
 
 Gravações que dependem de ler, mesclar e escrever estado são serializadas por arquivo dentro do processo Node. Isso cobre JSON de config/mensagens/metadados/anexos e appends de memória Markdown usados pelas tools. O objetivo é evitar colisão entre envios simultâneos, aprovações de tool, updates de metadados, anexos e memória no mesmo runtime.
 
-O export/import opera sobre esse runtime. O backup serializa a configuração normalizada completa, memória persistente global, arquivos adicionais de memória do usuário, chats, contexto, anexos e eventos; na importação, a UI permite escolher esses grupos separadamente. Quando o grupo de configuração é importado, ele substitui a configuração atual como snapshot completo, em vez de mesclar modelos customizados antigos.
+Seções são escopadas por requisição com `AsyncLocalStorage`. A UI envia a seção ativa via header, e `getActivePaths()` usa esse escopo durante toda a cadeia async da requisição. O perfil ativo global continua existindo como fallback para bootstrap inicial e CLI.
+
+O export/import opera sobre esse runtime. O backup serializa a configuração normalizada completa, memória persistente global, arquivos adicionais de memória do usuário, chats, contexto, anexos e eventos; na importação, a UI permite escolher esses grupos separadamente. Quando o grupo de configuração é importado, ele substitui a configuração atual como snapshot completo, em vez de mesclar modelos customizados antigos. Chats importados não sobrescrevem chats existentes por id; colisões recebem novo id.
 
 ## Fluxo de uma mensagem
 

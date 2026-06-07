@@ -195,6 +195,7 @@ Se o usuário ligar o modo de rede:
 - o próximo restart pode escutar em `0.0.0.0`
 - a UI pede senha
 - o acesso usa Basic Auth simples
+- métodos mutáveis da API exigem header do painel e validação de origem para reduzir CSRF em rede local
 
 Não é uma VPN, não é um sistema corporativo e não é uma fortaleza. É só uma forma prática de abrir o painel para a LAN com risco consciente.
 
@@ -209,7 +210,7 @@ O backup exporta o runtime em grupos selecionáveis:
 - anexos
 - eventos recentes para diagnóstico
 
-Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico, mas não copia os arquivos anexados. Importar arquivos adicionais de memória substitui o conjunto de arquivos adicionais da seção ativa pela cópia do backup.
+Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico sem referências clicáveis para anexos antigos. Chats importados não sobrescrevem chats atuais com o mesmo id. Importar arquivos adicionais de memória substitui o conjunto de arquivos adicionais da seção ativa pela cópia do backup, validando tipo/tamanho e usando staging antes da troca.
 
 A exclusão de todos os chats remove apenas a pasta de chats da seção ativa. Configurações, memória persistente global e arquivos adicionais de memória persistente permanecem no runtime da seção.
 

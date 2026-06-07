@@ -18,7 +18,7 @@ Cada seção mantém seus próprios:
 - arquivos adicionais de memória persistente
 - eventos locais
 
-Você pode trocar de seção pelo seletor na barra lateral ou gerenciar em `Configurações gerais > Seções`.
+Você pode trocar de seção pelo seletor na barra lateral ou gerenciar em `Configurações gerais > Seções`. Cada aba envia a seção ativa nas chamadas da API, e o backend congela esse escopo durante a requisição para evitar mistura entre abas.
 
 ### Modo offline por seção
 
@@ -228,7 +228,7 @@ Em `Configurações gerais > Backup`, o export inclui:
 - eventos recentes para diagnóstico
 - metadados da seção ativa
 
-Na importação, você escolhe cada grupo. Configuração importada é tratada como snapshot completo: modelos customizados e capacidades que não estão no backup são removidos do runtime atual. Se importar chats sem anexos, o histórico entra sem copiar os arquivos anexados.
+Na importação, você escolhe cada grupo. Configuração importada é tratada como snapshot completo: modelos customizados e capacidades que não estão no backup são removidos do runtime atual. Se importar chats sem anexos, o histórico entra sem copiar os arquivos anexados. Chats importados com id já existente ganham um novo id para evitar sobrescrever chats atuais.
 O import restaura dados na seção ativa.
 
 O botão `Excluir todos os chats` fica na mesma aba e exige confirmação dupla. Ele apaga chats, mensagens, anexos, memória de chat e contexto dos chats da seção atual, mas preserva configurações, memória persistente global e arquivos adicionais de memória.
@@ -291,7 +291,7 @@ Outras tools locais podem ser ligadas e desligadas nas configurações:
 - `compact_context`
 - `rename_chat`
 
-`persistent_memory_user` lista e lê arquivos de memória adicionados pelo usuário sem usar terminal. `edit_persistent_memory_user` substitui um trecho exato em arquivos texto/Markdown e segue o fluxo de aprovação da UI.
+`persistent_memory_user` lista e lê arquivos de memória adicionados pelo usuário sem usar terminal. A listagem pode ocorrer sem aprovação; a leitura do conteúdo pede aprovação quando `Sempre permitir qualquer tool` está desligado. `edit_persistent_memory_user` substitui um trecho exato em arquivos texto/Markdown e segue o fluxo de aprovação da UI.
 Por padrão, tools que alteram arquivos, executam terminal ou fazem side effects exigem aprovação manual na UI.
 
 ## Memória persistente com arquivos
@@ -300,7 +300,7 @@ Em `Configurações gerais > Memória`, além do Markdown global, você pode adi
 
 Controles principais:
 
-- `Permitir que a IA liste e leia arquivos adicionais`: habilita `persistent_memory_user`. Se desligado, a IA não abre arquivos por conta própria.
+- `Permitir que a IA liste e leia arquivos adicionais`: habilita `persistent_memory_user`. Se desligado, a IA não abre arquivos por conta própria. Com aprovação automática desligada, abrir o conteúdo de um arquivo pede confirmação.
 - `Enviar os arquivos adicionados por você a todo prompt`: injeta o conteúdo dos arquivos no prompt, com limite de tamanho.
 - Envio desligado: injeta só o índice dos arquivos. Se a leitura/listagem estiver ligada, a IA usa `persistent_memory_user` para ler apenas o que precisar.
 - `Permitir que a IA edite arquivos adicionais`: habilita `edit_persistent_memory_user` e depende da leitura/listagem.

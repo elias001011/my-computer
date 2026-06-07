@@ -2156,7 +2156,8 @@ function toolRequiresApproval(toolCall, config = {}) {
     return input.action !== 'read';
   }
   if (name === 'persistent_memory_user') {
-    return false;
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return input.action === 'read';
   }
   if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat') {
     return true;

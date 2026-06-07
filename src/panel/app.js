@@ -1595,7 +1595,7 @@ function renderAttachmentViewerModal() {
   const attachment = state.attachmentViewer;
   const chatId = state.activeChat?.id || '';
   if (!attachment || !chatId) return '';
-  const contentUrl = `/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`;
+  const contentUrl = withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`);
   let preview = '';
   if (attachment.kind === 'image') {
     preview = `<img class="viewer-media" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`;
@@ -2410,7 +2410,7 @@ function formatToolUseState(toolUse = {}) {
 
 function renderAttachmentCard(attachment, options = {}) {
   const chatId = state.activeChat?.id || '';
-  const contentUrl = chatId ? `/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content` : '';
+  const contentUrl = chatId ? withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`) : '';
   const imagePreview =
     attachment.kind === 'image' && contentUrl
       ? `<img class="attachment-thumb" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`
@@ -5425,7 +5425,11 @@ function renderPreservingVisualState() {
 async function api(path, options = {}) {
   const response = await fetch(path, {
     method: options.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-My-Computer-Request': 'panel',
+      ...(state.activeProfile?.id ? { 'X-Profile-Id': state.activeProfile.id } : {}),
+    },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await response.json().catch(() => ({}));
@@ -5433,6 +5437,12 @@ async function api(path, options = {}) {
     throw new Error(data.error || `HTTP ${response.status}`);
   }
   return data;
+}
+
+function withProfileQuery(path) {
+  if (!state.activeProfile?.id) return path;
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}profileId=${encodeURIComponent(state.activeProfile.id)}`;
 }
 
 function scrollMessagesToBottom() {

@@ -18,6 +18,8 @@ Atualizado em 26/05/2026.
 - As tools podem ser desligadas por configuração.
 - O terminal isolado usa `HOME` e `cwd` dentro do runtime do app.
 - Modo de rede local usa Basic Auth com senha única.
+- Métodos mutáveis da API exigem header do painel e validação de origem para reduzir CSRF.
+- Seções são resolvidas por requisição para evitar mistura entre abas.
 - O updater bloqueia aplicação quando o worktree Git está sujo.
 - O catálogo de modelos tenta bloquear chamadas claramente incompatíveis antes de chegar na API.
 
@@ -57,6 +59,7 @@ Boas práticas:
 
 - Sem modo rede, o painel local não exige autenticao.
 - Com modo rede, o painel usa Basic Auth simples com senha única.
+- Requisições `POST`, `PUT` e `DELETE` vindas de fora do painel são bloqueadas pela proteção CSRF.
 - O acesso remoto continua sendo uma decisão de risco do usuário.
 - Use senha forte e rede confiável.
 

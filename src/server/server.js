@@ -37,6 +37,7 @@ import {
   saveConfig,
   updateProfile,
   updateChatMetadata,
+  withProfileScope,
   writeUserMemoryFileContent,
   writePersistentMemory,
   writeMemory,
@@ -50,6 +51,8 @@ const CONTENT_TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const PANEL_REQUEST_HEADER = 'panel';
 
 let currentLaunch = { port: null, requestedHost: null, actualHost: null };
 
@@ -88,6 +91,15 @@ async function handleRequest(request, response) {
 }
 
 async function handleApi(request, response, url) {
+  const method = request.method || 'GET';
+  if (MUTATING_METHODS.has(method) && !isTrustedMutationRequest(request)) {
+    sendJson(response, 403, { error: 'Requisição mutável bloqueada por proteção CSRF.' });
+    return;
+  }
+  await withProfileScope(getRequestProfileId(request, url), () => handleApiScoped(request, response, url));
+}
+
+async function handleApiScoped(request, response, url) {
   const parts = url.pathname.split('/').filter(Boolean);
   const method = request.method || 'GET';
 
@@ -156,7 +168,7 @@ async function handleApi(request, response, url) {
   }
 
   if (method === 'POST' && parts[1] === 'import') {
-    const body = await readBody(request, { limit: 20_000_000 });
+    const body = await readBody(request, { limit: 80_000_000 });
     const payload = body?.data && body?.options ? body.data : body;
     const options = body?.data && body?.options ? body.options : {};
     const imported = await importRuntimeData(payload, options);
@@ -415,14 +427,14 @@ async function handleProfilesApi(request, response, parts) {
 
   if (method === 'POST' && !profileId) {
     const body = await readBody(request);
-    await createProfile(body.name || 'Nova seção');
-    sendJson(response, 201, await buildBootstrapPayload());
+    const profile = await createProfile(body.name || 'Nova seção');
+    sendJson(response, 201, await withProfileScope(profile.id, () => buildBootstrapPayload()));
     return;
   }
 
   if (method === 'POST' && profileId && parts[3] === 'activate') {
-    await activateProfile(profileId);
-    sendJson(response, 200, await buildBootstrapPayload());
+    const profile = await activateProfile(profileId);
+    sendJson(response, 200, await withProfileScope(profile.id, () => buildBootstrapPayload()));
     return;
   }
 
@@ -439,8 +451,8 @@ async function handleProfilesApi(request, response, parts) {
   }
 
   if (method === 'DELETE' && profileId && parts.length === 3) {
-    await deleteProfile(profileId);
-    sendJson(response, 200, await buildBootstrapPayload());
+    const deleted = await deleteProfile(profileId);
+    sendJson(response, 200, await withProfileScope(deleted?.activeProfileId || 'default', () => buildBootstrapPayload()));
     return;
   }
 
@@ -468,7 +480,6 @@ async function handleUserMemoryApi(request, response, parts) {
     const file = await readUserMemoryFileWithHints(update.file.id);
     sendJson(response, 200, {
       file,
-      previousContent: update.previousContent,
       files: await listUserMemoryFilesWithHints(),
     });
     return;
@@ -718,6 +729,26 @@ function sendError(response, error) {
     error: error.message || 'Erro interno.',
     details: process.env.NODE_ENV === 'development' ? error.details : undefined,
   });
+}
+
+function isTrustedMutationRequest(request) {
+  if (request.headers['x-my-computer-request'] !== PANEL_REQUEST_HEADER) return false;
+  return isTrustedOriginHeader(request.headers.origin, request) && isTrustedOriginHeader(request.headers.referer, request);
+}
+
+function isTrustedOriginHeader(value, request) {
+  if (!value) return true;
+  try {
+    const parsed = new URL(value);
+    const host = request.headers.host;
+    return Boolean(host) && parsed.host === host;
+  } catch {
+    return false;
+  }
+}
+
+function getRequestProfileId(request, url) {
+  return String(request.headers['x-profile-id'] || url.searchParams.get('profileId') || '').trim() || null;
 }
 
 export function getNetworkStatus(config = {}) {

@@ -27,8 +27,9 @@ Helpful reports include:
 - The app stores user data under `~/.my-computer` by default, or `MY_COMPUTER_HOME` when configured.
 - Sections are runtime-level isolation inside the same local app, not separate operating-system users.
 - API keys are stored locally in config JSON. Treat backups as sensitive.
-- LAN mode uses Basic Auth and is intended for trusted local networks only.
+- LAN mode uses Basic Auth and is intended for trusted local networks only. Mutating API requests also require the panel request header and same-origin validation to reduce CSRF risk.
 - Offline mode blocks online providers and native provider search, but terminal commands can still access the network if the user enables terminal search or asks for network commands.
+- Sections are scoped per request in the backend. They isolate runtime files, but they are not separate authentication accounts.
 - Terminal tools run as the current OS user unless the user explicitly configures sudo outside the app.
 
 ## Security Review Checklist
@@ -52,4 +53,3 @@ Do not commit:
 - files from `~/.my-computer`
 - chat logs containing private data
 - terminal outputs with secrets
-

@@ -128,10 +128,33 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal((await store.listChats()).length, 0);
   await store.saveConfig({ provider: 'ollama', model: 'llama3.2' });
   assert.equal((await store.loadConfig()).provider, 'ollama');
+  await Promise.all([
+    store.withProfileScope('default', async () => {
+      await store.saveConfig({ userNickname: 'Default scoped' });
+      await store.writePersistentMemory('# Default scoped\n');
+      await store.createChat('Default scoped chat');
+    }),
+    store.withProfileScope(profile.id, async () => {
+      await store.saveConfig({ userNickname: 'Profile scoped' });
+      await store.writePersistentMemory('# Profile scoped\n');
+      await store.createChat('Profile scoped chat');
+    }),
+  ]);
+  await store.withProfileScope('default', async () => {
+    assert.equal((await store.loadConfig()).userNickname, 'Default scoped');
+    assert.match(await store.readPersistentMemory(), /Default scoped/);
+    assert.equal((await store.listChats()).length, 1);
+  });
+  await store.withProfileScope(profile.id, async () => {
+    assert.equal((await store.loadConfig()).userNickname, 'Profile scoped');
+    assert.match(await store.readPersistentMemory(), /Profile scoped/);
+    assert.equal((await store.listChats()).length, 1);
+  });
   await store.activateProfile('default');
   assert.equal((await store.loadConfig()).provider, 'openai-compatible');
   await store.deleteProfile(profile.id);
   assert.equal((await store.getRuntimeInfo()).activeProfile.id, 'default');
+  await store.deleteAllChats();
 
   const chat = await store.createChat('Teste', {
     provider: securityConfig.provider,
@@ -254,9 +277,10 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
     events: false,
   });
   const importedChats = await store.listChats();
-  assert.equal(importedChats.length, 1);
+  assert.equal(importedChats.length, 2);
   const importedChat = await store.readChat(importedChats[0].id);
   assert.equal(importedChat.attachments.length, 0);
+  assert.ok((importedChat.messages || []).every((message) => !message.attachments?.length));
   assert.match(await store.readPersistentMemory(), /keep local memory/);
   assert.match((await store.readUserMemoryFile('local.md')).content, /Local user file/);
   const importedConfig = await store.loadConfig();
@@ -280,6 +304,27 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const restoredUserMemoryHints = await store.listUserMemoryFilesWithHints();
   assert.equal(restoredUserMemoryHints[0].name, 'project.md');
   assert.equal(restoredUserMemoryHints[0].title, 'Projeto');
+
+  await store.saveConfig({ userNickname: 'Before invalid import' });
+  await assert.rejects(
+    () =>
+      store.importRuntimeData(
+        {
+          config: { setupComplete: true, userNickname: 'Should not apply' },
+          persistentMemoryUserFiles: [
+            {
+              id: 'too-large',
+              name: 'too-large.md',
+              mimeType: 'text/markdown',
+              dataBase64: Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64'),
+            },
+          ],
+        },
+        { config: true, persistentMemoryUser: true, chats: false, attachments: false, events: false },
+      ),
+    /muito grande/,
+  );
+  assert.equal((await store.loadConfig()).userNickname, 'Before invalid import');
 
   await store.saveConfig({
     customModels: {
@@ -344,12 +389,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.match(chatMemory, /local beta/);
 
   const chats = await store.listChats();
-  assert.equal(chats.length, 1);
+  assert.equal(chats.length, 2);
 
   const chatEvents = await store.readEvents({ chatId: chat.id });
   assert.ok(chatEvents.every((event) => event.chatId === chat.id));
 
   await store.deleteChat(chat.id);
+  assert.equal((await store.listChats()).length, 1);
+  await store.deleteAllChats();
   assert.equal((await store.listChats()).length, 0);
 
   await store.createChat('Limpar 1');

@@ -34,6 +34,7 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 
 - Runtime do usuário em `~/.my-computer` por padrão, com seções novas em `~/.my-computer/profiles/<id>`.
 - Configurações, chats, memória, arquivos adicionais de memória e eventos ficam separados do código do projeto.
+- O backend usa escopo async por requisição para resolver qual seção atende cada chamada.
 - Export/import trabalha sobre a seção ativa e cobre configuração, memória persistente, arquivos adicionais, chats, anexos e eventos selecionados.
 
 ### Integracoes opcionais

@@ -104,6 +104,7 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Atualizações: estado do Git, diff, pull e restart.
 - Export/import: backup e restauração seletivos de configuração completa, memória persistente, arquivos adicionais de memória, chats, anexos e eventos.
 - Backup: botão de excluir todos os chats da seção atual com confirmação dupla, preservando configurações e memórias persistentes.
+- Seções: chamadas da UI carregam o id da seção ativa para manter abas diferentes isoladas no backend.
 - Segurança: avisos de sudo e de acesso remoto.
 
 ## Índice de modelos
@@ -161,6 +162,7 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 - Tools locais podem exigir aprovação manual ou ficar em sempre permitir.
 - A UI mostra no chat apenas a decisão/estado principal da tool; detalhes de requests pendentes, permitidas, negadas, timeout, exit code e erro ficam no modal de detalhes.
 - Arquivos adicionais de memória têm `Ver arquivo`, que abre um editor da cópia salva no My Computer; edições por `edit_persistent_memory_user` têm `Ver diff` com linhas adicionadas/removidas e botão para abrir o arquivo atual.
+- `persistent_memory_user list` pode ocorrer sem aprovação; `persistent_memory_user read` pede aprovação quando tools automáticas estão desligadas.
 - Leituras grandes de `persistent_memory_user` retornam `truncated`, `nextOffset` e faixa lida para a IA continuar com `offset`.
 
 ## Rede local e updates

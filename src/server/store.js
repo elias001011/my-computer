@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getDefaultModelForProvider, isKnownProvider, providerCatalog } from './models.js';
@@ -8,6 +9,7 @@ const fileLocks = new Map();
 const USER_MEMORY_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 const USER_MEMORY_PROMPT_TOTAL_CHARS = 60000;
 const USER_MEMORY_PROMPT_FILE_CHARS = 12000;
+const profileScope = new AsyncLocalStorage();
 const defaultProfile = Object.freeze({
   id: 'default',
   name: 'Default',
@@ -70,6 +72,18 @@ export const defaultConfig = Object.freeze({
   customModels: {},
   modelCapabilities: {},
 });
+
+export async function withProfileScope(profileId, action) {
+  const index = await ensureProfilesIndex();
+  const scopedProfileId = sanitizeProfileId(profileId || index.activeProfileId || 'default') || 'default';
+  const profile = index.profiles.find((item) => item.id === scopedProfileId);
+  if (!profile) {
+    const error = new Error('Seção não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return profileScope.run({ profileId: profile.id, paths: buildProfilePaths(profile.id) }, action);
+}
 
 export async function ensureRuntime() {
   await ensureProfilesIndex();
@@ -851,7 +865,7 @@ export async function appendEvent(event) {
   const entry = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
-    profileId: activeProfileId,
+    profileId: getScopedProfileId(),
     ...event,
   };
   await fs.appendFile(paths.eventsPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
@@ -861,11 +875,12 @@ export async function appendEvent(event) {
 export async function getRuntimeInfo() {
   await ensureRuntime();
   const profiles = await listProfiles();
+  const scopedProfileId = getScopedProfileId();
   return {
     runtimeHome: getActivePaths().runtimeHome,
     rootRuntimeHome: runtimeHome,
-    activeProfileId,
-    activeProfile: profiles.find((profile) => profile.id === activeProfileId) || profiles[0],
+    activeProfileId: scopedProfileId,
+    activeProfile: profiles.find((profile) => profile.id === scopedProfileId) || profiles[0],
     profiles,
   };
 }
@@ -899,8 +914,10 @@ export async function createProfile(name = 'Nova seção') {
   });
   activeProfileId = id;
   activePaths = buildProfilePaths(id);
-  await ensureRuntime();
-  await appendEvent({ type: 'profile.created', details: { id, name: profile.name } });
+  await withProfileScope(id, async () => {
+    await ensureRuntime();
+    await appendEvent({ type: 'profile.created', details: { id, name: profile.name } });
+  });
   return profile;
 }
 
@@ -915,8 +932,10 @@ export async function activateProfile(id) {
   await writeProfilesIndex({ ...index, activeProfileId: profile.id });
   activeProfileId = profile.id;
   activePaths = buildProfilePaths(profile.id);
-  await ensureRuntime();
-  await appendEvent({ type: 'profile.activated', details: { id: profile.id, name: profile.name } });
+  await withProfileScope(profile.id, async () => {
+    await ensureRuntime();
+    await appendEvent({ type: 'profile.activated', details: { id: profile.id, name: profile.name } });
+  });
   return profile;
 }
 
@@ -956,9 +975,11 @@ export async function deleteProfile(id) {
   await writeProfilesIndex({ ...index, activeProfileId: nextActiveProfileId, profiles });
   activeProfileId = nextActiveProfileId;
   activePaths = buildProfilePaths(nextActiveProfileId);
-  await ensureRuntime();
-  await appendEvent({ type: 'profile.deleted', details: { id, name: target.name } });
-  return target;
+  await withProfileScope(nextActiveProfileId, async () => {
+    await ensureRuntime();
+    await appendEvent({ type: 'profile.deleted', details: { id, name: target.name } });
+  });
+  return { ...target, activeProfileId: nextActiveProfileId };
 }
 
 export async function exportRuntimeData() {
@@ -1002,6 +1023,7 @@ export async function exportRuntimeData() {
 export async function importRuntimeData(payload = {}, options = {}) {
   await ensureRuntime();
   const settings = normalizeImportOptions(options);
+  preflightRuntimeImport(payload, settings);
 
   if (settings.config && payload.config) {
     await replaceConfig({
@@ -1043,6 +1065,20 @@ export async function importRuntimeData(payload = {}, options = {}) {
   return exportRuntimeData();
 }
 
+function preflightRuntimeImport(payload = {}, settings = {}) {
+  const paths = getActivePaths();
+  if (settings.persistentMemoryUser && Array.isArray(payload.persistentMemoryUserFiles)) {
+    for (const file of payload.persistentMemoryUserFiles.filter((item) => !item?.missing)) {
+      prepareImportedUserMemoryFile(file, paths.userMemoryDir);
+    }
+  }
+  if (settings.chats && settings.attachments !== false && Array.isArray(payload.chats)) {
+    for (const chat of payload.chats) {
+      validateImportedChatAttachments(chat.attachments || []);
+    }
+  }
+}
+
 export function createMessage(role, content, extra = {}) {
   return {
     id: crypto.randomUUID(),
@@ -1082,9 +1118,7 @@ async function readChatMetadata(id) {
 
 async function writeImportedChat(importedChat = {}, options = {}) {
   const importedMetadata = importedChat.metadata || {};
-  const id = /^[a-zA-Z0-9_-]+$/.test(String(importedMetadata.id || ''))
-    ? String(importedMetadata.id)
-    : `${stamp(new Date())}-${crypto.randomUUID().slice(0, 8)}`;
+  const id = await getAvailableImportedChatId(importedMetadata.id);
   const chatDir = getChatDir(id);
   const provider = normalizeProviderId(importedMetadata.provider || defaultConfig.provider);
   const now = new Date().toISOString();
@@ -1109,11 +1143,29 @@ async function writeImportedChat(importedChat = {}, options = {}) {
   await fs.mkdir(path.join(chatDir, 'context-snapshots'), { recursive: true, mode: 0o700 });
   await fs.mkdir(metadata.paths.attachments, { recursive: true, mode: 0o700 });
   await writeJson(path.join(chatDir, 'metadata.json'), metadata, 0o600);
-  await writeJson(path.join(chatDir, 'messages.json'), Array.isArray(importedChat.messages) ? importedChat.messages : [], 0o600);
+  await writeJson(path.join(chatDir, 'messages.json'), normalizeImportedMessages(importedChat.messages, options), 0o600);
   await fs.writeFile(metadata.paths.memory, String(importedChat.memory || '# Chat memory\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.context, String(importedChat.contextSummary || '# Context summary\n'), { mode: 0o600 });
   await fs.writeFile(metadata.paths.contextWindow, String(importedChat.contextWindow || '# Context window\n'), { mode: 0o600 });
   await importChatAttachments(id, options.attachments === false ? [] : importedChat.attachments || []);
+}
+
+async function getAvailableImportedChatId(requestedId) {
+  const requested = /^[a-zA-Z0-9_-]+$/.test(String(requestedId || '')) ? String(requestedId) : '';
+  const base = requested || `${stamp(new Date())}-${crypto.randomUUID().slice(0, 8)}`;
+  let id = base;
+  let suffix = 2;
+  while (await pathExists(getChatDir(id))) {
+    id = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return id;
+}
+
+function normalizeImportedMessages(messages = [], options = {}) {
+  const items = Array.isArray(messages) ? messages : [];
+  if (options.attachments !== false) return items;
+  return items.map((message) => ({ ...message, attachments: [] }));
 }
 
 async function exportChatAttachments(id) {
@@ -1121,12 +1173,13 @@ async function exportChatAttachments(id) {
   const exported = [];
   for (const attachment of attachments) {
     let dataBase64 = '';
+    let missing = false;
     try {
       dataBase64 = (await fs.readFile(attachment.path)).toString('base64');
     } catch {
-      // Keep metadata if a file disappeared.
+      missing = true;
     }
-    exported.push({ ...attachment, dataBase64 });
+    exported.push({ ...attachment, dataBase64, missing });
   }
   return exported;
 }
@@ -1134,27 +1187,62 @@ async function exportChatAttachments(id) {
 async function importChatAttachments(id, attachments = []) {
   const imported = [];
   const chat = await readChatMetadata(id);
+  await fs.rm(chat.paths.attachments, { recursive: true, force: true });
   await fs.mkdir(chat.paths.attachments, { recursive: true, mode: 0o700 });
 
   for (const attachment of attachments) {
-    const attachmentId = /^[a-zA-Z0-9_-]+$/.test(String(attachment.id || ''))
-      ? String(attachment.id)
-      : crypto.randomUUID();
-    const name = sanitizeFileName(attachment.name || 'attachment');
+    if (attachment.missing) continue;
+    const prepared = prepareImportedAttachment(attachment);
+    if (!prepared) continue;
+    const { attachmentId, name, mimeType, buffer } = prepared;
     const filePath = path.join(chat.paths.attachments, `${attachmentId}-${name}`);
-    if (attachment.dataBase64) {
-      await fs.writeFile(filePath, Buffer.from(attachment.dataBase64, 'base64'), { mode: 0o600 });
-    }
+    await fs.writeFile(filePath, buffer, { mode: 0o600 });
+    const extraction = extractAttachmentText(buffer, { name, mimeType });
     imported.push({
       ...attachment,
       id: attachmentId,
       name,
+      mimeType,
+      size: buffer.length,
       path: filePath,
       dataBase64: undefined,
+      missing: undefined,
+      kind: classifyAttachment(mimeType, name),
+      sendMode: defaultAttachmentSendMode(mimeType, name, extraction),
+      extractedText: extraction.text,
+      previewText: truncate(extraction.text, 1800),
+      extractionStatus: extraction.status,
+      extractionNote: extraction.note,
     });
   }
 
   await writeJson(getAttachmentsMetadataPath(id), imported, 0o600);
+}
+
+function validateImportedChatAttachments(attachments = []) {
+  for (const attachment of attachments) {
+    if (!attachment?.missing) prepareImportedAttachment(attachment);
+  }
+}
+
+function prepareImportedAttachment(attachment = {}) {
+  const attachmentId = /^[a-zA-Z0-9_-]+$/.test(String(attachment.id || '')) ? String(attachment.id) : crypto.randomUUID();
+  const name = sanitizeFileName(attachment.name || 'attachment');
+  const mimeType = String(attachment.mimeType || guessMimeType(name)).slice(0, 120);
+  if (!isSupportedAttachment(mimeType, name)) {
+    const error = new Error(`Anexo incompatível no backup: ${name}`);
+    error.statusCode = 415;
+    throw error;
+  }
+  const rawBase64 = String(attachment.dataBase64 || '').replace(/^data:[^;]+;base64,/, '');
+  if (!rawBase64) return null;
+  const buffer = Buffer.from(rawBase64, 'base64');
+  if (buffer.length > 20 * 1024 * 1024) {
+    const error = new Error(`Anexo muito grande no backup: ${name}`);
+    error.statusCode = 413;
+    throw error;
+  }
+  return { attachmentId, name, mimeType, buffer };
 }
 
 async function exportUserMemoryFiles() {
@@ -1162,30 +1250,84 @@ async function exportUserMemoryFiles() {
   const exported = [];
   for (const file of files) {
     let dataBase64 = '';
+    let missing = false;
     try {
       dataBase64 = (await fs.readFile(assertUserMemoryPath(file.path))).toString('base64');
     } catch {
-      // Keep metadata if a file disappeared.
+      missing = true;
     }
-    exported.push({ ...file, dataBase64 });
+    exported.push({ ...file, dataBase64, missing });
   }
   return exported;
 }
 
 async function importUserMemoryFiles(files = []) {
   const paths = getActivePaths();
-  await fs.rm(paths.userMemoryDir, { recursive: true, force: true });
-  await fs.mkdir(paths.userMemoryDir, { recursive: true, mode: 0o700 });
-  const imported = [];
-  for (const file of files) {
-    const name = sanitizeFileName(file.name || 'memory.md');
-    const mimeType = String(file.mimeType || guessMimeType(name)).slice(0, 120);
-    if (!isUserMemoryCompatible(mimeType, name)) continue;
-    const id = /^[a-zA-Z0-9_-]+$/.test(String(file.id || '')) ? String(file.id) : crypto.randomUUID();
-    const filePath = path.join(paths.userMemoryDir, `${id}-${name}`);
-    const buffer = file.dataBase64 ? Buffer.from(file.dataBase64, 'base64') : Buffer.from(String(file.content || ''), 'utf8');
-    await fs.writeFile(filePath, buffer, { mode: 0o600 });
-    imported.push({
+  const token = crypto.randomUUID();
+  const tempDir = path.join(paths.runtimeHome, `persistent-memory-user.tmp-${token}`);
+  const backupDir = path.join(paths.runtimeHome, `persistent-memory-user.old-${token}`);
+  const tempIndexPath = `${paths.userMemoryIndexPath}.tmp-${token}`;
+  const backupIndexPath = `${paths.userMemoryIndexPath}.old-${token}`;
+  const prepared = files.filter((file) => !file?.missing).map((file) => prepareImportedUserMemoryFile(file, paths.userMemoryDir));
+
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
+  for (const file of prepared) {
+    await fs.writeFile(path.join(tempDir, file.storageName), file.buffer, { mode: 0o600 });
+  }
+  await writeJson(
+    tempIndexPath,
+    prepared.map((file) => file.entry),
+    0o600,
+  );
+
+  let movedCurrentDir = false;
+  let movedCurrentIndex = false;
+  try {
+    if (await pathExists(paths.userMemoryDir)) {
+      await fs.rename(paths.userMemoryDir, backupDir);
+      movedCurrentDir = true;
+    }
+    if (await pathExists(paths.userMemoryIndexPath)) {
+      await fs.rename(paths.userMemoryIndexPath, backupIndexPath);
+      movedCurrentIndex = true;
+    }
+    await fs.rename(tempDir, paths.userMemoryDir);
+    await fs.rename(tempIndexPath, paths.userMemoryIndexPath);
+    await fs.rm(backupDir, { recursive: true, force: true });
+    await fs.rm(backupIndexPath, { force: true });
+  } catch (error) {
+    await fs.rm(paths.userMemoryDir, { recursive: true, force: true });
+    await fs.rm(paths.userMemoryIndexPath, { force: true });
+    if (movedCurrentDir) await fs.rename(backupDir, paths.userMemoryDir);
+    if (movedCurrentIndex) await fs.rename(backupIndexPath, paths.userMemoryIndexPath);
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempIndexPath, { force: true });
+    throw error;
+  }
+}
+
+function prepareImportedUserMemoryFile(file = {}, userMemoryDir) {
+  const name = sanitizeFileName(file.name || 'memory.md');
+  const mimeType = String(file.mimeType || guessMimeType(name)).slice(0, 120);
+  if (!isUserMemoryCompatible(mimeType, name)) {
+    const error = new Error(`Arquivo de memória incompatível no backup: ${name}`);
+    error.statusCode = 415;
+    throw error;
+  }
+  const id = /^[a-zA-Z0-9_-]+$/.test(String(file.id || '')) ? String(file.id) : crypto.randomUUID();
+  const storageName = `${id}-${name}`;
+  const filePath = path.join(userMemoryDir, storageName);
+  const buffer = file.dataBase64 ? Buffer.from(file.dataBase64, 'base64') : Buffer.from(String(file.content || ''), 'utf8');
+  if (buffer.length > USER_MEMORY_FILE_LIMIT_BYTES) {
+    const error = new Error(`Arquivo de memória muito grande no backup: ${name}`);
+    error.statusCode = 413;
+    throw error;
+  }
+  return {
+    storageName,
+    buffer,
+    entry: {
       id,
       name,
       mimeType,
@@ -1194,9 +1336,8 @@ async function importUserMemoryFiles(files = []) {
       editable: isUserMemoryEditable(mimeType, name),
       createdAt: file.createdAt || new Date().toISOString(),
       updatedAt: file.updatedAt || new Date().toISOString(),
-    });
-  }
-  await writeJson(paths.userMemoryIndexPath, imported, 0o600);
+    },
+  };
 }
 
 async function touchChat(id) {
@@ -1264,6 +1405,16 @@ async function readText(filePath, fallback) {
   }
 }
 
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function buildProfilePaths(profileId = 'default') {
   const profileRuntimeHome = getProfileRuntimeHome(profileId);
   return {
@@ -1277,8 +1428,12 @@ function buildProfilePaths(profileId = 'default') {
   };
 }
 
+function getScopedProfileId() {
+  return profileScope.getStore()?.profileId || activeProfileId;
+}
+
 function getActivePaths() {
-  return activePaths;
+  return profileScope.getStore()?.paths || activePaths;
 }
 
 async function ensureProfilesIndex() {
