@@ -75,7 +75,7 @@ O export/import opera sobre esse runtime. O backup serializa a configuração no
 6. O resultado final volta para o chat e é salvo em `messages.json`.
 7. Eventos relevantes também vão para `events.jsonl`.
 
-O metadado do chat também pode ter `folder`, usado apenas para agrupar a sidebar. Ele não altera prompt, permissões, runtime, memória ou isolamento; isolamento real continua sendo feito por perfil/seção.
+O metadado legado `folder` pode existir em chats importados ou criados por versões anteriores, mas a UI atual não expõe organização por pastas. Ele não altera prompt, permissões, runtime, memória ou isolamento; isolamento real continua sendo feito por perfil/seção.
 
 Quando uma resposta falha ou para no meio:
 
