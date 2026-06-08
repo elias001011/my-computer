@@ -490,6 +490,7 @@ const EN_TEXT = new Map([
   ['Documentos do chat listados', 'Chat documents listed'],
   ['Documento não encontrado no chat atual. O diff ainda mostra o trecho que a IA tentou alterar.', 'Document not found in the current chat. The diff still shows the snippet the AI tried to change.'],
   ['Veja o diff ou abra a cópia salva neste chat.', 'Review the diff or open the copy saved in this chat.'],
+  ['Anexo removido. A cópia e o conteúdo não serão enviados para a IA.', 'Attachment removed. The copy and content will not be sent to the AI.'],
   ['Lista arquivos texto anexados ao chat atual.', 'Lists text files attached to the current chat.'],
   ['Edite a cópia salva dentro deste chat. O arquivo original enviado de fora não é alterado.', 'Edit the copy saved inside this chat. The original file sent from outside is not changed.'],
   ['Salvar documento', 'Save document'],
@@ -3275,8 +3276,9 @@ function formatToolUseState(toolUse = {}) {
 function renderAttachmentCard(attachment, options = {}) {
   if (!attachment) return '';
   attachment = resolveAttachment(attachment.id) || attachment;
+  const deleted = Boolean(attachment.deletedAt || attachment.sendMode === 'deleted');
   const chatId = state.activeChat?.id || '';
-  const contentUrl = chatId ? withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`) : '';
+  const contentUrl = !deleted && chatId ? withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`) : '';
   const actionLabel = isEditableAttachment(attachment) ? 'Abrir/editar' : 'Visualizar';
   const imagePreview =
     attachment.kind === 'image' && contentUrl
@@ -3286,7 +3288,9 @@ function renderAttachmentCard(attachment, options = {}) {
     attachment.kind === 'video' && contentUrl
       ? `<video class="attachment-video" src="${escapeAttr(contentUrl)}" controls preload="metadata"></video>`
       : '';
-  const warning = getAttachmentWarning(attachment);
+  const warning = deleted
+    ? { level: 'warning', text: uiText('Anexo removido. A cópia e o conteúdo não serão enviados para a IA.') }
+    : getAttachmentWarning(attachment);
   const actions = options.pending
     ? `
       <div class="attachment-actions">
@@ -3295,7 +3299,9 @@ function renderAttachmentCard(attachment, options = {}) {
         <button type="button" class="remove-pending-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Remover</button>
       </div>
     `
-    : `<div class="attachment-actions"><button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">${escapeHtml(actionLabel)}</button></div>`;
+    : deleted
+      ? ''
+      : `<div class="attachment-actions"><button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">${escapeHtml(actionLabel)}</button></div>`;
   return `
     <article class="attachment-card ${warning.level}" data-attachment-id="${escapeAttr(attachment.id)}">
       ${imagePreview || videoPreview}

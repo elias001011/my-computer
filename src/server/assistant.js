@@ -467,6 +467,21 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
 
   const pendingState = pendingMessage.pendingToolApproval || {};
   const approvalToolCalls = pendingState.approvalToolCalls || pendingState.toolCalls || [];
+  if (hasDuplicateToolCallIds(approvalToolCalls) || hasDuplicateToolCallIds(pendingState.toolCalls || [])) {
+    await updateMessage(chatId, messageId, {
+      status: 'incomplete',
+      content: cleanAssistantContent(pendingMessage.content || '').content || 'A aprovação de tool ficou ambígua e foi interrompida.',
+      pendingToolApproval: null,
+      continuationAvailable: true,
+      error: 'Tool calls com IDs duplicados foram detectadas. Use Tentar novamente ou Continuar para refazer com IDs seguros.',
+    });
+    await appendEvent({
+      type: 'tool.approval.invalid_duplicate_ids',
+      chatId,
+      details: { messageId, toolCount: approvalToolCalls.length },
+    });
+    return { chat: await readChat(chatId) };
+  }
   const decisions = { ...(pendingState.decisions || {}) };
   const targetToolCall =
     approvalToolCalls.find((toolCall) => toolCall.id === options.toolCallId) ||
@@ -2113,16 +2128,16 @@ export function normalizeAssistantToolCalls(toolCalls = [], content = '', tools 
   const normalized = (Array.isArray(toolCalls) ? toolCalls : [])
     .map((toolCall, index) => normalizeToolCall(toolCall, index))
     .filter(Boolean);
-  if (normalized.length) return normalized;
+  if (normalized.length) return ensureUniqueToolCallIds(normalized);
 
   const syntheticToolCalls = extractSyntheticToolCalls(content, tools);
-  if (syntheticToolCalls.length) return syntheticToolCalls;
+  if (syntheticToolCalls.length) return ensureUniqueToolCallIds(syntheticToolCalls);
 
   if (getSearchMode(tools) === 'off') return [];
 
   const fakeWebSearchInput = extractFakeWebSearchInput(content);
   if (!fakeWebSearchInput) return [];
-  return [
+  return ensureUniqueToolCallIds([
     {
       id: `synthetic_web_search_${Date.now()}`,
       type: 'function',
@@ -2132,7 +2147,7 @@ export function normalizeAssistantToolCalls(toolCalls = [], content = '', tools 
       },
       synthetic: true,
     },
-  ];
+  ]);
 }
 
 function normalizeToolCall(toolCall, index = 0) {
@@ -2152,6 +2167,33 @@ function normalizeToolCall(toolCall, index = 0) {
       arguments: JSON.stringify(normalizeToolInput(name, parseToolArguments(recovered.arguments || rawArguments))),
     },
   };
+}
+
+function ensureUniqueToolCallIds(toolCalls = []) {
+  const used = new Set();
+  return toolCalls.map((toolCall, index) => {
+    const fallbackId = `tool_call_${Date.now()}_${index}`;
+    const baseId = String(toolCall.id || fallbackId).trim() || fallbackId;
+    let nextId = baseId;
+    let suffix = 2;
+    while (used.has(nextId)) {
+      nextId = `${baseId}_${suffix}`;
+      suffix += 1;
+    }
+    used.add(nextId);
+    return nextId === toolCall.id ? toolCall : { ...toolCall, id: nextId };
+  });
+}
+
+function hasDuplicateToolCallIds(toolCalls = []) {
+  const seen = new Set();
+  for (const toolCall of toolCalls || []) {
+    const id = String(toolCall?.id || '').trim();
+    if (!id) continue;
+    if (seen.has(id)) return true;
+    seen.add(id);
+  }
+  return false;
 }
 
 function extractSyntheticToolCalls(content = '', tools = {}) {
@@ -3217,6 +3259,17 @@ function renderAttachmentsForModel(attachments = []) {
   if (!attachments.length) return '';
   const parts = ['<attachments>'];
   for (const attachment of attachments) {
+    if (attachment.deletedAt || attachment.sendMode === 'deleted') {
+      parts.push(
+        [
+          `## ${attachment.name || 'Anexo removido'}`,
+          `- id: ${attachment.id}`,
+          '- status: removed_by_user',
+          '- content: unavailable',
+        ].join('\n'),
+      );
+      continue;
+    }
     parts.push(
       [
         `## ${attachment.name}`,

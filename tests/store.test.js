@@ -238,11 +238,24 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const removedAttachment = await store.saveAttachment(chat.id, {
     name: 'remove-me.md',
     mimeType: 'text/markdown',
-    dataBase64: Buffer.from('# Remove me\n').toString('base64'),
+    dataBase64: Buffer.from('# Remove me\n\nPRIVATE_TOKEN_123\n').toString('base64'),
   });
+  await store.appendMessages(chat.id, [
+    store.createMessage('user', 'Mensagem com anexo removível.', {
+      attachments: [removedAttachment],
+      status: 'sent',
+    }),
+  ]);
   assert.equal((await store.listAttachments(chat.id)).length, 4);
   await store.deleteAttachment(chat.id, removedAttachment.id);
+  const chatAfterDelete = await store.readChat(chat.id);
   assert.equal((await store.listAttachments(chat.id)).some((item) => item.id === removedAttachment.id), false);
+  assert.doesNotMatch(JSON.stringify(chatAfterDelete.messages), /PRIVATE_TOKEN_123/);
+  const redactedAttachment = chatAfterDelete.messages.flatMap((message) => message.attachments || []).find((item) => item.id === removedAttachment.id);
+  assert.equal(redactedAttachment.sendMode, 'deleted');
+  assert.equal(redactedAttachment.path, undefined);
+  assert.equal(redactedAttachment.extractedText, undefined);
+  assert.equal(redactedAttachment.previewText, undefined);
 
   await assert.rejects(
     () =>
@@ -269,6 +282,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 3);
   assert.equal(exported.chats[0].attachments.some((item) => item.name === 'remove-me.md'), false);
+  assert.doesNotMatch(JSON.stringify(exported.chats[0].messages), /PRIVATE_TOKEN_123/);
   assert.equal(exported.persistentMemoryUserFiles.length, 1);
 
   await store.saveConfig({

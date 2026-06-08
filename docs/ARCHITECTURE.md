@@ -151,10 +151,12 @@ Para saídas longas ou execuções demoradas:
 - `chat_document read` retorna conteúdo cru paginado; `replace` troca um trecho exato; `write` substitui o documento inteiro.
 - Todas as ações de `chat_document` exigem aprovação quando tools automáticas estão desligadas, porque até `list/read` podem revelar conteúdo de anexos ao provider.
 - Edições por `chat_document` atualizam o arquivo, `attachments.json`, previews extraídos e referências do anexo nas mensagens.
+- Ao remover um anexo, o backend apaga a cópia salva e redige snapshots antigos em mensagens; backups e prompts futuros não carregam o conteúdo removido.
 - Imagens só entram como multimodal quando o modelo suporta.
 - Vídeos e áudios ficam como referência com preview local no MVP.
 - PDFs e arquivos complexos ficam anexados com metadados e caminho local.
 - O backend valida limites de tamanho e de quantidade antes de enviar.
+- Tool calls vindas do provider recebem IDs únicos antes de entrar no fluxo de aprovação. Estados antigos com IDs duplicados são interrompidos como inseguros em vez de executar comandos ambíguos.
 
 ## Contexto e memória
 

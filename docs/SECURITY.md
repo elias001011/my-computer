@@ -67,6 +67,7 @@ Boas práticas:
 
 - Memória persistente e memória de chat podem armazenar informação sensível.
 - O arquivo exportado pode incluir chats, anexos e memórias.
+- Anexos removidos têm a cópia local apagada e os snapshots antigos redigidos para não reaparecerem em prompts futuros ou backups.
 - O app faz extração simples de texto, não análise de malware.
 - HTML tem scripts removidos do texto extraído, mas isso não é sandbox completa.
 

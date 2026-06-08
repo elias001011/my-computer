@@ -77,6 +77,33 @@ test('normalizes web_search tool calls and fake tool text', async () => {
   assert.equal(malformedCalls[0].function.name, 'web_search');
   assert.equal(JSON.parse(malformedCalls[0].function.arguments).maxResults, 2);
 
+  const duplicateIdCalls = assistant.normalizeAssistantToolCalls(
+    [
+      {
+        id: 'duplicate-id',
+        type: 'function',
+        function: {
+          name: 'run_terminal_command',
+          arguments: JSON.stringify({ command: 'echo one', returnOutput: true }),
+        },
+      },
+      {
+        id: 'duplicate-id',
+        type: 'function',
+        function: {
+          name: 'run_terminal_command',
+          arguments: JSON.stringify({ command: 'echo two', returnOutput: true }),
+        },
+      },
+    ],
+    '',
+    { terminal: true, searchMode: 'off' },
+  );
+  assert.deepEqual(
+    duplicateIdCalls.map((toolCall) => toolCall.id),
+    ['duplicate-id', 'duplicate-id_2'],
+  );
+
   const disabledCalls = assistant.normalizeAssistantToolCalls([], fakeText, { searchMode: 'off', webSearch: false });
   assert.equal(disabledCalls.length, 0);
 });
@@ -900,6 +927,125 @@ test('approved tool output returns to the model with tools still enabled', async
   }
 });
 
+test('duplicate provider tool call ids are disambiguated before approval', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-duplicate-tool-ids-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  const onePath = path.join(tempDir, 'one.txt');
+  const twoPath = path.join(tempDir, 'two.txt');
+  const commandOne = `${process.execPath} -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(onePath)}, 'one')`)}`;
+  const commandTwo = `${process.execPath} -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(twoPath)}, 'two')`)}`;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      if (calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou rodar dois comandos.',
+                  tool_calls: [
+                    {
+                      id: 'duplicate-id',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command: commandOne, returnOutput: true }),
+                      },
+                    },
+                    {
+                      id: 'duplicate-id',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command: commandTwo, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Comandos concluídos.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-duplicate-tool-ids-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-duplicate-tool-ids-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        searchMode: 'off',
+        alwaysAllow: false,
+        terminalMode: 'standard',
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Duplicate tool ids', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Rode dois comandos.');
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+    assert.deepEqual(
+      pending.assistantMessage.toolUses.map((toolUse) => toolUse.id),
+      ['duplicate-id', 'duplicate-id_2'],
+    );
+
+    const afterFirstApproval = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'duplicate-id',
+    });
+    const awaitingSecond = afterFirstApproval.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(awaitingSecond.status, 'needs_tool_approval');
+    assert.equal(awaitingSecond.toolUses.find((toolUse) => toolUse.id === 'duplicate-id').status, 'approved_pending_execution');
+    assert.equal(awaitingSecond.toolUses.find((toolUse) => toolUse.id === 'duplicate-id_2').status, 'pending_approval');
+    await assert.rejects(() => fs.access(onePath));
+    await assert.rejects(() => fs.access(twoPath));
+    assert.equal(calls.length, 1);
+
+    const afterSecondApproval = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'duplicate-id_2',
+    });
+    const completed = afterSecondApproval.chat.messages.find((message) => message.id === pending.assistantMessage.id);
+    assert.equal(completed.status, 'sent');
+    assert.match(completed.content, /concluídos/i);
+    assert.equal(await fs.readFile(onePath, 'utf8'), 'one');
+    assert.equal(await fs.readFile(twoPath, 'utf8'), 'two');
+    assert.equal(calls.length, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('chat document read requires approval before returning attachment content to provider', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-chat-document-read-approval-'));
   process.env.MY_COMPUTER_HOME = tempDir;
@@ -978,6 +1124,71 @@ test('chat document read requires approval before returning attachment content t
     assert.equal(pending.assistantMessage.toolUses[0].input.action, 'read');
     assert.equal(calls.length, 1);
     assert.doesNotMatch(JSON.stringify(pending.assistantMessage.toolUses[0].result || {}), /secret-token/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('deleted attachment snapshots are redacted from later provider prompts', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-deleted-attachment-provider-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Ok.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-deleted-attachment-provider-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-deleted-attachment-provider-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: false,
+        chatDocuments: true,
+        searchMode: 'off',
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Deleted attachment prompt', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+    const attachment = await store.saveAttachment(chat.id, {
+      name: 'secret.md',
+      mimeType: 'text/markdown',
+      dataBase64: Buffer.from('# Secret\n\nPRIVATE_TOKEN_123\n').toString('base64'),
+    });
+
+    await assistant.sendUserMessage(chat.id, 'Leia o anexo uma vez.', { attachmentIds: [attachment.id] });
+    assert.match(JSON.stringify(calls[0]), /PRIVATE_TOKEN_123/);
+
+    await store.deleteAttachment(chat.id, attachment.id);
+    await assistant.sendUserMessage(chat.id, 'Agora responda sem o anexo.');
+    assert.equal(calls.length, 2);
+    assert.doesNotMatch(JSON.stringify(calls[1]), /PRIVATE_TOKEN_123/);
+    assert.match(JSON.stringify(calls[1]), /removed_by_user/);
   } finally {
     global.fetch = originalFetch;
   }

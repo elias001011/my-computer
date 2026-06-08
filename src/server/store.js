@@ -296,8 +296,8 @@ export async function readChat(id) {
   assertChatId(id);
   const metadata = await readChatMetadata(id);
   const chatDir = getChatDir(id);
-  const messages = await readJson(path.join(chatDir, 'messages.json'), []);
   const attachments = await listAttachments(id);
+  const messages = sanitizeMessagesForAvailableAttachments(await readJson(path.join(chatDir, 'messages.json'), []), attachments);
   const memory = await readText(metadata.paths.memory, '');
   const contextSummary = await readText(metadata.paths.context, '');
   return { ...metadata, messages, attachments, memory, contextSummary };
@@ -875,19 +875,21 @@ export async function replaceTextInAttachment(id, attachmentId, oldText, newText
 
 export async function deleteAttachment(id, attachmentId) {
   const attachmentsPath = getAttachmentsMetadataPath(id);
+  const deletedAt = new Date().toISOString();
   const attachment = await withFileLock(attachmentsPath, async () => {
     const attachments = await readJson(attachmentsPath, []);
     const target = attachments.find((item) => item.id === attachmentId);
     if (!target) return null;
-    await fs.rm(target.path, { force: true });
+    await fs.rm(assertAttachmentPath(id, target.path), { force: true });
     await writeJson(
       attachmentsPath,
       attachments.filter((item) => item.id !== attachmentId),
       0o600,
     );
-    return target;
+    return { ...target, deletedAt };
   });
   if (!attachment) return;
+  await redactDeletedAttachmentReferencesInMessages(id, attachment);
   await touchChat(id);
   await appendEvent({ type: 'chat.attachment.deleted', chatId: id, details: { name: attachment.name } });
 }
@@ -2084,6 +2086,56 @@ async function updateAttachmentReferencesInMessages(id, attachment) {
     });
     if (changed) await writeJson(messagesPath, next, 0o600);
   });
+}
+
+async function redactDeletedAttachmentReferencesInMessages(id, attachment) {
+  const messagesPath = path.join(getChatDir(id), 'messages.json');
+  const redacted = sanitizeDeletedAttachmentSnapshot(attachment);
+  await withFileLock(messagesPath, async () => {
+    const messages = await readJson(messagesPath, []);
+    let changed = false;
+    const next = messages.map((message) => {
+      if (!Array.isArray(message.attachments)) return message;
+      let messageChanged = false;
+      const attachments = message.attachments.map((item) => {
+        if (item.id !== attachment.id) return item;
+        messageChanged = true;
+        return redacted;
+      });
+      if (!messageChanged) return message;
+      changed = true;
+      return { ...message, attachments };
+    });
+    if (changed) await writeJson(messagesPath, next, 0o600);
+  });
+}
+
+function sanitizeMessagesForAvailableAttachments(messages = [], attachments = []) {
+  const activeAttachmentIds = new Set((attachments || []).map((attachment) => attachment.id).filter(Boolean));
+  return (messages || []).map((message) => {
+    if (!Array.isArray(message.attachments) || !message.attachments.length) return message;
+    let changed = false;
+    const messageAttachments = message.attachments.map((attachment) => {
+      if (!attachment?.id || activeAttachmentIds.has(attachment.id) || attachment.deletedAt) return attachment;
+      changed = true;
+      return sanitizeDeletedAttachmentSnapshot(attachment);
+    });
+    return changed ? { ...message, attachments: messageAttachments } : message;
+  });
+}
+
+function sanitizeDeletedAttachmentSnapshot(attachment = {}) {
+  return {
+    id: String(attachment.id || ''),
+    name: String(attachment.name || 'Anexo removido'),
+    mimeType: String(attachment.mimeType || 'application/octet-stream'),
+    size: Number(attachment.size || 0),
+    kind: attachment.kind || classifyAttachment(String(attachment.mimeType || ''), String(attachment.name || '')),
+    sendMode: 'deleted',
+    extractionStatus: 'deleted',
+    extractionNote: 'Anexo removido pelo usuário. Conteúdo e caminho local foram apagados.',
+    deletedAt: attachment.deletedAt || new Date().toISOString(),
+  };
 }
 
 function classifyAttachment(mimeType, name) {
