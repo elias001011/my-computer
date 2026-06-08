@@ -277,7 +277,7 @@ O app tem estes modos de pesquisa web:
 
 `Web nativa` usa o provider quando a API suporta busca.
 `Terminal` usa a tool `web_search` para fazer uma consulta pública via DuckDuckGo Lite/HTML a partir do computador local; isso não é `run_terminal_command`, `curl`, `grep` nem busca em arquivos locais.
-`Ambos` tenta a rota nativa primeiro e cai para essa busca web via terminal.
+`Ambos` tenta a rota nativa primeiro e cai para essa busca web via terminal; por isso também pede aprovação quando a execução automática de tools está desligada.
 
 No modo offline da seção, `Web nativa` e `Ambos` ficam indisponíveis. Use `Terminal` apenas se aceitar uma consulta web neutra e sem dados privados.
 

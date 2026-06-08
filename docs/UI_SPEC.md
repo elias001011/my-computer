@@ -160,6 +160,7 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 
 - Busca web pode ser `nativa`, `terminal`, `ambos` ou `desligada`.
 - Busca web `terminal` é a própria tool `web_search` fazendo consulta pública via DuckDuckGo Lite/HTML; não deve aparecer como `run_terminal_command`, `curl`, `grep` ou busca em arquivos locais.
+- Busca web `ambos` pede aprovação quando tools automáticas estão desligadas, porque pode cair para a busca terminal depois de falha ou ausência de resultados na rota nativa.
 - Terminal local pode ser `sem restricoes` ou `isolamento leve`.
 - Tools locais podem exigir aprovação manual ou ficar em sempre permitir.
 - A UI mostra no chat apenas a decisão/estado principal da tool; detalhes de requests pendentes, permitidas, negadas, timeout, exit code e erro ficam no modal de detalhes.

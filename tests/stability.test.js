@@ -210,6 +210,84 @@ test('xai native search keeps response citations as sources', async () => {
   }
 });
 
+test('web search both mode asks approval before possible terminal fallback', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-web-search-both-approval-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : {};
+    calls.push({ url: String(url), body });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'Vou buscar uma fonte pública.',
+              tool_calls: [
+                {
+                  id: 'search-call-1',
+                  type: 'function',
+                  function: {
+                    name: 'web_search',
+                    arguments: JSON.stringify({
+                      query: 'banda Trueblood',
+                      reason: 'Pesquisar informação pública.',
+                      maxResults: 5,
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: {},
+      }),
+    };
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-both-search-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-both-search-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite',
+      tools: {
+        webSearch: true,
+        searchMode: 'both',
+        searchTerminal: true,
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        gemini: {
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+      setupComplete: true,
+    });
+    const chat = await store.createChat('Both search approval', {
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite',
+    });
+
+    const result = await assistant.sendUserMessage(chat.id, 'pesquise a banda Trueblood');
+    assert.equal(result.awaitingApproval, true);
+    assert.equal(result.assistantMessage.status, 'needs_tool_approval');
+    assert.equal(result.assistantMessage.toolUses[0].name, 'web_search');
+    assert.equal(result.assistantMessage.toolUses[0].status, 'pending_approval');
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /chat\/completions/);
+    assert.doesNotMatch(calls.map((call) => call.url).join('\n'), /generateContent|duckduckgo/i);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('offline mode blocks online providers and native search', async () => {
   const providerClient = await import(`../src/server/provider-client.js?test=${Date.now()}-offline`);
   const config = {

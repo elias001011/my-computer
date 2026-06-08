@@ -2333,8 +2333,7 @@ function toolRequiresApproval(toolCall, config = {}) {
   }
   if (name === 'web_search') {
     const searchMode = getSearchMode(config.tools);
-    if (searchMode === 'terminal') return true;
-    if (searchMode === 'both' && !nativeSearchSupported(config.provider)) return true;
+    if (searchMode === 'terminal' || searchMode === 'both') return true;
   }
   return false;
 }
