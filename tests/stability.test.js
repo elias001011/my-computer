@@ -146,6 +146,51 @@ test('bootstrap does not create a ghost chat when no chat exists', async () => {
   }
 });
 
+test('chat pdf attachment upload succeeds and oversize upload returns json error', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-pdf-upload-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const store = await import(`../src/server/store.js?test=${Date.now()}`);
+  const serverModule = await import(`../src/server/server.js?test=${Date.now()}`);
+  await store.ensureRuntime();
+  await store.saveConfig({ setupComplete: true });
+  const chat = await store.createChat('PDF upload');
+  const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+  try {
+    const smallPdf = await fetch(`${url}/api/chats/${chat.id}/attachments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-My-Computer-Request': 'panel',
+      },
+      body: JSON.stringify({
+        name: 'manual.pdf',
+        mimeType: 'application/pdf',
+        dataBase64: Buffer.from('%PDF fake bytes').toString('base64'),
+      }),
+    });
+    assert.equal(smallPdf.status, 201);
+    const smallData = await smallPdf.json();
+    assert.equal(smallData.attachment.kind, 'pdf');
+    assert.equal(smallData.attachment.sendMode, 'reference');
+
+    const oversizePdf = await fetch(`${url}/api/chats/${chat.id}/attachments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-My-Computer-Request': 'panel',
+      },
+      body: `{"name":"huge.pdf","mimeType":"application/pdf","dataBase64":"${'A'.repeat(33 * 1024 * 1024)}"}`,
+    });
+    assert.equal(oversizePdf.status, 413);
+    assert.match(oversizePdf.headers.get('content-type') || '', /application\/json/);
+    const oversizeData = await oversizePdf.json();
+    assert.match(oversizeData.error, /Payload muito grande/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('offline partial chat metadata update preserves chat model', async () => {
   const script = String.raw`
     import assert from 'node:assert/strict';

@@ -548,11 +548,25 @@ pre {
   width: 100%;
 }
 
+.details-selected-output {
+  background: var(--bg);
+  white-space: normal;
+  width: 100%;
+}
+
 .message.assistant .bubble p {
   margin: 0 0 10px;
 }
 
+.details-selected-output p {
+  margin: 0 0 10px;
+}
+
 .message.assistant .bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.details-selected-output p:last-child {
   margin-bottom: 0;
 }
 

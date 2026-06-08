@@ -56,6 +56,7 @@ const CONTENT_TYPES = {
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const PANEL_REQUEST_HEADER = 'panel';
 const CHAT_EVENT_DETAIL_LIMIT = 10000;
+const CHAT_ATTACHMENT_BODY_LIMIT = 32 * 1024 * 1024;
 
 let currentLaunch = { port: null, requestedHost: null, actualHost: null };
 
@@ -339,7 +340,7 @@ async function handleChatsApi(request, response, parts) {
   }
 
   if (method === 'POST' && chatId && parts[3] === 'attachments' && parts.length === 4) {
-    const body = await readBody(request, { limit: 30_000_000 });
+    const body = await readBody(request, { limit: CHAT_ATTACHMENT_BODY_LIMIT });
     const attachment = await saveAttachment(chatId, body);
     sendJson(response, 201, {
       attachment,
@@ -367,7 +368,7 @@ async function handleChatsApi(request, response, parts) {
   }
 
   if (method === 'PUT' && chatId && parts[3] === 'attachments' && parts[5] === 'text') {
-    const body = await readBody(request, { limit: 30_000_000 });
+    const body = await readBody(request, { limit: CHAT_ATTACHMENT_BODY_LIMIT });
     const update = await writeAttachmentTextContent(chatId, parts[4], body.content || '');
     sendJson(response, 200, {
       attachment: update.attachment,
@@ -749,13 +750,20 @@ async function serveStatic(response, requestPath) {
 async function readBody(request, options = {}) {
   const limit = options.limit || 1_000_000;
   let raw = '';
+  let tooLarge = false;
   for await (const chunk of request) {
+    if (tooLarge) continue;
     raw += chunk.toString();
     if (raw.length > limit) {
-      const error = new Error('Payload muito grande.');
-      error.statusCode = 413;
-      throw error;
+      tooLarge = true;
+      raw = '';
     }
+  }
+
+  if (tooLarge) {
+    const error = new Error('Payload muito grande.');
+    error.statusCode = 413;
+    throw error;
   }
 
   if (!raw) return {};

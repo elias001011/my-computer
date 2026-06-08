@@ -60,6 +60,7 @@ const state = {
 const CUSTOM_MODEL_VALUE = '__custom__';
 const DEFAULT_UI_LANGUAGE = 'en-US';
 const SUPPORTED_UI_LANGUAGES = ['en-US', 'pt-BR'];
+const MAX_CHAT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 const EN_TEXT = new Map([
   ['Tour inicial', 'Initial tour'],
@@ -3470,7 +3471,7 @@ function renderMessageDetailsModal() {
                 ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
               </div>
               ${renderThinkingBlock(getMessageThinking(selectedAttempt))}
-              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">
+              <div class="bubble assistant details-selected-output ${escapeAttr(selectedAttempt.status || '')}">
                 ${renderMessageSources(selectedSources)}
                 ${formatContent(getVisibleMessageContent(selectedAttempt, { stripSources: selectedSources.length > 0 }), 'assistant')}
               </div>
@@ -4716,6 +4717,11 @@ async function uploadSelectedFiles(event) {
   for (const file of files) {
     if (!isSupportedUpload(file)) {
       state.error = `Formato ainda não compatível: ${file.name}. Envie imagens, vídeo, áudio, PDF, texto, código, JSON, CSV, HTML, XML, YAML ou Markdown.`;
+      renderPreservingVisualState();
+      continue;
+    }
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      state.error = `${file.name} é grande demais (${formatBytes(file.size)}). Limite atual: ${formatBytes(MAX_CHAT_ATTACHMENT_BYTES)} por arquivo.`;
       renderPreservingVisualState();
       continue;
     }
@@ -6750,15 +6756,20 @@ function renderPreservingVisualState() {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    method: options.method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-My-Computer-Request': 'panel',
-      ...(state.activeProfile?.id ? { 'X-Profile-Id': state.activeProfile.id } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-My-Computer-Request': 'panel',
+        ...(state.activeProfile?.id ? { 'X-Profile-Id': state.activeProfile.id } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    throw new Error(`Falha de rede ao falar com o servidor local. Verifique se o My Computer ainda está rodando e tente de novo. ${error.message || ''}`.trim());
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || `HTTP ${response.status}`);
