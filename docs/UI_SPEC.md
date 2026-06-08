@@ -62,7 +62,7 @@ Se o provider for Ollama, o setup mostra um bloco próprio com:
 - O chat mostra só a tentativa mais recente de cada grupo; tentativas antigas ficam no modal `Ver detalhes`.
 - `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
 - `Continuar` retoma a partir da última saída parcial e mostra a nova tentativa no mesmo grupo.
-- Durante uma execução, o botão de enviar vira `Parar`; ele interrompe o agente no servidor, mantém o histórico parcial e marca a tentativa como incompleta.
+- Durante uma execução, o botão de enviar vira `Parar`; ele interrompe o agente no servidor, mantém o histórico parcial e marca a tentativa como incompleta. Se a finalização não terminar imediatamente, a UI mostra que a interrupção foi solicitada e aguarda salvar a tentativa.
 - `Ver detalhes` abre um modal com o processo salvo, timeline aberta de saídas da IA/tools e a janela de eventos carregados relacionada à tentativa.
 - `Copiar eventos` copia os eventos carregados do chat para auditoria ou debug.
 - O modelo ativo aparece no cabeçalho.
@@ -159,6 +159,7 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 ## Search e tools
 
 - Busca web pode ser `nativa`, `terminal`, `ambos` ou `desligada`.
+- Busca web `terminal` é a própria tool `web_search` fazendo consulta pública via DuckDuckGo Lite/HTML; não deve aparecer como `run_terminal_command`, `curl`, `grep` ou busca em arquivos locais.
 - Terminal local pode ser `sem restricoes` ou `isolamento leve`.
 - Tools locais podem exigir aprovação manual ou ficar em sempre permitir.
 - A UI mostra no chat apenas a decisão/estado principal da tool; detalhes de requests pendentes, permitidas, negadas, timeout, exit code e erro ficam no modal de detalhes.

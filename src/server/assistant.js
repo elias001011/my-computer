@@ -75,9 +75,12 @@ export async function stopChatRun(chatId, options = {}) {
       startedAt: activeRun.startedAt,
     },
   });
+  const waitMs = clampStopWaitMs(options.waitMs);
+  const settled = await waitForRunSettle(activeRun.promise, waitMs);
   return {
     stopped: true,
     operation: activeRun.operation,
+    settled,
     message: 'Solicitação de interrupção enviada.',
   };
 }
@@ -214,6 +217,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         if (assistantOutcome) break;
         if (!approvalToolCalls.length) continue;
 
+        throwIfStopped(operationSignal);
         if (chatBefore.title === 'Novo chat' && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
           await updateChatMetadata(chatId, { title: titleSeed });
         }
@@ -357,6 +361,8 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         });
   }
 
+  assistantOutcome = applyStoppedOutcomeIfRequested(assistantOutcome, operationSignal);
+
   if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat') && titleSeed) {
     await updateChatMetadata(chatId, { title: titleSeed });
   }
@@ -406,7 +412,10 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
-  const autoCompact = await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
+  const autoCompact =
+    assistantOutcome.finishReason === 'stopped_by_user'
+      ? null
+      : await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory, { signal: operationSignal });
 
   return {
     userMessage,
@@ -578,6 +587,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
       const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
       const cleanedPendingContent = cleanAssistantContent(pendingMessage.content || '');
+      throwIfStopped(operationSignal);
       await finalizeApprovedToolMessage({
         chatId,
         messageId,
@@ -625,6 +635,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       signal: operationSignal,
     });
     if (followup.awaitingApproval) return { chat: await readChat(chatId) };
+    throwIfStopped(operationSignal);
     await finalizeApprovedToolMessage({
       chatId,
       messageId,
@@ -716,7 +727,9 @@ async function finalizeApprovedToolMessage({
   const updatedChat = await readChat(chatId);
   const latestPersistentMemory = await readPersistentMemory();
   await saveCurrentContextWindow(chatId, buildContextWindowMarkdown(updatedChat, effectiveConfig, latestPersistentMemory));
-  await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory);
+  if (outcome.finishReason !== 'stopped_by_user') {
+    await maybeAutoCompactChat(chatId, updatedChat, effectiveConfig, latestPersistentMemory, { signal: effectiveConfig.signal });
+  }
   await appendEvent({
     type: status === 'sent' ? 'chat.message.completed' : status === 'incomplete' ? 'chat.message.incomplete' : 'chat.message.failed',
     chatId,
@@ -755,13 +768,17 @@ async function withActiveChatRun(chatId, operation, action) {
     throw error;
   }
   const controller = new AbortController();
-  activeChatRuns.set(key, {
+  const activeRun = {
     controller,
     operation,
     startedAt: new Date().toISOString(),
-  });
+    promise: null,
+  };
+  activeChatRuns.set(key, activeRun);
+  const run = Promise.resolve().then(() => action(controller.signal));
+  activeRun.promise = run;
   try {
-    return await action(controller.signal);
+    return await run;
   } finally {
     const activeRun = activeChatRuns.get(key);
     if (activeRun?.controller === controller) activeChatRuns.delete(key);
@@ -783,6 +800,21 @@ async function withChatTurnLock(chatId, action) {
   } finally {
     if (chatTurnLocks.get(key) === run) chatTurnLocks.delete(key);
   }
+}
+
+async function waitForRunSettle(promise, waitMs) {
+  if (!promise || waitMs <= 0) return false;
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(false), waitMs));
+  const settled = Promise.resolve(promise)
+    .then(() => true)
+    .catch(() => true);
+  return Promise.race([settled, timeout]);
+}
+
+function clampStopWaitMs(value) {
+  const numeric = Number(value ?? 1200);
+  if (!Number.isFinite(numeric)) return 1200;
+  return Math.min(Math.max(Math.round(numeric), 0), 5000);
 }
 
 function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages, config, options = {}) {
@@ -891,6 +923,7 @@ async function continueAssistantToolLoop({
     const cleanedContent = cleanAssistantContent(assistantMessage.content || '');
     currentThinking = mergeThinkingSections(currentThinking, cleanedContent.thinking);
     if (!toolCalls.length) {
+      throwIfStopped(signal);
       const finalStatus = isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent';
       return {
         outcome: {
@@ -940,6 +973,7 @@ async function continueAssistantToolLoop({
       }
 
       if (approvalToolCalls.length) {
+        throwIfStopped(signal);
         const pendingToolUses = [...toolUses, ...approvalToolCalls.map((toolCall) => createPendingApprovalToolUse(toolCall))];
         await updateMessage(chatId, messageId, {
           status: 'needs_tool_approval',
@@ -1006,6 +1040,7 @@ async function continueAssistantToolLoop({
     }
 
     if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
+      throwIfStopped(signal);
       return {
         outcome: {
           status: 'sent',
@@ -1023,6 +1058,7 @@ async function continueAssistantToolLoop({
     }
   }
 
+  throwIfStopped(signal);
   return {
     outcome: {
       status: 'incomplete',
@@ -1141,6 +1177,12 @@ function buildStoppedOutcome(thinking = '') {
     continuationAvailable: true,
     error: 'Interrompido pelo usuário.',
   };
+}
+
+function applyStoppedOutcomeIfRequested(outcome, signal) {
+  if (!signal?.aborted) return outcome;
+  if (outcome?.finishReason === 'stopped_by_user') return outcome;
+  return buildStoppedOutcome(outcome?.thinking);
 }
 
 function createAssistantTraceEntry(assistantMessage, toolCalls = [], round = 1, phase = 'tool_round') {
@@ -1464,6 +1506,7 @@ async function saveUserMessageForRequest(chatId, chat, content, retryMessageId, 
 }
 
 export async function compactChat(chatId, options = {}) {
+  throwIfStopped(options.signal);
   const config = await loadConfig();
   const chat = await readChat(chatId);
   const persistentMemory = await readPersistentMemory();
@@ -1496,7 +1539,9 @@ export async function compactChat(chatId, options = {}) {
       },
     ],
     chatId,
+    signal: options.signal,
   });
+  throwIfStopped(options.signal);
 
   const summary = response.content || '# Context summary\n\nNenhum resumo retornado.';
   const updatedChat = await writeContextSummary(chatId, summary);
@@ -1541,7 +1586,8 @@ export async function saveContextWindow(chatId) {
   return { path, chat: await readChat(chatId) };
 }
 
-async function maybeAutoCompactChat(chatId, chat, config, persistentMemory) {
+async function maybeAutoCompactChat(chatId, chat, config, persistentMemory, options = {}) {
+  throwIfStopped(options.signal);
   const settings = config.context || {};
   if (!settings.autoCompactEnabled) return null;
   const messageCount = chat.messages?.length || 0;
@@ -1561,9 +1607,11 @@ async function maybeAutoCompactChat(chatId, chat, config, persistentMemory) {
       threshold: settings.autoCompactChars,
     },
   });
+  throwIfStopped(options.signal);
   return compactChat(chatId, {
     automatic: true,
     reason: `context window reached ${contextWindow.length} chars`,
+    signal: options.signal,
   });
 }
 
@@ -1664,7 +1712,7 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
     'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
     'If you cannot finish cleanly, do not pretend the answer is complete. Stop with the best partial state you have; the UI will keep that attempt and expose a Continue action.',
     config.tools?.terminal
-      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
+      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Do not use terminal commands as a substitute for public web search: grep, find, rg, ls, cat, browser caches, local files, and /home searches inspect the user machine, not the internet. Do not run broad recursive searches across /home, the user profile, or filesystem root unless the user explicitly asked for a local-file search and gave a narrow scope; ask for a path or use a targeted command instead. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
     config.provider === 'ollama'
       ? 'Current provider is Ollama/local. Do not ask for an API key for this provider. If the model is missing or Ollama seems unavailable, explain the local daemon/model step clearly and use available Ollama status/model-management UI assumptions before suggesting terminal commands.'
@@ -1685,7 +1733,7 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
       : 'The user disabled automatic tool execution. The app may ask the user to approve a tool before it actually runs.',
     'For every tool call, set returnOutput to true only when you need the tool result to continue reasoning. Use returnOutput false for pure side effects such as rename_chat, successful memory writes, or compacting when you do not need the summary.',
     getSearchMode(config.tools) !== 'off'
-      ? `Use web_search when current, time-sensitive, source-backed, legal/medical/financial, schedule, price, documentation, or news information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means local terminal search, and both means native first with terminal fallback when the native search fails or returns no results. Do not use web_search for purely local app state, files, or memories; use the local tools for those. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used.`
+      ? `Use web_search when current, time-sensitive, source-backed, legal/medical/financial, schedule, price, documentation, or news information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means the web_search tool runs a terminal-backed public DuckDuckGo query, and both means native first with that web_search terminal fallback when native search fails or returns no results. Terminal search mode does not mean you should call run_terminal_command. Do not use web_search for purely local app state, files, or memories; use the local tools for those. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used. If web_search fails, is rate-limited, or returns no public results, do not switch to run_terminal_command, grep, find, rg, or local filesystem searches unless the user explicitly asked to search local files. Instead, say the web search failed or found no reliable public sources and ask for another query/provider if needed.`
       : 'Web search is disabled by user settings.',
     config.privacy?.offlineMode && getSearchMode(config.tools) !== 'off'
       ? 'Offline search privacy rule: if web_search is enabled, use only terminal-backed search and write neutral, generic queries. Never include user text verbatim, names, secrets, local paths, code snippets, private project names, memory contents, chat details, or terminal output in a web search query. If a useful query would reveal private context, ask the user to approve or provide a sanitized query.'
@@ -1876,7 +1924,7 @@ async function executeToolCall(chatId, toolCall, config = {}) {
   }
 
   if (name === 'compact_context') {
-    return executeCompactContextToolCall(chatId, toolCall.id, input);
+    return executeCompactContextToolCall(chatId, toolCall.id, input, config);
   }
 
   if (name === 'rename_chat') {
@@ -1992,8 +2040,8 @@ async function executeRenameChatToolCall(chatId, toolCallId, input) {
   };
 }
 
-async function executeCompactContextToolCall(chatId, toolCallId, input) {
-  const compacted = await compactChat(chatId);
+async function executeCompactContextToolCall(chatId, toolCallId, input, config = {}) {
+  const compacted = await compactChat(chatId, { signal: config.signal });
   await appendEvent({
     type: 'tool.compact_context',
     chatId,
@@ -2367,11 +2415,11 @@ function renderToolFailureMessage(toolUse) {
     return `A tool ${toolUse.name} falhou: ${toolUse.result?.error || 'erro desconhecido'}`;
   }
   return [
-    'A busca web nativa falhou antes de retornar fontes.',
+    'A busca web falhou antes de retornar fontes confiáveis.',
     '',
     `Erro: ${toolUse.result?.error || 'erro desconhecido'}`,
     '',
-    'Você pode tentar novamente em alguns segundos, trocar para Pesquisa via terminal ou usar o modo Ambos para fallback automático.',
+    'Você pode tentar novamente em alguns segundos, trocar o modo de pesquisa ou reformular a consulta.',
   ].join('\n');
 }
 

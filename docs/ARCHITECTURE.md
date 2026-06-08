@@ -81,7 +81,7 @@ Quando uma resposta falha ou para no meio:
 - o grupo da tentativa recebe um `continuationGroupId`
 - o painel mostra `Tentar novamente` e `Continuar`
 - o backend aceita apenas um envio/retry/continue em andamento por chat e bloqueia retry/continue em tentativa superseded
-- `/api/chats/:id/stop` aborta a execução ativa do chat; provider calls e terminal recebem o sinal quando possível, e a tentativa fica incompleta com `finishReason: stopped_by_user`
+- `/api/chats/:id/stop` aborta a execução ativa do chat; provider calls, terminal e compactação recebem o sinal quando possível, e a tentativa fica incompleta com `finishReason: stopped_by_user`
 - o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
 - falhas reais de tool, timeout e signal mantêm a tentativa como incompleta ou falha; exit code de terminal diferente de zero só interrompe automaticamente quando a IA não pediu `returnOutput: true`
 

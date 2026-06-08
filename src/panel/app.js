@@ -4312,10 +4312,15 @@ async function stopActiveAgent() {
       state.activeChat = data.chat || state.activeChat;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
     }
-    state.status = data.message || (data.stopped ? 'Interrupção solicitada.' : 'Nenhuma execução em andamento.');
+    state.status = data.stopped
+      ? data.settled
+        ? 'Execução interrompida.'
+        : 'Interrupção solicitada. Salvando tentativa interrompida...'
+      : data.message || 'Nenhuma execução em andamento.';
   } catch (error) {
     state.error = error.message;
   } finally {
+    state.stopInFlight = false;
     renderPreservingVisualState();
   }
 }

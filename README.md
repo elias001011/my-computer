@@ -276,8 +276,8 @@ O app tem estes modos de pesquisa web:
 - `Desligado`
 
 `Web nativa` usa o provider quando a API suporta busca.
-`Terminal` usa o computador local.
-`Ambos` tenta a rota nativa primeiro e cai para o terminal.
+`Terminal` usa a tool `web_search` para fazer uma consulta pública via DuckDuckGo Lite/HTML a partir do computador local; isso não é `run_terminal_command`, `curl`, `grep` nem busca em arquivos locais.
+`Ambos` tenta a rota nativa primeiro e cai para essa busca web via terminal.
 
 No modo offline da seção, `Web nativa` e `Ambos` ficam indisponíveis. Use `Terminal` apenas se aceitar uma consulta web neutra e sem dados privados.
 
@@ -320,7 +320,7 @@ O painel mostra:
 
 - `Tentar novamente`: reenvia a solicitação original desde o início.
 - `Continuar`: retoma a partir da última saída parcial e do histórico da tentativa.
-- `Parar`: durante uma execução, o botão de enviar vira parar e solicita interrupção do agente; a tentativa fica incompleta e pode ser continuada.
+- `Parar`: durante uma execução, o botão de enviar vira parar e solicita interrupção do agente; provider, terminal e compactação recebem o cancelamento quando possível, e a tentativa fica incompleta para poder ser continuada.
 - `Ver detalhes`: abre um modal com o processo, timeline de saídas intermediárias/finais, tool calls e eventos relacionados daquela tentativa.
 - `Copiar eventos`: copia os eventos carregados do chat para análise ou auditoria.
 

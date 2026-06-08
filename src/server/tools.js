@@ -9,7 +9,7 @@ export const terminalToolDefinition = {
   function: {
     name: 'run_terminal_command',
     description:
-      'Run a shell command on the user machine. Use this before the final answer when local files, terminal state, or host actions are needed.',
+      'Run a shell command on the user machine. Use this before the final answer when local files, terminal state, or host actions are needed. Do not use this as a substitute for public web search; local commands such as grep/find/rg search the user machine, not the web.',
     parameters: {
       type: 'object',
       properties: {
@@ -39,7 +39,7 @@ export const webSearchToolDefinition = {
   function: {
     name: 'web_search',
     description:
-      'Search the public web when current information, source-backed answers, links, prices, schedules, or recent documentation matter. Return sources and cite them in the final answer.',
+      'Search the public web when current information, source-backed answers, links, prices, schedules, or recent documentation matter. This is the supported public web search path; do not use run_terminal_command, curl, grep, find, or rg as a substitute. Return sources and cite them in the final answer.',
     parameters: {
       type: 'object',
       properties: {
@@ -390,7 +390,7 @@ export async function runWebSearch(query, options = {}) {
   if (!cleanQuery) {
     return {
       query: cleanQuery,
-      method: 'terminal-duckduckgo-html',
+      method: 'terminal-duckduckgo-lite',
       results: [],
       error: 'query is required',
     };
@@ -398,30 +398,149 @@ export async function runWebSearch(query, options = {}) {
 
   const queryBase64 = Buffer.from(cleanQuery, 'utf8').toString('base64');
   const command = `python3 - <<'PY'
-import base64, html, json, re, urllib.parse, urllib.request
+import base64, html, json, re, sys, urllib.parse, urllib.request
 query = base64.b64decode('${queryBase64}').decode('utf-8')
-url = 'https://duckduckgo.com/html/?q=' + urllib.parse.quote(query)
-request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 MyComputer/0.1'})
-with urllib.request.urlopen(request, timeout=20) as response:
-    page = response.read().decode('utf-8', 'replace')
-items = []
-for match in re.finditer(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.S):
-    href = html.unescape(match.group(1))
-    title = re.sub('<[^>]+>', ' ', match.group(2))
-    title = html.unescape(re.sub(r'\\s+', ' ', title)).strip()
-    snippet = ''
-    block = page[match.end():match.end()+1600]
-    snippet_match = re.search(r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>', block, re.S)
-    if snippet_match:
-        snippet = html.unescape(re.sub('<[^>]+>', ' ', snippet_match.group(1)))
-        snippet = re.sub(r'\\s+', ' ', snippet).strip()
-    if href.startswith('//duckduckgo.com/l/?uddg='):
-        parsed = urllib.parse.urlparse('https:' + href)
-        href = urllib.parse.unquote(urllib.parse.parse_qs(parsed.query).get('uddg', [''])[0]) or href
-    items.append({'title': title, 'url': href, 'snippet': snippet})
-    if len(items) >= ${maxResults}:
-        break
-print(json.dumps({'query': query, 'method': 'terminal-duckduckgo-html', 'results': items}, ensure_ascii=False))
+max_results = ${maxResults}
+headers = {
+    'User-Agent': 'Mozilla/5.0 MyComputer/0.1',
+    'Accept': 'text/html,application/xhtml+xml',
+}
+query_variants = [query]
+dequoted_query = re.sub(r'["“”]+', '', query).strip()
+if dequoted_query and dequoted_query != query:
+    query_variants.append(dequoted_query)
+
+def search_endpoints(active_query):
+    encoded_query = urllib.parse.quote(active_query)
+    return [
+        ('https://lite.duckduckgo.com/lite/?q=' + encoded_query, 'terminal-duckduckgo-lite', 'lite'),
+        ('https://duckduckgo.com/lite/?q=' + encoded_query, 'terminal-duckduckgo-lite', 'lite'),
+        ('https://html.duckduckgo.com/html/?q=' + encoded_query, 'terminal-duckduckgo-html', 'html'),
+    ]
+
+def clean_text(value):
+    value = re.sub(r'<[^>]+>', ' ', value or '')
+    value = html.unescape(value)
+    return re.sub(r'\\s+', ' ', value).strip()
+
+def anchor_attributes(anchor):
+    start = re.match(r'<a\\b([^>]*)>', anchor, re.I | re.S)
+    attrs = {}
+    if not start:
+        return attrs
+    for name, quote, value in re.findall(r'([\\w:-]+)\\s*=\\s*([\\'"])(.*?)\\2', start.group(1), re.S):
+        attrs[name.lower()] = html.unescape(value)
+    return attrs
+
+def decode_duckduckgo_href(href):
+    href = html.unescape(href or '').strip()
+    if href.startswith('//'):
+        href = 'https:' + href
+    elif href.startswith('/l/?'):
+        href = 'https://duckduckgo.com' + href
+    parsed = urllib.parse.urlparse(href)
+    if parsed.netloc.endswith('duckduckgo.com') and parsed.path.startswith('/l/'):
+        uddg = urllib.parse.parse_qs(parsed.query).get('uddg', [''])[0]
+        if uddg:
+            return urllib.parse.unquote(uddg)
+    return href
+
+def append_unique(items, seen, title, href, snippet):
+    url = decode_duckduckgo_href(href)
+    if not title or not url.startswith(('http://', 'https://')) or url in seen:
+        return
+    seen.add(url)
+    items.append({'title': title, 'url': url, 'snippet': snippet})
+
+def parse_lite(page):
+    items = []
+    seen = set()
+    for match in re.finditer(r'<a\\b[^>]*>.*?</a>', page, re.I | re.S):
+        anchor = match.group(0)
+        attrs = anchor_attributes(anchor)
+        href = attrs.get('href', '')
+        css_class = attrs.get('class', '')
+        if 'result-link' not in css_class and '/l/?' not in href and 'uddg=' not in href:
+            continue
+        title = clean_text(anchor)
+        block = page[match.end():match.end() + 2200]
+        snippet = ''
+        snippet_match = re.search(r'<td[^>]+class=[\\'"][^\\'"]*result-snippet[^\\'"]*[\\'"][^>]*>(.*?)</td>', block, re.I | re.S)
+        if snippet_match:
+            snippet = clean_text(snippet_match.group(1))
+        append_unique(items, seen, title, href, snippet)
+        if len(items) >= max_results:
+            break
+    return items
+
+def parse_html(page):
+    items = []
+    seen = set()
+    for match in re.finditer(r'<a\\b[^>]*>.*?</a>', page, re.I | re.S):
+        anchor = match.group(0)
+        attrs = anchor_attributes(anchor)
+        if 'result__a' not in attrs.get('class', ''):
+            continue
+        href = attrs.get('href', '')
+        title = clean_text(anchor)
+        block = page[match.end():match.end() + 1800]
+        snippet = ''
+        snippet_match = re.search(r'<a[^>]+class=[\\'"][^\\'"]*result__snippet[^\\'"]*[\\'"][^>]*>(.*?)</a>', block, re.I | re.S)
+        if snippet_match:
+            snippet = clean_text(snippet_match.group(1))
+        append_unique(items, seen, title, href, snippet)
+        if len(items) >= max_results:
+            break
+    return items
+
+def page_looks_blocked(status, page):
+    page_lower = (page or '').lower()
+    return (
+        status == 202
+        or 'anomaly.js' in page_lower
+        or 'unfortunately, bots use duckduckgo too' in page_lower
+        or 'duckduckgo search temporarily unavailable' in page_lower
+    )
+
+attempts = []
+for active_query in query_variants:
+    for url, method, parser in search_endpoints(active_query):
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=20) as response:
+                status = getattr(response, 'status', response.getcode())
+                page = response.read().decode('utf-8', 'replace')
+            items = parse_lite(page) if parser == 'lite' else parse_html(page)
+            blocked = page_looks_blocked(status, page)
+            attempts.append({
+                'query': active_query,
+                'method': method,
+                'status': status,
+                'resultCount': len(items),
+                'blocked': blocked,
+            })
+            if items:
+                print(json.dumps({
+                    'query': query,
+                    'queryUsed': active_query,
+                    'method': method,
+                    'results': items,
+                    'attempts': attempts,
+                }, ensure_ascii=False))
+                sys.exit(0)
+        except Exception as exc:
+            attempts.append({'query': active_query, 'method': method, 'error': str(exc)})
+
+blocked = any(attempt.get('blocked') for attempt in attempts)
+print(json.dumps({
+    'query': query,
+    'method': attempts[0]['method'] if attempts else 'terminal-duckduckgo-lite',
+    'results': [],
+    'attempts': attempts,
+    'blocked': blocked,
+    'rateLimited': blocked,
+    'error': 'DuckDuckGo bloqueou ou limitou temporariamente a busca web terminal.' if blocked else 'DuckDuckGo nao retornou resultados publicos pela busca web terminal.',
+}, ensure_ascii=False))
 PY`;
 
   const terminalResult = await runTerminalCommand(command, {
