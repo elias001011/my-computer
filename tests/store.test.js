@@ -270,6 +270,15 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   ]);
   await store.writeContextSummary(chat.id, '# Contexto\n\nPRIVATE_TOKEN_123\n');
   await store.saveCurrentContextWindow(chat.id, '# Janela\n\nPRIVATE_TOKEN_123\n');
+  await store.appendEvent({
+    type: 'tool.run_terminal_command.completed',
+    chatId: chat.id,
+    details: {
+      command: `cat ${removedAttachment.path}`,
+      stdoutPreview: `PRIVATE_TOKEN_123\n${removedAttachment.path}`,
+      stderrPreview: '',
+    },
+  });
   assert.equal((await store.listAttachments(chat.id)).length, 4);
   await store.deleteAttachment(chat.id, removedAttachment.id);
   const chatAfterDelete = await store.readChat(chat.id);
@@ -310,6 +319,8 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.doesNotMatch(JSON.stringify(exported.chats[0].messages), /PRIVATE_TOKEN_123/);
   assert.doesNotMatch(exported.chats[0].contextSummary, /PRIVATE_TOKEN_123/);
   assert.doesNotMatch(exported.chats[0].contextWindow, /PRIVATE_TOKEN_123/);
+  assert.doesNotMatch(JSON.stringify(exported.events), /PRIVATE_TOKEN_123/);
+  assert.doesNotMatch(JSON.stringify(exported.events), new RegExp(removedAttachment.id));
   assert.equal(exported.persistentMemoryUserFiles.length, 1);
 
   await store.saveConfig({

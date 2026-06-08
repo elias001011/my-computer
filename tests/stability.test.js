@@ -1297,6 +1297,107 @@ test('deleted attachment content is redacted from pending approval provider mess
   }
 });
 
+test('deleted image attachment data urls are redacted from pending approval provider messages', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-deleted-image-pending-provider-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  const imageBytes = Buffer.from('fake image bytes with private pixels');
+  const imageBase64 = imageBytes.toString('base64');
+  const command = `${process.execPath} -e ${JSON.stringify("console.log('image tool ok')")}`;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      if (calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou usar uma tool depois da imagem.',
+                  tool_calls: [
+                    {
+                      id: 'image-terminal-after-delete',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Imagem removida não voltou.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-deleted-image-pending-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-deleted-image-pending-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        searchMode: 'off',
+        alwaysAllow: false,
+        terminalMode: 'standard',
+      },
+      providerSettings: {
+        openai: {
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Deleted image pending provider', {
+      provider: 'openai',
+      model: 'gpt-5.5',
+    });
+    const attachment = await store.saveAttachment(chat.id, {
+      name: 'secret-image.png',
+      mimeType: 'image/png',
+      dataBase64: imageBase64,
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Analise a imagem e use a tool.', { attachmentIds: [attachment.id] });
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+    assert.equal(JSON.stringify(calls[0]).includes(imageBase64), true);
+
+    await store.deleteAttachment(chat.id, attachment.id);
+    const exportedBeforeApproval = await store.exportRuntimeData();
+    assert.equal(JSON.stringify(exportedBeforeApproval).includes(imageBase64), false);
+
+    await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'image-terminal-after-delete',
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.stringify(calls[1]).includes(imageBase64), false);
+    assert.match(JSON.stringify(calls[1]), /conteúdo removido do anexo|removed_by_user/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('mixed returnOutput tool calls still send protocol results for every tool call', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-mixed-tool-results-'));
   process.env.MY_COMPUTER_HOME = tempDir;

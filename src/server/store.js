@@ -899,6 +899,7 @@ export async function deleteAttachment(id, attachmentId) {
   const redactionPlan = createAttachmentRedactionPlan(attachment, attachment.deletionData);
   await redactDeletedAttachmentReferencesInMessages(id, attachment, redactionPlan);
   await redactDeletedAttachmentContextFiles(id, redactionPlan);
+  await redactDeletedAttachmentEvents(id, redactionPlan);
   await touchChat(id);
   await appendEvent({ type: 'chat.attachment.deleted', chatId: id, details: { name: attachment.name } });
 }
@@ -2137,6 +2138,37 @@ async function redactDeletedAttachmentContextFiles(id, redactionPlan) {
   }
 }
 
+async function redactDeletedAttachmentEvents(id, redactionPlan) {
+  const eventsPath = getActivePaths().eventsPath;
+  await withFileLock(eventsPath, async () => {
+    let raw = '';
+    try {
+      raw = await fs.readFile(eventsPath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    const lines = raw.split('\n').filter(Boolean);
+    let changed = false;
+    const nextLines = lines.map((line) => {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        const redactedRaw = redactAttachmentString(line, redactionPlan);
+        changed = changed || redactedRaw !== line;
+        return JSON.stringify({ type: 'event.parse_error', createdAt: new Date().toISOString(), chatId: id, raw: redactedRaw });
+      }
+      if (event.chatId && event.chatId !== id) return line;
+      const redacted = redactAttachmentData(event, redactionPlan);
+      if (redacted === event) return line;
+      changed = true;
+      return JSON.stringify(redacted);
+    });
+    if (changed) await fs.writeFile(eventsPath, `${nextLines.join('\n')}${nextLines.length ? '\n' : ''}`, { mode: 0o600 });
+  });
+}
+
 function sanitizeMessagesForAvailableAttachments(messages = [], attachments = []) {
   const activeAttachmentIds = new Set((attachments || []).map((attachment) => attachment.id).filter(Boolean));
   return (messages || []).map((message) => {
@@ -2169,8 +2201,12 @@ function createAttachmentRedactionPlan(attachment = {}, data = null) {
   const marker = `[conteúdo removido do anexo "${attachment.name || attachment.id || 'arquivo'}"]`;
   const pathMarker = '[caminho removido de anexo apagado]';
   const rawText = data ? data.toString('utf8').replace(/\u0000/g, '') : '';
+  const base64Text = data ? data.toString('base64') : '';
+  const dataUrl = base64Text && attachment.mimeType ? `data:${attachment.mimeType};base64,${base64Text}` : '';
   const extractedFromRaw = rawText ? extractAttachmentText(data, { name: attachment.name || '', mimeType: attachment.mimeType || '' }).text : '';
   const values = [
+    dataUrl,
+    base64Text,
     rawText,
     rawText.replace(/\r\n/g, '\n').trim(),
     extractedFromRaw,

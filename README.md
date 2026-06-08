@@ -233,7 +233,7 @@ Files attached in a chat are copied into the My Computer runtime. The original f
 
 Text-like attachments such as Markdown, plain text, HTML, JSON, YAML, CSV, code, and logs can be opened from the chat viewer and edited manually. When the `chat_document` tool is enabled, the AI can also list, read, replace snippets, or rewrite those chat documents. The tool requires approval unless `Always allow any tool` is enabled, because reads can expose attachment contents to the selected provider.
 
-When an attachment is removed, My Computer deletes the saved runtime copy and redacts message snapshots, pending tool state, and saved context files so the removed content is not sent in later prompts or included in backups.
+When an attachment is removed, My Computer deletes the saved runtime copy and redacts message snapshots, pending tool state, saved context files, image data URLs, and related event previews so the removed content is not sent in later prompts or included in backups.
 
 This is separate from persistent memory: editable chat documents stay attached to the conversation, while additional memory files are durable context that can be used across chats in the active section.
 
