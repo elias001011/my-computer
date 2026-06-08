@@ -1956,6 +1956,8 @@ function renderToolApprovalPanel(message) {
 
 function renderMessage(message) {
   const label = message.role === 'user' ? 'Você' : 'Assistente';
+  const sources = collectMessageSources(message);
+  const visibleContent = getVisibleMessageContent(message, { stripSources: sources.length > 0 });
   const modelUsed = message.modelUsed
     ? `<span class="message-model">${escapeHtml(message.providerUsed ? `${providerLabel(message.providerUsed)} · ` : '')}${escapeHtml(message.modelUsed)}</span>`
     : '';
@@ -1972,41 +1974,57 @@ function renderMessage(message) {
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
       <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
-      <div class="bubble">${formatContent(getVisibleMessageContent(message), message.role)}</div>
+      <div class="bubble">
+        ${renderMessageSources(sources)}
+        ${formatContent(visibleContent, message.role)}
+      </div>
       ${renderToolApprovalPanel(message)}
       ${renderUserMemoryChangeChips(message)}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
       ${renderMessageActions(message)}
-      ${renderMessageSources(message)}
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
     </article>
   `;
 }
 
-function renderMessageSources(message) {
-  if (message.role !== 'assistant') return '';
+function collectMessageSources(message) {
+  if (message?.role !== 'assistant') return [];
   const sources = [];
   for (const toolUse of message.toolUses || []) {
     if (toolUse.name !== 'web_search' || !Array.isArray(toolUse.result?.results)) continue;
     for (const result of toolUse.result.results) {
       if (!result.url || sources.some((item) => item.url === result.url)) continue;
-      sources.push({ url: result.url, title: result.title || formatSourceHost(result.url) });
+      sources.push({
+        url: result.url,
+        title: result.title || formatSourceHost(result.url),
+        snippet: result.snippet || '',
+      });
     }
   }
+  return sources;
+}
+
+function renderMessageSources(sources = []) {
   if (!sources.length) return '';
+  const visibleSources = sources.slice(0, 6);
+  const hiddenCount = Math.max(0, sources.length - visibleSources.length);
   return `
-    <div class="source-chips" aria-label="Fontes">
-      ${sources
-        .slice(0, 8)
+    <div class="message-source-strip" aria-label="Fontes usadas">
+      <span class="message-source-label">Fontes</span>
+      <div class="message-source-list">
+        ${visibleSources
         .map(
-          (source) => `
-            <a href="${escapeAttr(source.url)}" target="_blank" rel="noreferrer">
+            (source, index) => `
+            <a class="message-source-card" href="${escapeAttr(source.url)}" target="_blank" rel="noreferrer" title="${escapeAttr(source.title)}">
+              <strong>${index + 1}</strong>
               <span>${escapeHtml(source.title)}</span>
               <small>${escapeHtml(formatSourceHost(source.url))}</small>
             </a>
           `,
         )
         .join('')}
+        ${hiddenCount ? `<span class="message-source-more">+${hiddenCount}</span>` : ''}
+      </div>
     </div>
   `;
 }
@@ -2022,9 +2040,10 @@ function renderThinkingBlock(thinking, label = 'Think do modelo') {
   `;
 }
 
-function getVisibleMessageContent(message = {}) {
+function getVisibleMessageContent(message = {}, options = {}) {
   if (message.role !== 'assistant') return message.content || '';
-  return splitThinkTags(message.content || '').visible.trim();
+  const visible = splitThinkTags(message.content || '').visible.trim();
+  return options.stripSources ? stripTrailingSourcesSection(visible) : visible;
 }
 
 function getMessageThinking(message = {}) {
@@ -2056,6 +2075,22 @@ function formatSourceHost(url) {
   } catch {
     return url;
   }
+}
+
+function stripTrailingSourcesSection(content = '') {
+  const lines = String(content || '').split('\n');
+  let sourceStart = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index].trim();
+    if (/^(#{1,4}\s*)?(fontes|sources|refer[eê]ncias|references)\s*:?\s*$/i.test(line)) {
+      sourceStart = index;
+      break;
+    }
+  }
+  if (sourceStart === -1) return content;
+  const tail = lines.slice(sourceStart + 1).join('\n');
+  if (!/https?:\/\/|\[[^\]]+\]\([^)]+\)|^\s*(?:[-*]|\d+\.)\s+/im.test(tail)) return content;
+  return lines.slice(0, sourceStart).join('\n').trimEnd();
 }
 
 function renderMessageStatus(status) {
@@ -2522,6 +2557,7 @@ function renderMessageDetailsModal() {
   const relatedEvents = getRelatedEventsForAttempt(selectedAttempt);
   const selectedIndex = attempts.findIndex((attempt) => attempt.id === selectedAttempt.id);
   const selectedStatus = renderMessageStatus(selectedAttempt.status) || 'concluído';
+  const selectedSources = collectMessageSources(selectedAttempt);
   return `
     <div class="modal-backdrop details-backdrop" role="presentation">
       <section class="modal wide-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="message-details-title">
@@ -2570,9 +2606,11 @@ function renderMessageDetailsModal() {
                 ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
               </div>
               ${renderThinkingBlock(getMessageThinking(selectedAttempt))}
-              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">${formatContent(getVisibleMessageContent(selectedAttempt), 'assistant')}</div>
+              <div class="bubble assistant ${escapeAttr(selectedAttempt.status || '')}">
+                ${renderMessageSources(selectedSources)}
+                ${formatContent(getVisibleMessageContent(selectedAttempt, { stripSources: selectedSources.length > 0 }), 'assistant')}
+              </div>
               ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
-              ${renderMessageSources(selectedAttempt)}
               ${renderExecutionHistory(selectedAttempt, { forceOpen: true, title: 'Linha do tempo da tentativa' })}
             </article>
 
@@ -5582,6 +5620,7 @@ function renderMarkdownLite(text) {
 
 function formatInline(text) {
   return escapeHtml(text)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>');

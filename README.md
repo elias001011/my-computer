@@ -1,10 +1,57 @@
 # My Computer
 
-Atualizado em 07/06/2026.
+Atualizado em 08/06/2026.
 
-My Computer é um painel self-hosted para conversar com uma IA, usar tools locais com aprovação, manter contexto entre chats e alternar entre providers sem perder o histórico.
+My Computer é um painel local para conversar com uma IA e deixar ela usar ferramentas do seu computador com controle explícito. Ele ajuda a manter memória entre chats, organizar contextos por seção/usuário, alternar entre providers e trabalhar com modelos locais como Ollama.
 
-Ele roda localmente em Node.js, usa HTML/CSS/JS puro no painel e guarda todos os dados do usuário em um runtime separado do projeto.
+Ele roda na sua máquina em Node.js. O painel abre no navegador, mas os chats, anexos, memórias e configurações ficam em um runtime local separado do código do projeto.
+
+## Comece aqui
+
+Para instalar e abrir o painel:
+
+```bash
+./install.sh
+```
+
+Depois que já estiver instalado:
+
+```bash
+npm run start:open
+```
+
+Use `./install.sh --fresh` quando quiser refazer o setup inicial sem misturar com o runtime antigo. Use `./uninstall.sh` para remover a instalação preservando seus dados, ou `./uninstall.sh --remove-data` para apagar também chats, anexos, memórias e configurações.
+
+## Para que serve
+
+- Conversar com modelos online ou locais em uma UI única.
+- Usar terminal, busca web, memória, anexos e compactação por meio de tools.
+- Pedir aprovação antes de ações sensíveis.
+- Manter memória persistente por chat e por seção.
+- Adicionar arquivos Markdown/texto como memória do usuário.
+- Rodar uma seção offline focada em Ollama e privacidade local.
+- Fazer backup/restore do runtime.
+
+## O que fica local
+
+Por padrão, os dados ficam em `~/.my-computer`. Seções novas ficam em `~/.my-computer/profiles/<id>`.
+
+Isso inclui:
+
+- histórico dos chats
+- anexos copiados para o runtime
+- memória persistente
+- arquivos adicionais de memória do usuário
+- configuração de providers, modelos e tools
+- eventos de execução para auditoria/debug
+
+Arquivos adicionados à memória do usuário são copiados para o runtime do My Computer. Quando a IA edita um arquivo de memória, ela edita essa cópia, não o arquivo original que você enviou.
+
+## Segurança prática
+
+Tools locais podem pedir aprovação antes de rodar. A busca web em modo `Terminal` ou `Ambos` também pede aprovação quando `Sempre permitir qualquer tool` está desligado, porque pode fazer consulta pública via DuckDuckGo a partir da sua máquina.
+
+O modo offline por seção força Ollama, bloqueia providers online no backend e desliga busca nativa. Se você habilitar busca web nessa seção, use consultas neutras e sem dados privados.
 
 ## Seções e isolamento
 
