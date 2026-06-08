@@ -2269,7 +2269,7 @@ function renderAttachmentViewerModal() {
   if (editable) {
     const text = attachment.viewerLoading
       ? uiText('Carregando conteúdo do arquivo...')
-      : attachment.content ?? attachment.extractedText ?? attachment.previewText ?? '';
+      : attachment.draftContent ?? attachment.content ?? attachment.extractedText ?? attachment.previewText ?? '';
     preview = `<textarea id="attachment-viewer-input" class="viewer-text user-memory-viewer-text" ${attachment.viewerLoading || state.busy ? 'disabled' : ''}>${escapeHtml(text)}</textarea>`;
   } else if (attachment.kind === 'image') {
     preview = `<img class="viewer-media" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`;
@@ -4678,6 +4678,7 @@ async function openAttachmentViewer(attachmentId) {
     state.attachmentViewer = {
       ...data.attachment,
       content: data.content || '',
+      draftContent: data.content || '',
       viewerLoading: false,
     };
     updateAttachmentEverywhere(data.attachment);
@@ -4687,6 +4688,7 @@ async function openAttachmentViewer(attachmentId) {
       state.attachmentViewer = {
         ...state.attachmentViewer,
         content: state.attachmentViewer.extractedText || state.attachmentViewer.previewText || '',
+        draftContent: state.attachmentViewer.extractedText || state.attachmentViewer.previewText || '',
         viewerLoading: false,
       };
     }
@@ -4718,7 +4720,7 @@ async function saveAttachmentViewer(event) {
   const nextContent = textarea.value;
   state.attachmentViewer = {
     ...attachment,
-    content: nextContent,
+    draftContent: nextContent,
     viewerLoading: false,
   };
   await runAction('Salvando documento...', async () => {
@@ -4732,6 +4734,7 @@ async function saveAttachmentViewer(event) {
     state.attachmentViewer = {
       ...data.attachment,
       content: data.content || '',
+      draftContent: data.content || '',
       viewerLoading: false,
     };
     state.status = `Documento "${data.attachment?.name || attachment.name}" salvo.`;
@@ -6574,7 +6577,7 @@ function captureAttachmentViewerDraft() {
   if (!state.attachmentViewer || !textarea || state.attachmentViewer.viewerLoading) return;
   state.attachmentViewer = {
     ...state.attachmentViewer,
-    content: textarea.value,
+    draftContent: textarea.value,
   };
 }
 
