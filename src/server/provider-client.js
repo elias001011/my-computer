@@ -21,12 +21,14 @@ export async function callProviderChat({
   maxTokens = 2048,
   modelSettings = {},
   chatId = null,
+  signal = null,
 }) {
   ensureOfflineProviderAllowed(config, requestedProvider || config.provider);
   const routes = buildProviderRoutes(config, requestedProvider || config.provider, model || config.model);
   let lastError = null;
 
   for (const route of routes) {
+    throwIfAborted(signal);
     const provider = getProvider(route.provider);
     const runtime = resolveProviderRuntime(config, provider);
     const models = route.models?.length ? route.models : [String(route.model || provider.defaultModel).trim()];
@@ -57,8 +59,9 @@ export async function callProviderChat({
                   temperature,
                   maxTokens,
                   modelSettings,
+                  signal,
                 }),
-              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true },
+              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true, signal },
             )
           : await callWithModelAndKeyRotation(
               provider,
@@ -66,7 +69,7 @@ export async function callProviderChat({
               models,
               async (apiKey, selectedModel) => {
                 if (provider.id === 'ollama') {
-                  await ensureOllamaModel(selectedModel, runtime.baseUrl);
+                  await ensureOllamaModel(selectedModel, runtime.baseUrl, signal);
                 }
                 return callOpenAICompatibleChat({
                   provider,
@@ -78,9 +81,10 @@ export async function callProviderChat({
                   temperature,
                   maxTokens,
                   modelSettings,
+                  signal,
                 });
               },
-              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true },
+              { chatId, operation: 'chat', source: route.source, pass: route.pass, modelRotationEnabled: config.routing?.modelRotationEnabled === true, signal },
             );
 
       await appendProviderEvent(chatId, 'provider.route.completed', {
@@ -104,6 +108,7 @@ export async function callProviderChat({
         error: error.message,
         statusCode: error.statusCode || null,
       });
+      if (error.stoppedByUser) throw error;
       if (!config.routing?.providerRotationEnabled) break;
     }
   }
@@ -118,7 +123,9 @@ export async function callProviderNativeWebSearch({
   query,
   maxResults = 5,
   chatId = null,
+  signal = null,
 }) {
+  throwIfAborted(signal);
   if (config.privacy?.offlineMode === true) {
     const error = new Error('Modo offline ativo: busca web nativa do provider está bloqueada.');
     error.nativeSearchUnavailable = true;
@@ -143,8 +150,8 @@ export async function callProviderNativeWebSearch({
     const result = await callWithKeyRotation(
       provider,
       runtime,
-      (apiKey) => callNativeSearchForProvider(provider, runtime, apiKey, selectedModel, query, maxResults, chatId),
-      { chatId, model: selectedModel, operation: 'native_search' },
+      (apiKey) => callNativeSearchForProvider(provider, runtime, apiKey, selectedModel, query, maxResults, chatId, signal),
+      { chatId, model: selectedModel, operation: 'native_search', signal },
     );
     await appendProviderEvent(chatId, 'provider.native_search.completed', {
       provider: provider.id,
@@ -245,6 +252,7 @@ async function callWithKeyRotation(provider, runtime, request, options = {}) {
   let lastError = null;
 
   for (let index = 0; index < orderedKeys.length; index += 1) {
+    throwIfAborted(options.signal);
     const apiKey = orderedKeys[index];
     const keyIndex = apiKeys.indexOf(apiKey);
     await appendProviderEvent(options.chatId, 'provider.key_attempt.started', {
@@ -294,11 +302,13 @@ async function callWithModelAndKeyRotation(provider, runtime, models, request, o
   let lastError = null;
 
   for (let keyAttemptIndex = 0; keyAttemptIndex < orderedKeys.length; keyAttemptIndex += 1) {
+    throwIfAborted(options.signal);
     const apiKey = orderedKeys[keyAttemptIndex];
     const keyIndex = apiKeys.indexOf(apiKey);
     const displayKeyIndex = keyIndex >= 0 ? keyIndex + 1 : keyAttemptIndex + 1;
 
     for (let modelAttemptIndex = 0; modelAttemptIndex < orderedModels.length; modelAttemptIndex += 1) {
+      throwIfAborted(options.signal);
       const selectedModel = orderedModels[modelAttemptIndex];
       const baseModelIndex = baseModels.indexOf(selectedModel);
       await appendProviderEvent(options.chatId, 'provider.request.started', {
@@ -394,28 +404,28 @@ async function callWithModelAndKeyRotation(provider, runtime, models, request, o
   throw lastError || new Error(`Falha ao chamar ${provider.label}.`);
 }
 
-async function callNativeSearchForProvider(provider, runtime, apiKey, model, query, maxResults, chatId = null) {
+async function callNativeSearchForProvider(provider, runtime, apiKey, model, query, maxResults, chatId = null, signal = null) {
   if (provider.id === 'groq') {
-    return callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId);
+    return callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId, signal);
   }
   if (provider.id === 'gemini') {
-    return callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults);
+    return callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal);
   }
   if (provider.id === 'anthropic') {
-    return callAnthropicNativeSearch(provider, runtime, apiKey, model, query, maxResults);
+    return callAnthropicNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal);
   }
   if (provider.id === 'openrouter') {
-    return callOpenRouterNativeSearch(provider, runtime, apiKey, model, query, maxResults);
+    return callOpenRouterNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal);
   }
   if (provider.id === 'openai' || provider.id === 'xai') {
-    return callResponsesNativeSearch(provider, runtime, apiKey, model, query, maxResults);
+    return callResponsesNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal);
   }
   const error = new Error(`Busca web nativa ainda não implementada para ${provider.label}.`);
   error.nativeSearchUnavailable = true;
   throw error;
 }
 
-async function callResponsesNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
+async function callResponsesNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal = null) {
   const body = {
     model,
     input: nativeSearchPrompt(query, maxResults),
@@ -426,7 +436,7 @@ async function callResponsesNativeSearch(provider, runtime, apiKey, model, query
   }
   const data = await postJson(`${stripTrailingSlash(runtime.baseUrl)}/responses`, body, {
     Authorization: `Bearer ${apiKey}`,
-  }, provider);
+  }, provider, { signal });
   return normalizeNativeSearchResult({
     query,
     method: `${provider.id}-responses-web_search`,
@@ -438,11 +448,12 @@ async function callResponsesNativeSearch(provider, runtime, apiKey, model, query
   });
 }
 
-async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId = null) {
+async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults, chatId = null, signal = null) {
   const candidateModels = ['groq/compound-mini', 'groq/compound'];
   let lastError = null;
 
   for (let index = 0; index < candidateModels.length; index += 1) {
+    throwIfAborted(signal);
     const model = candidateModels[index];
     try {
       const data = await postJson(
@@ -461,6 +472,7 @@ async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults
           'Groq-Model-Version': 'latest',
         },
         provider,
+        { signal },
       );
       const message = data?.choices?.[0]?.message || {};
       return normalizeNativeSearchResult({
@@ -489,14 +501,14 @@ async function callGroqNativeSearch(provider, runtime, apiKey, query, maxResults
   throw lastError || new Error('Falha ao chamar Groq web_search.');
 }
 
-async function callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
+async function callGeminiNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal = null) {
   const baseUrl = stripTrailingSlash(runtime.baseUrl).replace(/\/openai$/, '');
   const url = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ role: 'user', parts: [{ text: nativeSearchPrompt(query, maxResults) }] }],
     tools: [{ google_search: {} }],
   };
-  const data = await postJson(url, body, {}, provider);
+  const data = await postJson(url, body, {}, provider, { signal });
   const candidate = data?.candidates?.[0] || {};
   const content = (candidate.content?.parts || []).map((part) => part.text).filter(Boolean).join('\n\n');
   return normalizeNativeSearchResult({
@@ -510,7 +522,7 @@ async function callGeminiNativeSearch(provider, runtime, apiKey, model, query, m
   });
 }
 
-async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
+async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal = null) {
   const searchTool = buildAnthropicWebSearchTool(model, maxResults);
   const body = {
     model,
@@ -521,7 +533,7 @@ async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query
   const data = await postJson(`${stripTrailingSlash(runtime.baseUrl)}/messages`, body, {
     'x-api-key': apiKey,
     'anthropic-version': '2023-06-01',
-  }, provider);
+  }, provider, { signal });
   const blocks = Array.isArray(data.content) ? data.content : [];
   return normalizeNativeSearchResult({
     query,
@@ -534,7 +546,7 @@ async function callAnthropicNativeSearch(provider, runtime, apiKey, model, query
   });
 }
 
-async function callOpenRouterNativeSearch(provider, runtime, apiKey, model, query, maxResults) {
+async function callOpenRouterNativeSearch(provider, runtime, apiKey, model, query, maxResults, signal = null) {
   const body = {
     model,
     messages: [{ role: 'user', content: nativeSearchPrompt(query, maxResults) }],
@@ -549,7 +561,7 @@ async function callOpenRouterNativeSearch(provider, runtime, apiKey, model, quer
     Authorization: `Bearer ${apiKey}`,
     'HTTP-Referer': 'http://localhost',
     'X-OpenRouter-Title': 'My Computer',
-  }, provider);
+  }, provider, { signal });
   const message = data?.choices?.[0]?.message || {};
   return normalizeNativeSearchResult({
     query,
@@ -562,7 +574,7 @@ async function callOpenRouterNativeSearch(provider, runtime, apiKey, model, quer
   });
 }
 
-async function postJson(url, body, headers, provider) {
+async function postJson(url, body, headers, provider, options = {}) {
   const { response, data } = await fetchJsonWithTimeout(url, {
     method: 'POST',
     headers: {
@@ -570,6 +582,7 @@ async function postJson(url, body, headers, provider) {
       ...headers,
     },
     body: JSON.stringify(body),
+    signal: options.signal,
   }, provider);
   if (!response.ok) {
     const message = data?.error?.message || data?.error || `${provider.label} retornou HTTP ${response.status}.`;
@@ -592,6 +605,7 @@ async function callOpenAICompatibleChat({
   temperature,
   maxTokens,
   modelSettings = {},
+  signal = null,
 }) {
   const body = {
     model,
@@ -620,6 +634,7 @@ async function callOpenAICompatibleChat({
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal,
   }, provider);
 
   if (!response.ok) {
@@ -655,6 +670,7 @@ async function callAnthropicChat({
   temperature,
   maxTokens,
   modelSettings = {},
+  signal = null,
 }) {
   const { system, anthropicMessages } = toAnthropicMessages(messages);
   const body = {
@@ -688,6 +704,7 @@ async function callAnthropicChat({
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
+    signal,
   }, provider);
 
   if (!response.ok) {
@@ -797,7 +814,8 @@ function toAnthropicContent(content) {
     .filter(Boolean);
 }
 
-async function ensureOllamaModel(model, openAIBaseUrl) {
+async function ensureOllamaModel(model, openAIBaseUrl, signal = null) {
+  throwIfAborted(signal);
   const baseApiUrl = getOllamaApiBaseUrl(openAIBaseUrl);
   const installed = await listOllamaInstalledModels({
     providerSettings: {
@@ -815,6 +833,7 @@ async function ensureOllamaModel(model, openAIBaseUrl) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, stream: false }),
+    signal,
   }, provider, OLLAMA_PULL_TIMEOUT_MS);
 
   if (!response.ok) {
@@ -1140,25 +1159,47 @@ function supportsReasoningEffortParameter(providerId, model) {
 
 async function fetchJsonWithTimeout(url, options = {}, provider = {}, timeoutMs = DEFAULT_PROVIDER_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const label = provider.label || 'Provider';
+  const timeoutError = new Error(`${label} não respondeu em ${Math.ceil(timeoutMs / 1000)}s.`);
+  timeoutError.statusCode = 408;
+  timeoutError.providerTimeout = true;
+  const externalSignal = options.signal;
+  const abortFromExternal = () => controller.abort(externalSignal.reason || createUserAbortError());
+  if (externalSignal?.aborted) abortFromExternal();
+  externalSignal?.addEventListener?.('abort', abortFromExternal, { once: true });
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
   try {
     const response = await fetch(url, {
       ...options,
-      signal: options.signal || controller.signal,
+      signal: controller.signal,
     });
     const data = await response.json().catch(() => ({}));
     return { response, data };
   } catch (error) {
     if (error?.name === 'AbortError') {
-      const label = provider.label || 'Provider';
-      const timeoutError = new Error(`${label} não respondeu em ${Math.ceil(timeoutMs / 1000)}s.`);
-      timeoutError.statusCode = 408;
+      const reason = controller.signal.reason;
+      if (reason?.providerTimeout) throw reason;
+      if (reason?.stoppedByUser || externalSignal?.aborted) throw createUserAbortError();
       throw timeoutError;
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener?.('abort', abortFromExternal);
   }
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  throw signal.reason?.stoppedByUser ? signal.reason : createUserAbortError();
+}
+
+function createUserAbortError() {
+  const error = new Error('Execução interrompida pelo usuário.');
+  error.name = 'AbortError';
+  error.statusCode = 499;
+  error.stoppedByUser = true;
+  return error;
 }
 
 function clampTimeoutMs(value, fallback) {

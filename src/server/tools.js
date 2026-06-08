@@ -295,8 +295,25 @@ export async function runTerminalCommand(command, options = {}) {
   let stdoutTruncated = false;
   let stderrTruncated = false;
   let timedOut = false;
+  let aborted = false;
 
   return new Promise((resolve) => {
+    if (options.signal?.aborted) {
+      resolve({
+        command,
+        cwd,
+        terminalMode,
+        exitCode: null,
+        signal: 'ABORT',
+        stdout,
+        stderr: 'Execução interrompida pelo usuário.',
+        durationMs: Date.now() - startedAt,
+        timedOut,
+        aborted: true,
+        truncated: false,
+      });
+      return;
+    }
     const child = spawn(String(command || ''), {
       cwd,
       env,
@@ -311,6 +328,11 @@ export async function runTerminalCommand(command, options = {}) {
       timedOut = true;
       killProcessTree(child);
     }, timeoutMs);
+    const abortListener = () => {
+      aborted = true;
+      killProcessTree(child);
+    };
+    options.signal?.addEventListener?.('abort', abortListener, { once: true });
 
     child.stdout.on('data', (chunk) => {
       const collected = collect(stdout, chunk.toString(), outputLimit);
@@ -326,31 +348,36 @@ export async function runTerminalCommand(command, options = {}) {
 
     child.on('error', (error) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener?.('abort', abortListener);
       resolve({
         command,
         cwd,
         terminalMode,
         exitCode: 1,
+        signal: aborted ? 'ABORT' : undefined,
         stdout,
-        stderr: `${stderr}${stderr ? '\n' : ''}${error.message}`,
+        stderr: `${stderr}${stderr ? '\n' : ''}${aborted ? 'Execução interrompida pelo usuário.' : error.message}`,
         durationMs: Date.now() - startedAt,
         timedOut,
+        aborted,
         truncated: stdoutTruncated || stderrTruncated,
       });
     });
 
     child.on('close', (exitCode, signal) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener?.('abort', abortListener);
       resolve({
         command,
         cwd,
         terminalMode,
         exitCode,
-        signal,
+        signal: aborted ? 'ABORT' : signal,
         stdout,
-        stderr,
+        stderr: aborted && !stderr ? 'Execução interrompida pelo usuário.' : stderr,
         durationMs: Date.now() - startedAt,
         timedOut,
+        aborted,
         truncated: stdoutTruncated || stderrTruncated,
       });
     });
@@ -401,6 +428,7 @@ PY`;
     timeoutSeconds: 30,
     outputLimit: 20000,
     terminalMode: options.terminalMode,
+    signal: options.signal,
   });
 
   try {

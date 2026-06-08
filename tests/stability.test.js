@@ -1405,6 +1405,77 @@ test('provider chat requests time out instead of holding a chat lock forever', a
   }
 });
 
+test('chat run can be stopped and leaves the chat usable', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-stop-run-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let providerCalls = 0;
+  let firstRequestStarted;
+  const firstRequestStartedPromise = new Promise((resolve) => {
+    firstRequestStarted = resolve;
+  });
+  global.fetch = async (url, options = {}) => {
+    if (!String(url).includes('/chat/completions')) {
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    }
+    providerCalls += 1;
+    if (providerCalls === 1) {
+      firstRequestStarted();
+      return new Promise((resolve, reject) => {
+        options.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'Depois do stop.' }, finish_reason: 'stop' }],
+      }),
+    };
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-stop-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-stop-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: { searchMode: 'off', webSearch: false },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+      setupComplete: true,
+    });
+    const chat = await store.createChat('Stop run', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    const running = assistant.sendUserMessage(chat.id, 'pare esta execução');
+    await firstRequestStartedPromise;
+    const stop = await assistant.stopChatRun(chat.id);
+    assert.equal(stop.stopped, true);
+    const stopped = await running;
+    assert.equal(stopped.assistantMessage.status, 'incomplete');
+    assert.equal(stopped.assistantMessage.finishReason, 'stopped_by_user');
+    assert.match(stopped.assistantMessage.content, /interrompida/i);
+
+    const next = await assistant.sendUserMessage(chat.id, 'continua normal');
+    assert.equal(next.assistantMessage.status, 'sent');
+    assert.equal(next.assistantMessage.content, 'Depois do stop.');
+    assert.equal(providerCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('parallel continue requests only create one follow-up attempt', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-continue-lock-'));
   process.env.MY_COMPUTER_HOME = tempDir;

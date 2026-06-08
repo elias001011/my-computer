@@ -320,6 +320,7 @@ O painel mostra:
 
 - `Tentar novamente`: reenvia a solicitação original desde o início.
 - `Continuar`: retoma a partir da última saída parcial e do histórico da tentativa.
+- `Parar`: durante uma execução, o botão de enviar vira parar e solicita interrupção do agente; a tentativa fica incompleta e pode ser continuada.
 - `Ver detalhes`: abre um modal com o processo, timeline de saídas intermediárias/finais, tool calls e eventos relacionados daquela tentativa.
 - `Copiar eventos`: copia os eventos carregados do chat para análise ou auditoria.
 

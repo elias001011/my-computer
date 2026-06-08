@@ -12,6 +12,7 @@
   --warn: #c76512;
   --warn-bg: #fff4e5;
   --danger: #a33a2a;
+  --danger-dark: #7f2c20;
   --code: #111827;
   --code-bg: #f3f4f6;
   --surface-raised: #ffffff;
@@ -54,6 +55,7 @@
   --warn: #e0a14c;
   --warn-bg: #2c2215;
   --danger: #e38a7b;
+  --danger-dark: #c86f60;
   --code: #f3f6f8;
   --code-bg: #1b2026;
   --surface-raised: #1a2026;
@@ -149,8 +151,20 @@ button.danger-button {
   color: var(--danger);
 }
 
+button.primary.danger-button {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: white;
+}
+
 button.danger-button:hover {
   background: var(--surface-danger-weak);
+}
+
+button.primary.danger-button:hover {
+  border-color: var(--danger-dark);
+  background: var(--danger-dark);
+  color: white;
 }
 
 button:disabled {

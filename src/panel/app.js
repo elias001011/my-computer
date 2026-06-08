@@ -48,6 +48,8 @@ const state = {
   lastFailedAction: null,
   eventPollingTimer: null,
   toolDecisionInFlight: new Set(),
+  activeAgentChatId: null,
+  stopInFlight: false,
   status: '',
   error: '',
 };
@@ -408,7 +410,9 @@ function renderApp() {
   const chatProviderId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
   const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
   const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
+  const agentRunning = Boolean(chat?.id && state.busy && state.activeAgentChatId === chat.id);
   const composerDisabled = !chat || state.busy || toolApprovalBlocksComposer;
+  const composerActionDisabled = !chat || toolApprovalBlocksComposer || (state.busy && !agentRunning) || state.stopInFlight;
   const composerPlaceholder = toolApprovalBlocksComposer
     ? 'Aprove ou negue a tool pendente antes de enviar outra mensagem.'
     : 'Digite uma mensagem...';
@@ -466,8 +470,8 @@ function renderApp() {
               <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${composerDisabled ? 'disabled' : ''} />
             </label>
             <textarea name="content" placeholder="${escapeAttr(composerPlaceholder)}" ${composerDisabled ? 'disabled' : ''}>${escapeHtml(getComposerDraft(chat?.id))}</textarea>
-            <button class="primary icon-button" type="submit" aria-label="Enviar" title="Enviar" ${composerDisabled ? 'disabled' : ''}>
-              <span aria-hidden="true">↑</span>
+            <button class="primary icon-button ${agentRunning ? 'danger-button' : ''}" id="${agentRunning ? 'stop-agent' : 'send-message'}" type="${agentRunning ? 'button' : 'submit'}" aria-label="${agentRunning ? 'Parar agente' : 'Enviar'}" title="${agentRunning ? 'Parar agente' : 'Enviar'}" ${composerActionDisabled ? 'disabled' : ''}>
+              <span aria-hidden="true">${agentRunning ? '■' : '↑'}</span>
             </button>
           </div>
         </form>
@@ -3209,6 +3213,7 @@ function bindAppEvents() {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
   });
   document.querySelector('#composer').addEventListener('submit', sendMessage);
+  document.querySelector('#stop-agent')?.addEventListener('click', stopActiveAgent);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
   document.querySelector('#composer textarea').addEventListener('input', handleComposerInput);
   document.querySelector('#file-input')?.addEventListener('change', uploadSelectedFiles);
@@ -4234,6 +4239,8 @@ async function sendMessageContent(content, options = {}) {
   renderPreservingVisualState();
   scrollMessagesToBottom();
 
+  state.activeAgentChatId = chatId;
+  state.stopInFlight = false;
   await runAction(
     `Enviando para ${providerLabel(state.activeChat.provider || state.config.provider)}...`,
     async () => {
@@ -4271,6 +4278,8 @@ async function sendMessageContent(content, options = {}) {
     },
     () => sendMessageContent(content, options),
   );
+  if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
+  state.stopInFlight = false;
   if (!state.error && state.activeChat?.id === chatId) {
     scrollMessagesToBottom();
   }
@@ -4288,6 +4297,29 @@ async function sendMessageContent(content, options = {}) {
   return { messageAccepted };
 }
 
+async function stopActiveAgent() {
+  const chatId = state.activeAgentChatId || state.activeChat?.id;
+  if (!chatId || state.stopInFlight) return;
+  state.stopInFlight = true;
+  state.status = 'Interrompendo agente...';
+  renderPreservingVisualState();
+  try {
+    const data = await api(`/api/chats/${chatId}/stop`, {
+      method: 'POST',
+      body: { reason: 'user_requested' },
+    });
+    if (state.activeChat?.id === chatId) {
+      state.activeChat = data.chat || state.activeChat;
+      state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    }
+    state.status = data.message || (data.stopped ? 'Interrupção solicitada.' : 'Nenhuma execução em andamento.');
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    renderPreservingVisualState();
+  }
+}
+
 async function decideToolApproval(messageId, decision, toolCallId = null, button = null) {
   if (state.busy) return;
   const decisionKey = `${messageId}:${toolCallId || 'next'}`;
@@ -4297,11 +4329,14 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
     item.disabled = true;
   });
   try {
+    const chatId = state.activeChat?.id;
+    state.activeAgentChatId = chatId;
+    state.stopInFlight = false;
     await runAction(decision === 'approve' ? 'Executando tool aprovada...' : 'Negando tool...', async () => {
-      startEventPolling(state.activeChat.id);
+      startEventPolling(chatId);
       let data;
       try {
-        data = await api(`/api/chats/${state.activeChat.id}/tool-approvals/${messageId}`, {
+        data = await api(`/api/chats/${chatId}/tool-approvals/${messageId}`, {
           method: 'POST',
           body: { decision, toolCallId },
         });
@@ -4323,6 +4358,8 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
         state.status = 'A tool ainda está em execução.';
       }
     });
+    if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
+    state.stopInFlight = false;
   } finally {
     state.toolDecisionInFlight.delete(decisionKey);
   }

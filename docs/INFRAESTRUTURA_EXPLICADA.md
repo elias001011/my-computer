@@ -49,6 +49,7 @@ Se a resposta falhar ou parar no meio:
 - a tentativa anterior continua visível no chat
 - `Tentar novamente` reenvia desde o início
 - `Continuar` retoma a última saída parcial
+- `Parar`, durante uma execução, interrompe o agente e salva a tentativa como incompleta
 - `Ver detalhes` abre o processo salvo da tentativa e a janela de eventos relacionados carregados
 - `Copiar eventos` leva os eventos carregados para análise
 

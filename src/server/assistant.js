@@ -47,13 +47,45 @@ const MEMORY_TOOL_ACTIONS = new Set(['read', 'write', 'append']);
 const DEFAULT_RUNNING_TOOL_STALE_MS = 20 * 60 * 1000;
 const chatTurnLocks = new Map();
 const toolApprovalLocks = new Map();
+const activeChatRuns = new Map();
 
 export async function sendUserMessage(chatId, content, options = {}) {
-  return withChatTurnLock(chatId, () => sendUserMessageLocked(chatId, content, options));
+  return withChatTurnLock(chatId, () =>
+    withActiveChatRun(chatId, 'message', (signal) => sendUserMessageLocked(chatId, content, { ...options, signal })),
+  );
+}
+
+export async function stopChatRun(chatId, options = {}) {
+  const key = String(chatId || '');
+  const activeRun = activeChatRuns.get(key);
+  if (!activeRun) {
+    return {
+      stopped: false,
+      message: 'Nenhuma execução em andamento neste chat.',
+    };
+  }
+  const reason = createUserStopError(options.reason);
+  activeRun.controller.abort(reason);
+  await appendEvent({
+    type: 'chat.run.stop_requested',
+    chatId,
+    details: {
+      operation: activeRun.operation,
+      reason: options.reason || 'user_requested',
+      startedAt: activeRun.startedAt,
+    },
+  });
+  return {
+    stopped: true,
+    operation: activeRun.operation,
+    message: 'Solicitação de interrupção enviada.',
+  };
 }
 
 async function sendUserMessageLocked(chatId, content, options = {}) {
+  const operationSignal = options.signal;
   const config = await loadConfig();
+  throwIfStopped(operationSignal);
   const trimmed = String(content || '').trim();
   if (!trimmed && !options.retryMessageId && !options.continueMessageId) {
     const error = new Error('Mensagem vazia.');
@@ -113,6 +145,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       });
     }
     for (let round = 0; round < getMaxToolRounds(effectiveConfig); round += 1) {
+      throwIfStopped(operationSignal);
       const assistantMessage = await callProviderChat({
         config: effectiveConfig,
         provider: effectiveConfig.provider,
@@ -121,7 +154,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         tools: enabledTools,
         modelSettings: effectiveConfig.modelSettings,
         chatId,
+        signal: operationSignal,
       });
+      throwIfStopped(operationSignal);
       providerUsed = assistantMessage.providerUsed || providerUsed;
       modelUsed = assistantMessage.modelUsed || modelUsed;
       const selectedConfig = withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed);
@@ -157,7 +192,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
         const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
         for (const toolCall of safeToolCalls) {
-          const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
+          throwIfStopped(operationSignal);
+          const toolUse = await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal });
+          throwIfStopped(operationSignal);
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
           appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -223,7 +260,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       }
 
       for (const toolCall of toolCalls) {
-        const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
+        throwIfStopped(operationSignal);
+        const toolUse = await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal });
+        throwIfStopped(operationSignal);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -257,6 +296,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
 
     if (!assistantOutcome) {
       try {
+        throwIfStopped(operationSignal);
         const assistantMessage = await callProviderChat({
           config: effectiveConfig,
           provider: effectiveConfig.provider,
@@ -265,7 +305,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           tools: [],
           modelSettings: effectiveConfig.modelSettings,
           chatId,
+          signal: operationSignal,
         });
+        throwIfStopped(operationSignal);
         providerUsed = assistantMessage.providerUsed || providerUsed;
         modelUsed = assistantMessage.modelUsed || modelUsed;
         executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
@@ -279,8 +321,11 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           error: null,
         };
       } catch (error) {
-        const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
-        if (searchToolUse) {
+        if (isUserStopError(error)) {
+          assistantOutcome = buildStoppedOutcome();
+        } else {
+          const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
+          if (searchToolUse) {
           assistantOutcome = {
             status: 'incomplete',
             content: renderWebSearchFallbackAnswer(searchToolUse, error.message),
@@ -297,16 +342,19 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
             error: error.message || 'Erro ao gerar resposta.',
           };
         }
+        }
       }
     }
   } catch (error) {
-    assistantOutcome = assistantOutcome || {
-      status: 'failed',
-      content: 'A execução falhou antes de concluir. Use Tentar novamente para recomeçar ou Continuar para retomar do último estado útil.',
-      finishReason: null,
-      continuationAvailable: true,
-      error: error.message || 'Erro ao gerar resposta.',
-    };
+    assistantOutcome = assistantOutcome || (isUserStopError(error)
+      ? buildStoppedOutcome()
+      : {
+          status: 'failed',
+          content: 'A execução falhou antes de concluir. Use Tentar novamente para recomeçar ou Continuar para retomar do último estado útil.',
+          finishReason: null,
+          continuationAvailable: true,
+          error: error.message || 'Erro ao gerar resposta.',
+        });
   }
 
   if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat') && titleSeed) {
@@ -371,10 +419,16 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
 }
 
 export async function continueToolApproval(chatId, messageId, decision = 'approve', options = {}) {
-  return withToolApprovalLock(chatId, messageId, () => continueToolApprovalLocked(chatId, messageId, decision, options));
+  return withToolApprovalLock(chatId, messageId, () =>
+    withActiveChatRun(chatId, 'tool_approval', (signal) =>
+      continueToolApprovalLocked(chatId, messageId, decision, { ...options, signal }),
+    ),
+  );
 }
 
 async function continueToolApprovalLocked(chatId, messageId, decision = 'approve', options = {}) {
+  const operationSignal = options.signal;
+  throwIfStopped(operationSignal);
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
   if (pendingMessage?.status === 'running_tools') {
@@ -460,7 +514,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const executionTrace = [...(pendingState.executionTrace || [])];
   let providerUsed = pendingMessage.providerUsed || effectiveConfig.provider;
   let modelUsed = pendingMessage.modelUsed || effectiveConfig.model;
-  const selectedConfig = withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed);
+  const selectedConfig = { ...withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed), signal: operationSignal };
   const sourceUserMessage =
     currentChat.messages.find((message) => message.id === pendingState.sourceUserMessageId && message.role === 'user') ||
     findPreviousUserMessage(currentChat.messages, pendingMessage);
@@ -487,16 +541,43 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     },
   });
 
-  for (const toolCall of toolCalls) {
-    if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
-    const toolUse =
-      decisions[toolCall.id] === 'approve'
-        ? await executeToolCallSafely(chatId, toolCall, selectedConfig)
-        : createDeniedToolUse(toolCall);
-    toolUses.push(toolUse);
-    executionTrace.push(createToolTraceEntry(toolUse));
-    appendToolResultForModel(workingMessages, toolCall, toolUse);
-    if (toolUseHasExecutionFailure(toolUse)) {
+  try {
+    for (const toolCall of toolCalls) {
+      if (!approvalToolCalls.some((approvalToolCall) => approvalToolCall.id === toolCall.id)) continue;
+      throwIfStopped(operationSignal);
+      const toolUse =
+        decisions[toolCall.id] === 'approve'
+          ? await executeToolCallSafely(chatId, toolCall, selectedConfig)
+          : createDeniedToolUse(toolCall);
+      throwIfStopped(operationSignal);
+      toolUses.push(toolUse);
+      executionTrace.push(createToolTraceEntry(toolUse));
+      appendToolResultForModel(workingMessages, toolCall, toolUse);
+      if (toolUseHasExecutionFailure(toolUse)) {
+        await finalizeApprovedToolMessage({
+          chatId,
+          messageId,
+          effectiveConfig: selectedConfig,
+          sourceUserMessage,
+          continuationGroupId,
+          attemptIndex,
+          outcome: buildToolFailureOutcome(toolUse, pendingMessage.finishReason, pendingMessage.thinking),
+          toolUses,
+          executionTrace,
+          providerUsed,
+          modelUsed,
+          approvedToolCount: toolUses.filter((item) => item.status !== 'denied').length,
+          failedToolUse: toolUse,
+        });
+        return { chat: await readChat(chatId) };
+      }
+    }
+
+    const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
+    if (!toolOutputsRequested) {
+      const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
+      const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
+      const cleanedPendingContent = cleanAssistantContent(pendingMessage.content || '');
       await finalizeApprovedToolMessage({
         chatId,
         messageId,
@@ -504,52 +585,27 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
         sourceUserMessage,
         continuationGroupId,
         attemptIndex,
-        outcome: buildToolFailureOutcome(toolUse, pendingMessage.finishReason, pendingMessage.thinking),
+        outcome: {
+          status: finalStatus,
+          content:
+            finalStatus === 'incomplete'
+              ? cleanedPendingContent.content || 'A execução foi interrompida antes do final.'
+              : cleanedPendingContent.content || 'Ação de tool concluída.',
+          thinking: mergeThinkingSections(pendingMessage.thinking, cleanedPendingContent.thinking),
+          finishReason: pendingMessage.finishReason || null,
+          continuationAvailable: finalStatus !== 'sent',
+          error: hasToolErrors ? 'Uma das tools aprovadas falhou.' : null,
+        },
         toolUses,
         executionTrace,
         providerUsed,
         modelUsed,
-        approvedToolCount: toolUses.filter((item) => item.status !== 'denied').length,
-        failedToolUse: toolUse,
+        approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
+        skippedFollowup: true,
       });
       return { chat: await readChat(chatId) };
     }
-  }
 
-  const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
-  if (!toolOutputsRequested) {
-    const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
-    const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
-    const cleanedPendingContent = cleanAssistantContent(pendingMessage.content || '');
-    await finalizeApprovedToolMessage({
-      chatId,
-      messageId,
-      effectiveConfig: selectedConfig,
-      sourceUserMessage,
-      continuationGroupId,
-      attemptIndex,
-      outcome: {
-        status: finalStatus,
-        content:
-          finalStatus === 'incomplete'
-            ? cleanedPendingContent.content || 'A execução foi interrompida antes do final.'
-            : cleanedPendingContent.content || 'Ação de tool concluída.',
-        thinking: mergeThinkingSections(pendingMessage.thinking, cleanedPendingContent.thinking),
-        finishReason: pendingMessage.finishReason || null,
-        continuationAvailable: finalStatus !== 'sent',
-        error: hasToolErrors ? 'Uma das tools aprovadas falhou.' : null,
-      },
-      toolUses,
-      executionTrace,
-      providerUsed,
-      modelUsed,
-      approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
-      skippedFollowup: true,
-    });
-    return { chat: await readChat(chatId) };
-  }
-
-  try {
     const followup = await continueAssistantToolLoop({
       chatId,
       messageId,
@@ -566,6 +622,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       retryOfMessageId,
       continuedFromMessageId,
       baseThinking: pendingMessage.thinking,
+      signal: operationSignal,
     });
     if (followup.awaitingApproval) return { chat: await readChat(chatId) };
     await finalizeApprovedToolMessage({
@@ -584,23 +641,25 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     });
   } catch (error) {
     const searchToolUse = [...toolUses].reverse().find((toolUse) => toolUse.name === 'web_search');
-    const fallbackOutcome = searchToolUse
-      ? {
-          status: 'incomplete',
-          content: renderWebSearchFallbackAnswer(searchToolUse, error.message),
-          thinking: pendingMessage.thinking,
-          finishReason: null,
-          continuationAvailable: true,
-          error: error.message,
-        }
-      : {
-          status: 'failed',
-          content: cleanAssistantContent(pendingMessage.content || '').content || 'A execução falhou antes de concluir.',
-          thinking: pendingMessage.thinking,
-          finishReason: null,
-          continuationAvailable: true,
-          error: error.message || 'Erro ao finalizar a resposta.',
-        };
+    const fallbackOutcome = isUserStopError(error)
+      ? buildStoppedOutcome(pendingMessage.thinking)
+      : searchToolUse
+        ? {
+            status: 'incomplete',
+            content: renderWebSearchFallbackAnswer(searchToolUse, error.message),
+            thinking: pendingMessage.thinking,
+            finishReason: null,
+            continuationAvailable: true,
+            error: error.message,
+          }
+        : {
+            status: 'failed',
+            content: cleanAssistantContent(pendingMessage.content || '').content || 'A execução falhou antes de concluir.',
+            thinking: pendingMessage.thinking,
+            finishReason: null,
+            continuationAvailable: true,
+            error: error.message || 'Erro ao finalizar a resposta.',
+          };
     await finalizeApprovedToolMessage({
       chatId,
       messageId,
@@ -686,6 +745,27 @@ async function withToolApprovalLock(chatId, messageId, action) {
   });
   toolApprovalLocks.set(key, cleanup);
   return run;
+}
+
+async function withActiveChatRun(chatId, operation, action) {
+  const key = String(chatId || '');
+  if (activeChatRuns.has(key)) {
+    const error = new Error('Já existe uma execução em andamento neste chat.');
+    error.statusCode = 409;
+    throw error;
+  }
+  const controller = new AbortController();
+  activeChatRuns.set(key, {
+    controller,
+    operation,
+    startedAt: new Date().toISOString(),
+  });
+  try {
+    return await action(controller.signal);
+  } finally {
+    const activeRun = activeChatRuns.get(key);
+    if (activeRun?.controller === controller) activeChatRuns.delete(key);
+  }
 }
 
 async function withChatTurnLock(chatId, action) {
@@ -777,6 +857,7 @@ async function continueAssistantToolLoop({
   retryOfMessageId,
   continuedFromMessageId,
   baseThinking = '',
+  signal = null,
 }) {
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let currentProviderUsed = providerUsed || effectiveConfig.provider;
@@ -786,6 +867,7 @@ async function continueAssistantToolLoop({
   const maxRounds = getMaxToolRounds(effectiveConfig);
 
   for (let round = startingRound; round < maxRounds; round += 1) {
+    throwIfStopped(signal);
     const assistantMessage = await callProviderChat({
       config: effectiveConfig,
       provider: effectiveConfig.provider,
@@ -794,10 +876,12 @@ async function continueAssistantToolLoop({
       tools: enabledTools,
       modelSettings: effectiveConfig.modelSettings,
       chatId,
+      signal,
     });
+    throwIfStopped(signal);
     currentProviderUsed = assistantMessage.providerUsed || currentProviderUsed;
     currentModelUsed = assistantMessage.modelUsed || currentModelUsed;
-    const selectedConfig = withSelectedProviderConfig(effectiveConfig, currentProviderUsed, currentModelUsed);
+    const selectedConfig = { ...withSelectedProviderConfig(effectiveConfig, currentProviderUsed, currentModelUsed), signal };
 
     const toolCalls = normalizeAssistantToolCalls(assistantMessage.tool_calls || [], assistantMessage.content, effectiveConfig.tools);
     if (toolCalls.length || assistantMessage.content) {
@@ -838,7 +922,9 @@ async function continueAssistantToolLoop({
       const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
       const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
       for (const toolCall of safeToolCalls) {
+        throwIfStopped(signal);
         const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
+        throwIfStopped(signal);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
         appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -902,7 +988,9 @@ async function continueAssistantToolLoop({
     }
 
     for (const toolCall of toolCalls) {
+      throwIfStopped(signal);
       const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
+      throwIfStopped(signal);
       toolUses.push(toolUse);
       executionTrace.push(createToolTraceEntry(toolUse));
       appendToolResultForModel(workingMessages, toolCall, toolUse);
@@ -1025,6 +1113,34 @@ function getRunningToolStaleMs() {
   const value = Number(process.env.MC_RUNNING_TOOL_STALE_MS || DEFAULT_RUNNING_TOOL_STALE_MS);
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_RUNNING_TOOL_STALE_MS;
   return Math.min(Math.max(Math.round(value), 1000), 24 * 60 * 60 * 1000);
+}
+
+function throwIfStopped(signal) {
+  if (!signal?.aborted) return;
+  throw signal.reason?.stoppedByUser ? signal.reason : createUserStopError();
+}
+
+function isUserStopError(error) {
+  return Boolean(error?.stoppedByUser || (error?.name === 'AbortError' && error?.statusCode === 499));
+}
+
+function createUserStopError(reason = '') {
+  const error = new Error(reason || 'Execução interrompida pelo usuário.');
+  error.name = 'AbortError';
+  error.statusCode = 499;
+  error.stoppedByUser = true;
+  return error;
+}
+
+function buildStoppedOutcome(thinking = '') {
+  return {
+    status: 'incomplete',
+    content: 'Execução interrompida pelo usuário. Use Continuar para retomar do último estado útil.',
+    thinking,
+    finishReason: 'stopped_by_user',
+    continuationAvailable: true,
+    error: 'Interrompido pelo usuário.',
+  };
 }
 
 function createAssistantTraceEntry(assistantMessage, toolCalls = [], round = 1, phase = 'tool_round') {
@@ -1183,6 +1299,7 @@ function toolUseHasExecutionFailure(toolUse = {}) {
   if (!toolUse || toolUse.status === 'denied') return false;
   if (toolUse.result?.error) return true;
   if (toolUse.name !== 'run_terminal_command') return false;
+  if (toolUse.result?.aborted) return true;
   if (toolUse.result?.timedOut) return true;
   if (toolUse.result?.signal) return true;
   const exitCode = toolUse.result?.exitCode;
@@ -1794,7 +1911,9 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     timeoutSeconds: terminalInput.timeoutSeconds,
     terminalMode: config.tools?.terminalMode,
     runtimeHome: config.runtimeHome,
+    signal: config.signal,
   });
+  throwIfStopped(config.signal);
   await appendEvent({
     type: 'tool.run_terminal_command.completed',
     chatId,
@@ -1821,8 +1940,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
 
 async function executeToolCallSafely(chatId, toolCall, config = {}) {
   try {
+    throwIfStopped(config.signal);
     return await executeToolCall(chatId, toolCall, config);
   } catch (error) {
+    if (isUserStopError(error)) throw error;
     try {
       await appendEvent({
         type: 'tool.execution.failed',
@@ -2283,6 +2404,7 @@ function renderWebSearchFallbackAnswer(toolUse, providerError) {
 }
 
 async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) {
+  throwIfStopped(config.signal);
   const query = String(input.query || '').trim();
   const maxResults = clampInteger(input.maxResults, 1, 8, 5);
   const searchMode = getSearchMode(config.tools);
@@ -2325,7 +2447,9 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
         query,
         maxResults,
         chatId,
+        signal: config.signal,
       });
+      throwIfStopped(config.signal);
       await appendEvent({
         type: 'tool.web_search.completed',
         chatId,
@@ -2387,7 +2511,9 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
   const result = await runWebSearch(query, {
     maxResults,
     terminalMode: config.tools?.terminalMode,
+    signal: config.signal,
   });
+  throwIfStopped(config.signal);
   if (nativeError) {
     result.nativeError = nativeError.message;
     result.fallbackFrom = 'native';

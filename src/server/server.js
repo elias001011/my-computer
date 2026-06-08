@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { panelDir } from './paths.js';
-import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage } from './assistant.js';
+import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
@@ -384,6 +384,17 @@ async function handleChatsApi(request, response, parts) {
       attachmentIds: body.attachmentIds || [],
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    return;
+  }
+
+  if (method === 'POST' && chatId && parts[3] === 'stop') {
+    const body = await readBody(request);
+    const result = await stopChatRun(chatId, { reason: body.reason || 'user_requested' });
+    sendJson(response, 200, {
+      ...result,
+      chat: await readChat(chatId),
+      activeChatEvents: await readEvents({ chatId }),
+    });
     return;
   }
 
