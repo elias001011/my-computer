@@ -55,6 +55,7 @@ const CONTENT_TYPES = {
 };
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const PANEL_REQUEST_HEADER = 'panel';
+const CHAT_EVENT_DETAIL_LIMIT = 10000;
 
 let currentLaunch = { port: null, requestedHost: null, actualHost: null };
 
@@ -310,7 +311,7 @@ async function handleChatsApi(request, response, parts) {
     sendJson(response, 200, {
       chat: await readChat(chatId),
       chats: await listChats(),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -327,13 +328,13 @@ async function handleChatsApi(request, response, parts) {
     sendJson(response, 200, {
       chats,
       activeChat,
-      activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
+      activeChatEvents: activeChat ? await readChatEvents(activeChat.id) : [],
     });
     return;
   }
 
   if (method === 'GET' && chatId && parts.length === 3) {
-    sendJson(response, 200, { chat: await readChat(chatId), activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { chat: await readChat(chatId), activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
@@ -343,7 +344,7 @@ async function handleChatsApi(request, response, parts) {
     sendJson(response, 201, {
       attachment,
       chat: await readChat(chatId),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -373,7 +374,7 @@ async function handleChatsApi(request, response, parts) {
       previousContent: update.previousContent,
       content: update.content,
       chat: await readChat(chatId),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -382,7 +383,7 @@ async function handleChatsApi(request, response, parts) {
     await deleteAttachment(chatId, parts[4]);
     sendJson(response, 200, {
       chat: await readChat(chatId),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -391,7 +392,7 @@ async function handleChatsApi(request, response, parts) {
     const body = await readBody(request);
     sendJson(response, 200, {
       chat: await writeMemory(chatId, body.content || ''),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -401,7 +402,7 @@ async function handleChatsApi(request, response, parts) {
     sendJson(response, 200, {
       content: await readContextSummary(chatId),
       path: chat.paths.context,
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -409,7 +410,7 @@ async function handleChatsApi(request, response, parts) {
   if (method === 'PUT' && chatId && parts[3] === 'context') {
     const body = await readBody(request);
     const result = await editContextSummary(chatId, body.content || '');
-    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
@@ -420,7 +421,7 @@ async function handleChatsApi(request, response, parts) {
       continueMessageId: body.continueMessageId || null,
       attachmentIds: body.attachmentIds || [],
     });
-    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
@@ -430,7 +431,7 @@ async function handleChatsApi(request, response, parts) {
     sendJson(response, 200, {
       ...result,
       chat: await readChat(chatId),
-      activeChatEvents: await readEvents({ chatId }),
+      activeChatEvents: await readChatEvents(chatId),
     });
     return;
   }
@@ -440,19 +441,19 @@ async function handleChatsApi(request, response, parts) {
     const result = await continueToolApproval(chatId, parts[4], body.decision || 'approve', {
       toolCallId: body.toolCallId || null,
     });
-    sendJson(response, 200, { ...result, chats: await listChats(), activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { ...result, chats: await listChats(), activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
   if (method === 'POST' && chatId && parts[3] === 'compact') {
     const result = await compactChat(chatId);
-    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
   if (method === 'POST' && chatId && parts[3] === 'save-context') {
     const result = await saveContextWindow(chatId);
-    sendJson(response, 200, { ...result, activeChatEvents: await readEvents({ chatId }) });
+    sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
     return;
   }
 
@@ -562,7 +563,7 @@ async function buildBootstrapPayload() {
     ollamaInstalledModels,
     chats,
     activeChat,
-    activeChatEvents: activeChat ? await readEvents({ chatId: activeChat.id }) : [],
+    activeChatEvents: activeChat ? await readChatEvents(activeChat.id) : [],
     persistentMemory: await readPersistentMemory(),
     userMemoryFiles: await listUserMemoryFilesWithHints(),
     runtimeHome: runtimeInfo.runtimeHome,
@@ -589,6 +590,10 @@ async function buildClientCatalog(config) {
     }),
     ollamaInstalledModels,
   };
+}
+
+function readChatEvents(chatId) {
+  return readEvents({ chatId, limit: CHAT_EVENT_DETAIL_LIMIT });
 }
 
 async function handleOllamaApi(request, response, parts) {

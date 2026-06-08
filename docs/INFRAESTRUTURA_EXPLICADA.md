@@ -225,7 +225,9 @@ O backup exporta o runtime em grupos selecionáveis:
 - anexos
 - eventos recentes para diagnóstico
 
-Na restauração, a UI permite importar só os grupos escolhidos. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico sem referências clicáveis para anexos antigos. Chats importados não sobrescrevem chats atuais com o mesmo id. Importar arquivos adicionais de memória substitui o conjunto de arquivos adicionais da seção ativa pela cópia do backup, validando tipo/tamanho e usando staging antes da troca.
+Na restauração, a UI permite importar só os grupos escolhidos. O backend cria um snapshot temporário do runtime ativo antes de aplicar a importação; se uma etapa falhar, ele restaura esse snapshot para evitar estado parcial. Configuração importada substitui a configuração atual como snapshot completo, inclusive removendo modelos customizados e capacidades que não existam no backup. Importar chats sem anexos preserva o histórico sem referências clicáveis para anexos antigos e redige conteúdo antigo de anexos em mensagens, tool traces, estado pendente, memória e contexto. Chats importados não sobrescrevem chats atuais com o mesmo id. Importar arquivos adicionais de memória substitui o conjunto de arquivos adicionais da seção ativa pela cópia do backup, validando tipo/tamanho e usando staging antes da troca.
+
+No modo offline, o backend força Ollama local e rejeita endpoints Ollama remotos. A descoberta dinâmica de catálogo online fica desligada, e busca web via terminal exige aprovação explícita mesmo quando tools automáticas estão ligadas.
 
 A exclusão de todos os chats remove apenas a pasta de chats da seção ativa. Configurações, memória persistente global e arquivos adicionais de memória persistente permanecem no runtime da seção.
 

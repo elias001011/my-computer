@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { getModelMetadata, getProvider } from './models.js';
+import { assertLocalOllamaBaseUrl } from './offline.js';
 import { appendEvent } from './store.js';
 
 const rotationCursors = new Map();
@@ -856,6 +857,9 @@ function resolveProviderRuntime(config, provider, options = {}) {
     const error = new Error(`Configure o endpoint/base URL do provider ${provider.label}.`);
     error.statusCode = 400;
     throw error;
+  }
+  if (provider.id === 'ollama') {
+    assertLocalOllamaBaseUrl(baseUrl, { offlineMode: config.privacy?.offlineMode === true });
   }
 
   if (provider.requiresApiKey && !options.allowMissingKey && !apiKeys.length) {

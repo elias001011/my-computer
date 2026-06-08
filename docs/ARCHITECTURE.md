@@ -56,7 +56,7 @@ Gravações que dependem de ler, mesclar e escrever estado são serializadas por
 
 Seções são escopadas por requisição com `AsyncLocalStorage`. A UI envia a seção ativa via header, e `getActivePaths()` usa esse escopo durante toda a cadeia async da requisição. O perfil ativo global continua existindo como fallback para bootstrap inicial e CLI.
 
-O export/import opera sobre esse runtime. O backup serializa a configuração normalizada completa, memória persistente global, arquivos adicionais de memória do usuário, chats, contexto, anexos e eventos; na importação, a UI permite escolher esses grupos separadamente. Quando o grupo de configuração é importado, ele substitui a configuração atual como snapshot completo, em vez de mesclar modelos customizados antigos. Chats importados não sobrescrevem chats existentes por id; colisões recebem novo id.
+O export/import opera sobre esse runtime. O backup serializa a configuração normalizada completa, memória persistente global, arquivos adicionais de memória do usuário, chats, contexto, anexos e eventos; na importação, a UI permite escolher esses grupos separadamente. Antes de aplicar a importação, o backend cria um snapshot temporário do runtime ativo e restaura esse snapshot se qualquer etapa falhar. Quando o grupo de configuração é importado, ele substitui a configuração atual como snapshot completo, em vez de mesclar modelos customizados antigos. Chats importados não sobrescrevem chats existentes por id; colisões recebem novo id. Quando chats são importados sem anexos, o backend redige conteúdo de anexos antigos em mensagens, tool traces, estado pendente, memória e contexto.
 
 ## Fluxo de uma mensagem
 
@@ -159,6 +159,13 @@ Para saídas longas ou execuções demoradas:
 - PDFs e arquivos complexos ficam anexados com metadados e caminho local.
 - O backend valida limites de tamanho e de quantidade antes de enviar.
 - Tool calls vindas do provider recebem IDs únicos antes de entrar no fluxo de aprovação. Estados antigos com IDs duplicados são interrompidos como inseguros em vez de executar comandos ambíguos.
+
+## Modo offline
+
+- `privacy.offlineMode` força provider/model efetivos para Ollama e desliga rotatórias para providers externos.
+- O endpoint do Ollama precisa ser local (`localhost`, `127.0.0.1`, `::1` ou socket local); configs/imports com endpoint remoto são rejeitados.
+- Bootstrap/config em offline não faz descoberta dinâmica de modelos em OpenRouter, Hugging Face ou endpoints OpenAI-compatible.
+- `web_search` em modo terminal continua exigindo aprovação explícita quando offline, mesmo se `alwaysAllow` estiver ligado.
 
 ## Contexto e memória
 

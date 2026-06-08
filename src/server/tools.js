@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runtimeHome } from './paths.js';
+import { getRuntimeHome } from './paths.js';
 
 export const terminalToolDefinition = {
   type: 'function',
@@ -340,7 +340,7 @@ export async function runTerminalCommand(command, options = {}) {
   const outputLimit = Number(options.outputLimit || process.env.MC_SHELL_OUTPUT_LIMIT || 40000);
   const startedAt = Date.now();
   const terminalMode = options.terminalMode === 'isolated' ? 'isolated' : 'standard';
-  const isolatedBaseHome = options.runtimeHome || runtimeHome;
+  const isolatedBaseHome = options.runtimeHome || getRuntimeHome();
   const isolatedHome = path.join(isolatedBaseHome, 'isolated-terminal');
   if (terminalMode === 'isolated') await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
   const cwd = options.cwd || (terminalMode === 'isolated' ? isolatedHome : process.env.HOME || os.homedir());

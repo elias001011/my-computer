@@ -1,4 +1,4 @@
-import { runtimeHome } from './paths.js';
+import { getRuntimeHome } from './paths.js';
 import { callProviderChat, callProviderNativeWebSearch } from './provider-client.js';
 import { getDefaultModelForProvider, getModelMetadata, modelSupportsImages } from './models.js';
 import {
@@ -196,9 +196,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         tool_calls: toolCalls,
       });
 
-      if (effectiveConfig.tools?.alwaysAllow !== true) {
+      const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
+      if (approvalToolCalls.length) {
         const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
-        const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
         for (const toolCall of safeToolCalls) {
           throwIfStopped(operationSignal);
           const toolUse = await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal });
@@ -220,7 +220,6 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           }
         }
         if (assistantOutcome) break;
-        if (!approvalToolCalls.length) continue;
 
         throwIfStopped(operationSignal);
         if (isGenericChatTitle(chatBefore.title) && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
@@ -260,8 +259,8 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
             tools: approvalToolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
           },
         });
-      return {
-        userMessage,
+        return {
+          userMessage,
           assistantMessage: pendingAssistantMessage,
           awaitingApproval: true,
           chat: await readChat(chatId),
@@ -975,9 +974,9 @@ async function continueAssistantToolLoop({
       tool_calls: toolCalls,
     });
 
-    if (effectiveConfig.tools?.alwaysAllow !== true) {
+    const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
+    if (approvalToolCalls.length) {
       const safeToolCalls = toolCalls.filter((toolCall) => !toolRequiresApproval(toolCall, selectedConfig));
-      const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
       for (const toolCall of safeToolCalls) {
         throwIfStopped(signal);
         const toolUse = await executeToolCallSafely(chatId, toolCall, selectedConfig);
@@ -995,54 +994,49 @@ async function continueAssistantToolLoop({
           };
         }
       }
-
-      if (approvalToolCalls.length) {
-        throwIfStopped(signal);
-        const pendingToolUses = [...toolUses, ...approvalToolCalls.map((toolCall) => createPendingApprovalToolUse(toolCall))];
-        await updateMessage(chatId, messageId, {
-          status: 'needs_tool_approval',
-          content: cleanedContent.content || 'A IA solicitou outra tool e está aguardando aprovação.',
-          thinking: currentThinking || undefined,
-          toolUses: pendingToolUses,
-          executionTrace: executionTrace.length ? executionTrace : null,
-          pendingToolApproval: {
-            toolCalls,
-            approvalToolCalls,
-            providerMessages: workingMessages,
-            preapprovedToolUses: toolUses,
-            executionTrace,
-            decisions: {},
-            sourceUserMessageId: sourceUserMessage?.id || null,
-            continuationGroupId,
-            attemptIndex,
-            continuationReason,
-            retryOfMessageId,
-            continuedFromMessageId,
-          },
-          providerUsed: currentProviderUsed,
-          modelUsed: currentModelUsed,
-          continuationAvailable: true,
-          error: null,
-        });
-        await appendEvent({
-          type: 'tool.approval.requested',
-          chatId,
-          details: {
-            messageId,
-            sourceUserMessageId: sourceUserMessage?.id || null,
-            groupId: continuationGroupId,
-            attemptIndex,
-            continuationReason,
-            retryOfMessageId,
-            continuedFromMessageId,
-            toolCount: approvalToolCalls.length,
-            tools: approvalToolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
-          },
-        });
-        return { awaitingApproval: true };
-      }
-
-      continue;
+      throwIfStopped(signal);
+      const pendingToolUses = [...toolUses, ...approvalToolCalls.map((toolCall) => createPendingApprovalToolUse(toolCall))];
+      await updateMessage(chatId, messageId, {
+        status: 'needs_tool_approval',
+        content: cleanedContent.content || 'A IA solicitou outra tool e está aguardando aprovação.',
+        thinking: currentThinking || undefined,
+        toolUses: pendingToolUses,
+        executionTrace: executionTrace.length ? executionTrace : null,
+        pendingToolApproval: {
+          toolCalls,
+          approvalToolCalls,
+          providerMessages: workingMessages,
+          preapprovedToolUses: toolUses,
+          executionTrace,
+          decisions: {},
+          sourceUserMessageId: sourceUserMessage?.id || null,
+          continuationGroupId,
+          attemptIndex,
+          continuationReason,
+          retryOfMessageId,
+          continuedFromMessageId,
+        },
+        providerUsed: currentProviderUsed,
+        modelUsed: currentModelUsed,
+        continuationAvailable: true,
+        error: null,
+      });
+      await appendEvent({
+        type: 'tool.approval.requested',
+        chatId,
+        details: {
+          messageId,
+          sourceUserMessageId: sourceUserMessage?.id || null,
+          groupId: continuationGroupId,
+          attemptIndex,
+          continuationReason,
+          retryOfMessageId,
+          continuedFromMessageId,
+          toolCount: approvalToolCalls.length,
+          tools: approvalToolCalls.map((toolCall) => toolCall.function?.name).filter(Boolean),
+        },
+      });
+      return { awaitingApproval: true };
     }
 
     for (const toolCall of toolCalls) {
@@ -1664,7 +1658,7 @@ export function buildContextWindowMarkdown(chat, config, persistentMemory = '') 
     `# Context window - ${chat.title}`,
     '',
     `- Chat: ${chat.id}`,
-    `- Runtime: ${config.runtimeHome || runtimeHome}`,
+    `- Runtime: ${config.runtimeHome || getRuntimeHome()}`,
     `- Provider: ${config.provider}`,
     `- Model: ${chat.model || config.model}`,
     `- Language: ${config.language}`,
@@ -1817,7 +1811,7 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
       : '',
     'Be careful with host actions, explain risky commands before choosing them, and prefer read-only commands when inspection is enough.',
     'Sudo and host actions: this app runs commands as the current OS user. If sudo needs a password, the browser cannot type it for the user; explain the exact command to run manually or suggest a narrow NOPASSWD sudoers rule only when appropriate. Never imply sudo is configured unless a command confirms it.',
-    `Runtime folder: ${config.runtimeHome || runtimeHome}`,
+    `Runtime folder: ${config.runtimeHome || getRuntimeHome()}`,
     `Current chat title: ${chat.title}`,
     `Chat memory file: ${chat.paths.memory}`,
     `Saved context file: ${chat.paths.context}`,
@@ -2408,6 +2402,7 @@ function isToolEnabled(name, tools = {}) {
 
 function toolRequiresApproval(toolCall, config = {}) {
   const name = toolCall?.function?.name;
+  if (name === 'web_search' && config.privacy?.offlineMode === true) return true;
   if (config.tools?.alwaysAllow === true) return false;
   if (name === 'run_terminal_command') return true;
   if (name === 'memory_chat' || name === 'persistent_memory') {

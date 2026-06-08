@@ -24,6 +24,7 @@ const state = {
   chatSettingsDraft: null,
   chatSettingsDirty: false,
   chatContextOpen: false,
+  chatContextDraft: null,
   chatContextDirty: false,
   contextEditorOpen: false,
   contextEditor: null,
@@ -1071,8 +1072,7 @@ function renderSetup() {
 function renderApp() {
   const chat = getActiveChatView();
   const offlineMode = isOfflineMode(state.config);
-  const chatProviderId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
-  const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
+  const { provider: chatProviderId, model: chatModel } = getEffectiveChatRuntime(chat);
   const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
   const agentRunning = Boolean(chat?.id && state.busy && state.activeAgentChatId === chat.id);
   const composerDisabled = state.busy || toolApprovalBlocksComposer;
@@ -2027,8 +2027,7 @@ function renderModelFallbackRows(fallbacks = [], providerId = '') {
 function renderChatSettingsModal() {
   const chat = getActiveChatView();
   const offlineMode = isOfflineMode(state.config);
-  const chatProviderId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
-  const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
+  const { provider: chatProviderId, model: chatModel } = getEffectiveChatRuntime(chat);
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="mobile-chat-settings-title">
@@ -2097,6 +2096,7 @@ function renderChatSettingsModal() {
 
 function renderChatContextModal() {
   const chat = state.activeChat;
+  const draft = getChatContextDraft(chat);
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="chat-context-title">
@@ -2112,13 +2112,13 @@ function renderChatContextModal() {
             <section class="modal-section">
               <label>
                 System prompt do chat
-                <textarea id="chat-prompt-modal-input" rows="7" placeholder="Preferências específicas deste chat.">${escapeHtml(chat?.systemPromptExtra || '')}</textarea>
+                <textarea id="chat-prompt-modal-input" rows="7" placeholder="Preferências específicas deste chat.">${escapeHtml(draft.systemPromptExtra || '')}</textarea>
               </label>
             </section>
             <section class="modal-section">
               <label>
                 Memória do chat
-                <textarea id="chat-memory-modal-input" class="memory-editor">${escapeHtml(chat?.memory || '')}</textarea>
+                <textarea id="chat-memory-modal-input" class="memory-editor">${escapeHtml(draft.memory || '')}</textarea>
               </label>
               <p class="help-text">A tool memory_chat usa este Markdown como base quando precisa ler, anexar ou reescrever memória do chat.</p>
             </section>
@@ -2165,9 +2165,7 @@ function renderContextEditorModal() {
 
 function renderModelSettingsModal() {
   const chat = state.activeChat;
-  const offlineMode = isOfflineMode(state.config);
-  const providerId = offlineMode ? 'ollama' : chat?.provider || state.config.provider;
-  const modelId = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
+  const { provider: providerId, model: modelId } = getEffectiveChatRuntime(chat);
   const settings = chat?.modelSettings || {};
   const support = getModelSettingSupport(providerId, modelId);
   const metadata = getModelMetadata(providerId, modelId);
@@ -3983,6 +3981,45 @@ function getActiveChatView() {
   return state.chatSettingsDraft ? { ...state.activeChat, ...state.chatSettingsDraft } : state.activeChat;
 }
 
+function getEffectiveChatRuntime(chat = state.activeChat, draft = null) {
+  const offlineMode = isOfflineMode(state.config);
+  const provider = offlineMode ? 'ollama' : draft?.provider || chat?.provider || state.config.provider;
+  const model = offlineMode
+    ? draft?.model || (chat?.provider === 'ollama' ? chat?.model : state.config.model) || getProvider('ollama').defaultModel
+    : draft?.model || chat?.model || state.config.model || getProvider(provider).defaultModel;
+  return { provider, model };
+}
+
+function getChatContextDraft(chat = state.activeChat) {
+  if (!chat) return { systemPromptExtra: '', memory: '' };
+  if (state.chatContextDraft?.chatId === chat.id) return state.chatContextDraft;
+  return {
+    chatId: chat.id,
+    systemPromptExtra: chat.systemPromptExtra || '',
+    memory: chat.memory || '',
+  };
+}
+
+function captureChatContextDraftFromForm() {
+  if (!state.activeChat) return state.chatContextDraft;
+  const systemPromptExtra =
+    document.querySelector('#chat-prompt-modal-input')?.value ??
+    state.chatContextDraft?.systemPromptExtra ??
+    state.activeChat.systemPromptExtra ??
+    '';
+  const memory =
+    document.querySelector('#chat-memory-modal-input')?.value ??
+    state.chatContextDraft?.memory ??
+    state.activeChat.memory ??
+    '';
+  state.chatContextDraft = {
+    chatId: state.activeChat.id,
+    systemPromptExtra,
+    memory,
+  };
+  return state.chatContextDraft;
+}
+
 function getChatSettingsPrefix() {
   return state.chatSettingsOpen ? 'mobile-' : '';
 }
@@ -4042,8 +4079,7 @@ function withCustomModelCapabilities(modelCapabilities, providerId, model, suppo
 
 function getAttachmentWarning(attachment) {
   if (attachment.kind === 'image') {
-    const provider = state.activeChat?.provider || state.config.provider;
-    const model = state.activeChat?.model || state.config.model;
+    const { provider, model } = getEffectiveChatRuntime();
     const metadata = getModelMetadata(provider, model);
     if (modelSupportsImages(provider, model)) {
       if (metadata.maxFileSizeMB && attachment.size > metadata.maxFileSizeMB * 1024 * 1024) {
@@ -5348,6 +5384,7 @@ function canLeaveActiveChatDraft() {
   state.chatSettingsDraft = null;
   state.chatSettingsDirty = false;
   state.chatContextDirty = false;
+  state.chatContextDraft = null;
   state.chatContextOpen = false;
   state.modelSettingsDirty = false;
   state.modelSettingsOpen = false;
@@ -5369,7 +5406,7 @@ async function sendMessage(event) {
       return;
     }
   }
-  if (state.chatSettingsDirty || state.modelSettingsDirty) {
+  if (state.chatSettingsDirty || state.chatContextDirty || state.modelSettingsDirty) {
     saveComposerDraft();
     state.confirmDialog = { type: 'send-chat-settings' };
     renderPreservingVisualState();
@@ -5407,8 +5444,7 @@ async function sendMessageFromValues(textarea, content) {
     renderPreservingVisualState();
     return;
   }
-  const activeProvider = state.activeChat.provider || state.config.provider;
-  const activeModel = state.activeChat.model || state.config.model;
+  const { provider: activeProvider, model: activeModel } = getEffectiveChatRuntime();
   const activeModelMetadata = getModelMetadata(activeProvider, activeModel);
   const unsupportedImage = state.pendingAttachments.find(
     (attachment) =>
@@ -5478,7 +5514,7 @@ async function sendMessageContent(content, options = {}) {
   state.activeAgentChatId = chatId;
   state.stopInFlight = false;
   await runAction(
-    `Enviando para ${providerLabel(state.activeChat.provider || state.config.provider)}...`,
+    `Enviando para ${providerLabel(getEffectiveChatRuntime().provider)}...`,
     async () => {
       startEventPolling(chatId);
       let data;
@@ -5845,39 +5881,48 @@ async function saveMemory() {
 
 function openChatContext() {
   state.chatSettingsOpen = false;
+  state.chatContextDraft = getChatContextDraft(state.activeChat);
   state.chatContextOpen = true;
   renderPreservingVisualState();
 }
 
 function closeChatContext() {
+  if (state.chatContextDirty) {
+    captureChatContextDraftFromForm();
+    const confirmed = confirmUi('Descartar alterações não salvas neste chat?');
+    if (!confirmed) return;
+    state.chatContextDirty = false;
+  }
   state.chatContextOpen = false;
+  state.chatContextDraft = null;
   renderPreservingVisualState();
 }
 
 async function saveChatContext(event) {
-  event.preventDefault();
-  const systemPromptExtra = document.querySelector('#chat-prompt-modal-input').value;
-  const memory = document.querySelector('#chat-memory-modal-input').value;
+  event?.preventDefault();
+  const draft = captureChatContextDraftFromForm() || {};
+  const { provider, model } = getEffectiveChatRuntime();
   await runAction('Salvando prompt e memória...', async () => {
     const chatResponse = await api(`/api/chats/${state.activeChat.id}`, {
       method: 'PUT',
       body: {
         title: state.activeChat.title,
         folder: state.activeChat.folder || '',
-        provider: state.activeChat.provider,
-        model: state.activeChat.model,
+        provider,
+        model,
         modelSettings: state.activeChat.modelSettings || {},
-        systemPromptExtra,
+        systemPromptExtra: draft.systemPromptExtra || '',
       },
     });
     const memoryResponse = await api(`/api/chats/${state.activeChat.id}/memory`, {
       method: 'PUT',
-      body: { content: memory },
+      body: { content: draft.memory || '' },
     });
     state.activeChat = memoryResponse.chat || chatResponse.chat;
     state.chats = chatResponse.chats || state.chats;
     state.activeChatEvents = memoryResponse.activeChatEvents || chatResponse.activeChatEvents || state.activeChatEvents;
     state.chatContextDirty = false;
+    state.chatContextDraft = null;
   });
 }
 
@@ -5948,14 +5993,15 @@ async function saveModelSettings(event, overrideSettings = null, options = {}) {
   event?.preventDefault();
   const settings = overrideSettings ?? readModelSettingsForm();
   const chat = getActiveChatView() || state.activeChat;
+  const { provider, model } = getEffectiveChatRuntime(chat);
   await runAction('Salvando parâmetros do modelo...', async () => {
     const data = await api(`/api/chats/${state.activeChat.id}`, {
       method: 'PUT',
       body: {
         title: chat.title,
         folder: chat.folder || state.activeChat.folder || '',
-        provider: chat.provider,
-        model: chat.model,
+        provider,
+        model,
         modelSettings: settings,
         systemPromptExtra: state.activeChat.systemPromptExtra || '',
       },
@@ -5995,7 +6041,7 @@ async function saveChatSettings(event, options = {}) {
   const folder = normalizeChatFolder(draft.folder || '');
   const offlineMode = isOfflineMode(state.config);
   const provider = offlineMode ? 'ollama' : draft.provider || state.activeChat.provider || state.config.provider;
-  const model = offlineMode && state.activeChat.provider !== 'ollama' ? state.config.model : draft.model || state.activeChat.model || getProvider(provider).defaultModel;
+  const model = getEffectiveChatRuntime(state.activeChat, { provider, model: draft.model }).model;
   const supportsImagesInput =
     document.querySelector(`#${prefix}chat-custom-model-images`) ||
     document.querySelector('#chat-custom-model-images') ||
@@ -6200,6 +6246,7 @@ function markChatSettingsDirty() {
 }
 
 function markChatContextDirty() {
+  captureChatContextDraftFromForm();
   state.chatContextDirty = true;
   updateDirtyIndicators();
 }
@@ -6683,6 +6730,7 @@ function discardPendingDialog() {
 async function saveChatSettingsAndSend() {
   state.confirmDialog = null;
   if (state.chatSettingsDirty) await saveChatSettings(null);
+  if (state.chatContextDirty) await saveChatContext(null);
   if (state.modelSettingsDirty) await saveModelSettings(null);
   await sendMessageFromComposerDraft();
 }

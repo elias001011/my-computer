@@ -53,7 +53,7 @@ Files added to user memory are copied into the My Computer runtime. If the AI ed
 
 Local tools can require approval before they run. Web search in `Terminal` or `Both` mode also follows tool approval when `Always allow any tool` is off, because it may make a public DuckDuckGo query from your machine.
 
-Offline mode is configured per section. It forces Ollama, blocks online providers in the backend, disables native provider search, and removes external provider/model fallback routes. If web search is enabled in an offline section, the prompt instructs the AI to use neutral, generic searches without private names, paths, code, memory, terminal output, or user messages.
+Offline mode is configured per section. It forces Ollama, blocks online providers in the backend, disables native provider search, and removes external provider/model fallback routes. The Ollama endpoint must be local (`localhost`, `127.0.0.1`, `::1`, or a local socket); remote Ollama-compatible URLs are rejected while offline mode is enabled. If terminal-backed web search is enabled in an offline section, the app still requires explicit approval even when `Always allow any tool` is on, and the prompt instructs the AI to use neutral, generic searches without private names, paths, code, memory, terminal output, or user messages.
 
 ## Sections And Isolation
 
@@ -79,7 +79,9 @@ Offline mode:
 
 - forces the default provider and chats to `Ollama`
 - blocks online provider calls in the backend
+- rejects remote Ollama-compatible endpoints
 - disables native provider search
+- requires approval for terminal-backed web search
 - removes fallback routing to external providers
 - keeps the UI focused on Ollama and local options
 
@@ -251,7 +253,7 @@ In `General settings > Backup`, export/import includes:
 - attachments
 - events
 
-The import dialog lets you choose which parts to restore.
+The import dialog lets you choose which parts to restore. Restore runs with a rollback snapshot of the active runtime, so a failed import does not leave half-applied memory/config/chat changes. If chats are restored without attachments, old attachment contents are redacted from messages, tool traces, pending state, memory, and context before the chat is written.
 
 ## Development
 

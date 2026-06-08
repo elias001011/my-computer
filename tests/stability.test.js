@@ -423,6 +423,132 @@ test('offline mode blocks online providers and native search', async () => {
       }),
     /Modo offline ativo/,
   );
+  await assert.rejects(
+    () =>
+      providerClient.callProviderChat({
+        config: {
+          ...config,
+          providerSettings: {
+            ...config.providerSettings,
+            ollama: { baseUrl: 'https://ollama.example.test/v1', apiKeys: [] },
+          },
+        },
+        provider: 'ollama',
+        model: 'llama3.2',
+        messages: [{ role: 'user', content: 'oi' }],
+        tools: [],
+      }),
+    /endpoint do Ollama precisa ser local/,
+  );
+});
+
+test('offline bootstrap skips online model discovery', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-offline-bootstrap-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('127.0.0.1:11434')) {
+      return {
+        ok: true,
+        json: async () => ({ models: [{ name: 'llama3.2:latest' }] }),
+      };
+    }
+    throw new Error(`unexpected online discovery: ${url}`);
+  };
+  try {
+    const token = `${Date.now()}-offline-bootstrap`;
+    const store = await import(`../src/server/store.js?test=${token}`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'ollama',
+      model: 'llama3.2',
+      privacy: { offlineMode: true },
+      providerSettings: {
+        openrouter: { baseUrl: 'https://openrouter.ai/api/v1', apiKeys: [{ value: 'openrouter-key' }] },
+        'openai-compatible': { baseUrl: 'https://models.example.test/v1', apiKeys: [{ value: 'compatible-key' }] },
+      },
+    });
+    const serverModule = await import(`../src/server/server.js?test=${token}`);
+    const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const response = await originalFetch(`${url}/api/bootstrap`);
+      assert.equal(response.status, 200);
+      assert.ok(calls.every((call) => call.includes('127.0.0.1')));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('offline terminal search still requires approval when tools are always allowed', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-offline-search-approval-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push(String(url));
+    if (String(url).includes('/api/tags')) {
+      return {
+        ok: true,
+        json: async () => ({ models: [{ name: 'llama3.2' }] }),
+      };
+    }
+    if (String(url).includes('/chat/completions')) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'search-1',
+                    type: 'function',
+                    function: {
+                      name: 'web_search',
+                      arguments: JSON.stringify({ query: 'weather', reason: 'public info', maxResults: 2 }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      };
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  try {
+    const token = `${Date.now()}-offline-search-approval`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'ollama',
+      model: 'llama3.2',
+      privacy: { offlineMode: true },
+      tools: { searchMode: 'terminal', webSearch: true, searchTerminal: true, alwaysAllow: true },
+      providerSettings: { ollama: { baseUrl: 'http://127.0.0.1:11434/v1', apiKeys: [] } },
+    });
+    const chat = await store.createChat('Offline search approval', { provider: 'ollama', model: 'llama3.2' });
+    const result = await assistant.sendUserMessage(chat.id, 'search this');
+    assert.equal(result.awaitingApproval, true);
+    assert.equal(result.assistantMessage.toolUses[0].name, 'web_search');
+    assert.equal(result.assistantMessage.toolUses[0].status, 'pending_approval');
+    assert.equal(calls.some((call) => /duckduckgo/i.test(call)), false);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('chat rotation tries alternate model before alternate api key', async () => {

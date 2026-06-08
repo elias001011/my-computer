@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { getDefaultModelForProvider, isKnownProvider, providerCatalog } from './models.js';
-import { getProfileRuntimeHome, profilesIndexPath, runtimeHome } from './paths.js';
+import { assertLocalOllamaBaseUrl, isLocalOllamaBaseUrl } from './offline.js';
+import { getProfileRuntimeHome, getProfilesIndexPath, getRuntimeHome } from './paths.js';
 
 const fileLocks = new Map();
 const USER_MEMORY_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
@@ -16,6 +18,7 @@ const defaultProfile = Object.freeze({
   name: 'Default',
 });
 let activeProfileId = 'default';
+let activeRootRuntimeHome = getRuntimeHome();
 let activePaths = buildProfilePaths(activeProfileId);
 
 export const defaultConfig = Object.freeze({
@@ -89,6 +92,7 @@ export async function withProfileScope(profileId, action) {
 }
 
 export async function ensureRuntime() {
+  refreshRuntimeRootIfNeeded();
   await ensureProfilesIndex();
   const paths = getActivePaths();
   await fs.mkdir(paths.runtimeHome, { recursive: true, mode: 0o700 });
@@ -125,7 +129,9 @@ export async function saveConfig(patch = {}) {
     });
     const requestedProvider = normalizeProviderId(patch.provider || current.provider);
     const provider = privacy.offlineMode ? 'ollama' : requestedProvider;
-    const providerSettings = normalizeProviderSettings(mergeProviderSettings(current.providerSettings, patch.providerSettings));
+    const providerSettings = normalizeProviderSettings(mergeProviderSettings(current.providerSettings, patch.providerSettings), {
+      offlineMode: privacy.offlineMode,
+    });
     const requestedModel = String(patch.model || current.model || getDefaultModelForProvider(provider)).trim();
     const model = privacy.offlineMode && requestedProvider !== 'ollama' ? getDefaultModelForProvider('ollama') : requestedModel;
 
@@ -205,8 +211,8 @@ export async function replaceConfig(config = {}) {
 }
 
 export function sanitizeConfig(config) {
-  const providerSettings = normalizeProviderSettings(config.providerSettings || {});
   const privacy = normalizePrivacySettings(config.privacy);
+  const providerSettings = normalizeProviderSettings(config.providerSettings || {}, { offlineMode: privacy.offlineMode });
   return {
     setupComplete: Boolean(config.setupComplete),
     provider: normalizeProviderId(config.provider),
@@ -955,7 +961,7 @@ export async function getRuntimeInfo() {
   const scopedProfileId = getScopedProfileId();
   return {
     runtimeHome: getActivePaths().runtimeHome,
-    rootRuntimeHome: runtimeHome,
+    rootRuntimeHome: getRuntimeHome(),
     activeProfileId: scopedProfileId,
     activeProfile: profiles.find((profile) => profile.id === scopedProfileId) || profiles[0],
     profiles,
@@ -1102,45 +1108,67 @@ export async function importRuntimeData(payload = {}, options = {}) {
   await ensureRuntime();
   const settings = normalizeImportOptions(options);
   preflightRuntimeImport(payload, settings);
+  const rollbackDir = await createRuntimeImportRollback();
 
-  if (settings.config && payload.config) {
-    await replaceConfig({
-      ...payload.config,
-      setupComplete: Boolean(payload.config.setupComplete ?? true),
-    });
-  }
-
-  if (settings.persistentMemory && Object.hasOwn(payload, 'persistentMemory')) {
-    await writePersistentMemory(payload.persistentMemory || '');
-  }
-
-  if (settings.persistentMemoryUser && Array.isArray(payload.persistentMemoryUserFiles)) {
-    await importUserMemoryFiles(payload.persistentMemoryUserFiles);
-  }
-
-  if (settings.chats && Array.isArray(payload.chats)) {
-    for (const importedChat of payload.chats) {
-      await writeImportedChat(importedChat, { attachments: settings.attachments });
+  try {
+    if (settings.config && payload.config) {
+      await replaceConfig({
+        ...payload.config,
+        setupComplete: Boolean(payload.config.setupComplete ?? true),
+      });
     }
+
+    if (settings.persistentMemory && Object.hasOwn(payload, 'persistentMemory')) {
+      await writePersistentMemory(payload.persistentMemory || '');
+    }
+
+    if (settings.persistentMemoryUser && Array.isArray(payload.persistentMemoryUserFiles)) {
+      await importUserMemoryFiles(payload.persistentMemoryUserFiles);
+    }
+
+    if (settings.chats && Array.isArray(payload.chats)) {
+      for (const importedChat of payload.chats) {
+        await writeImportedChat(importedChat, { attachments: settings.attachments });
+      }
+    }
+
+    if (settings.events && Array.isArray(payload.events)) {
+      await importEvents(payload.events);
+    }
+
+    await appendEvent({
+      type: 'runtime.imported',
+      details: {
+        chatCount: settings.chats && Array.isArray(payload.chats) ? payload.chats.length : 0,
+        config: settings.config,
+        persistentMemory: settings.persistentMemory,
+        persistentMemoryUser: settings.persistentMemoryUser,
+        attachments: settings.attachments,
+        events: settings.events,
+      },
+    });
+
+    return exportRuntimeData();
+  } catch (error) {
+    await restoreRuntimeImportRollback(rollbackDir);
+    throw error;
+  } finally {
+    await fs.rm(rollbackDir, { recursive: true, force: true });
   }
+}
 
-  if (settings.events && Array.isArray(payload.events)) {
-    await importEvents(payload.events);
-  }
+async function createRuntimeImportRollback() {
+  const source = getActivePaths().runtimeHome;
+  const rollbackDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-import-rollback-'));
+  await fs.cp(source, rollbackDir, { recursive: true, force: true, preserveTimestamps: true });
+  return rollbackDir;
+}
 
-  await appendEvent({
-    type: 'runtime.imported',
-    details: {
-      chatCount: settings.chats && Array.isArray(payload.chats) ? payload.chats.length : 0,
-      config: settings.config,
-      persistentMemory: settings.persistentMemory,
-      persistentMemoryUser: settings.persistentMemoryUser,
-      attachments: settings.attachments,
-      events: settings.events,
-    },
-  });
-
-  return exportRuntimeData();
+async function restoreRuntimeImportRollback(rollbackDir) {
+  const target = getActivePaths().runtimeHome;
+  await fs.rm(target, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+  await fs.cp(rollbackDir, target, { recursive: true, force: true, preserveTimestamps: true });
 }
 
 function preflightRuntimeImport(payload = {}, settings = {}) {
@@ -1201,6 +1229,7 @@ async function writeImportedChat(importedChat = {}, options = {}) {
   const chatDir = getChatDir(id);
   const provider = normalizeProviderId(importedMetadata.provider || defaultConfig.provider);
   const now = new Date().toISOString();
+  const attachmentRedactionPlans = options.attachments === false ? createImportedAttachmentRedactionPlans(importedChat.attachments || []) : [];
   const metadata = {
     id,
     title: normalizeTitle(importedMetadata.title || 'Chat importado'),
@@ -1223,10 +1252,10 @@ async function writeImportedChat(importedChat = {}, options = {}) {
   await fs.mkdir(path.join(chatDir, 'context-snapshots'), { recursive: true, mode: 0o700 });
   await fs.mkdir(metadata.paths.attachments, { recursive: true, mode: 0o700 });
   await writeJson(path.join(chatDir, 'metadata.json'), metadata, 0o600);
-  await writeJson(path.join(chatDir, 'messages.json'), normalizeImportedMessages(importedChat.messages, options), 0o600);
-  await fs.writeFile(metadata.paths.memory, String(importedChat.memory || '# Chat memory\n'), { mode: 0o600 });
-  await fs.writeFile(metadata.paths.context, String(importedChat.contextSummary || '# Context summary\n'), { mode: 0o600 });
-  await fs.writeFile(metadata.paths.contextWindow, String(importedChat.contextWindow || '# Context window\n'), { mode: 0o600 });
+  await writeJson(path.join(chatDir, 'messages.json'), normalizeImportedMessages(importedChat.messages, options, attachmentRedactionPlans), 0o600);
+  await fs.writeFile(metadata.paths.memory, redactImportedAttachmentText(String(importedChat.memory || '# Chat memory\n'), attachmentRedactionPlans), { mode: 0o600 });
+  await fs.writeFile(metadata.paths.context, redactImportedAttachmentText(String(importedChat.contextSummary || '# Context summary\n'), attachmentRedactionPlans), { mode: 0o600 });
+  await fs.writeFile(metadata.paths.contextWindow, redactImportedAttachmentText(String(importedChat.contextWindow || '# Context window\n'), attachmentRedactionPlans), { mode: 0o600 });
   await importChatAttachments(id, options.attachments === false ? [] : importedChat.attachments || []);
 }
 
@@ -1242,10 +1271,33 @@ async function getAvailableImportedChatId(requestedId) {
   return id;
 }
 
-function normalizeImportedMessages(messages = [], options = {}) {
+function normalizeImportedMessages(messages = [], options = {}, attachmentRedactionPlans = []) {
   const items = Array.isArray(messages) ? messages : [];
   if (options.attachments !== false) return items;
-  return items.map((message) => ({ ...message, attachments: [] }));
+  return items.map((message) => {
+    let nextMessage = message;
+    for (const plan of attachmentRedactionPlans) nextMessage = redactAttachmentData(nextMessage, plan);
+    return { ...nextMessage, attachments: [] };
+  });
+}
+
+function createImportedAttachmentRedactionPlans(attachments = []) {
+  return (attachments || []).map((attachment) => {
+    let data = null;
+    try {
+      const rawBase64 = String(attachment?.dataBase64 || '').replace(/^data:[^;]+;base64,/, '');
+      if (rawBase64) data = Buffer.from(rawBase64, 'base64');
+    } catch {
+      data = null;
+    }
+    return createAttachmentRedactionPlan(attachment || {}, data);
+  });
+}
+
+function redactImportedAttachmentText(text, attachmentRedactionPlans = []) {
+  let next = String(text || '');
+  for (const plan of attachmentRedactionPlans) next = redactAttachmentString(next, plan);
+  return next;
 }
 
 async function exportChatAttachments(id) {
@@ -1513,19 +1565,23 @@ function getScopedProfileId() {
 }
 
 function getActivePaths() {
+  refreshRuntimeRootIfNeeded();
   return profileScope.getStore()?.paths || activePaths;
 }
 
 async function ensureProfilesIndex() {
-  await fs.mkdir(runtimeHome, { recursive: true, mode: 0o700 });
+  refreshRuntimeRootIfNeeded();
+  const rootRuntimeHome = getRuntimeHome();
+  const indexPath = getProfilesIndexPath();
+  await fs.mkdir(rootRuntimeHome, { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const fallback = {
     version: 1,
     activeProfileId: 'default',
     profiles: [{ ...defaultProfile, createdAt: now, updatedAt: now }],
   };
-  await ensureJsonFile(profilesIndexPath, fallback);
-  const index = normalizeProfilesIndex(await readJson(profilesIndexPath, fallback));
+  await ensureJsonFile(indexPath, fallback);
+  const index = normalizeProfilesIndex(await readJson(indexPath, fallback));
   const changed =
     !index.profiles.length ||
     !index.profiles.some((profile) => profile.id === 'default') ||
@@ -1547,7 +1603,7 @@ async function ensureProfilesIndex() {
 
 async function writeProfilesIndex(index) {
   const next = normalizeProfilesIndex(index);
-  await writeJson(profilesIndexPath, next, 0o600);
+  await writeJson(getProfilesIndexPath(), next, 0o600);
   activeProfileId = next.activeProfileId;
   activePaths = buildProfilePaths(activeProfileId);
   return next;
@@ -1571,7 +1627,7 @@ function normalizeProfilesIndex(index = {}) {
     })
     .filter(Boolean);
   if (!profiles.some((profile) => profile.id === 'default')) {
-    profiles.unshift({ ...defaultProfile, createdAt: now, updatedAt: now, runtimeHome });
+    profiles.unshift({ ...defaultProfile, createdAt: now, updatedAt: now, runtimeHome: getRuntimeHome() });
   }
   const requestedActive = sanitizeProfileId(index.activeProfileId || 'default');
   const active = profiles.some((profile) => profile.id === requestedActive) ? requestedActive : 'default';
@@ -1580,6 +1636,14 @@ function normalizeProfilesIndex(index = {}) {
     activeProfileId: active,
     profiles,
   };
+}
+
+function refreshRuntimeRootIfNeeded() {
+  const currentRootRuntimeHome = getRuntimeHome();
+  if (currentRootRuntimeHome === activeRootRuntimeHome) return;
+  activeRootRuntimeHome = currentRootRuntimeHome;
+  activeProfileId = 'default';
+  activePaths = buildProfilePaths(activeProfileId);
 }
 
 function sanitizeProfileId(profileId) {
@@ -1833,7 +1897,7 @@ function normalizeConfig(config = {}) {
   const privacy = normalizePrivacySettings(config.privacy || defaultConfig.privacy);
   const requestedProvider = normalizeProviderId(config.provider || defaultConfig.provider);
   const provider = privacy.offlineMode ? 'ollama' : requestedProvider;
-  const providerSettings = normalizeProviderSettings(config.providerSettings || {});
+  const providerSettings = normalizeProviderSettings(config.providerSettings || {}, { offlineMode: privacy.offlineMode });
 
   if (config.apiKey && !getPrimaryApiKey(providerSettings, 'groq')) {
     providerSettings.groq.apiKeys = normalizeApiKeyEntries([config.apiKey]);
@@ -1906,7 +1970,7 @@ function normalizeProviderId(providerId) {
   return isKnownProvider(value) ? value : 'groq';
 }
 
-function normalizeProviderSettings(settings = {}) {
+function normalizeProviderSettings(settings = {}, options = {}) {
   const next = {};
   for (const provider of providerCatalog) {
     const current = settings[provider.id] || {};
@@ -1919,9 +1983,22 @@ function normalizeProviderSettings(settings = {}) {
         value: envKey,
       });
     }
+    const baseUrl = String(current.baseUrl || provider.baseUrl || '').trim();
     next[provider.id] = {
-      baseUrl: String(current.baseUrl || provider.baseUrl || '').trim(),
+      baseUrl,
       apiKeys,
+    };
+  }
+  if (options.offlineMode) {
+    const ollamaDefault = providerCatalog.find((provider) => provider.id === 'ollama')?.baseUrl || 'http://127.0.0.1:11434/v1';
+    const ollamaBaseUrl = next.ollama?.baseUrl || ollamaDefault;
+    if (!isLocalOllamaBaseUrl(ollamaBaseUrl)) {
+      assertLocalOllamaBaseUrl(ollamaBaseUrl, { offlineMode: true });
+    }
+    next.ollama = {
+      ...(next.ollama || {}),
+      baseUrl: ollamaBaseUrl,
+      apiKeys: [],
     };
   }
   return next;

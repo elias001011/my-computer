@@ -481,3 +481,134 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(deletedChats.count, 2);
   assert.equal((await store.listChats()).length, 0);
 });
+
+test('store follows MY_COMPUTER_HOME across cache-busted imports', async () => {
+  const originalHome = process.env.MY_COMPUTER_HOME;
+  const firstHome = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-home-a-'));
+  const secondHome = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-home-b-'));
+
+  try {
+    process.env.MY_COMPUTER_HOME = firstHome;
+    const firstStore = await import(`../src/server/store.js?home=${Date.now()}-a`);
+    await firstStore.ensureRuntime();
+    await firstStore.createChat('First runtime');
+    assert.equal((await firstStore.getRuntimeInfo()).rootRuntimeHome, path.resolve(firstHome));
+    assert.equal((await firstStore.listChats()).length, 1);
+
+    process.env.MY_COMPUTER_HOME = secondHome;
+    const secondStore = await import(`../src/server/store.js?home=${Date.now()}-b`);
+    await secondStore.ensureRuntime();
+    assert.equal((await secondStore.getRuntimeInfo()).rootRuntimeHome, path.resolve(secondHome));
+    assert.equal((await secondStore.listChats()).length, 0);
+    await secondStore.createChat('Second runtime');
+    assert.equal((await secondStore.listChats()).length, 1);
+
+    process.env.MY_COMPUTER_HOME = firstHome;
+    assert.equal((await firstStore.getRuntimeInfo()).rootRuntimeHome, path.resolve(firstHome));
+    assert.equal((await firstStore.listChats()).length, 1);
+  } finally {
+    if (originalHome === undefined) delete process.env.MY_COMPUTER_HOME;
+    else process.env.MY_COMPUTER_HOME = originalHome;
+    await fs.rm(firstHome, { recursive: true, force: true });
+    await fs.rm(secondHome, { recursive: true, force: true });
+  }
+});
+
+test('offline config rejects remote Ollama endpoints', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-offline-ollama-url-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const store = await import(`../src/server/store.js?offline-url=${Date.now()}`);
+  await store.ensureRuntime();
+
+  await assert.rejects(
+    () =>
+      store.saveConfig({
+        setupComplete: true,
+        provider: 'ollama',
+        model: 'llama3.2',
+        privacy: { offlineMode: true },
+        providerSettings: {
+          ollama: { baseUrl: 'https://ollama.example.test/v1', apiKeys: [] },
+        },
+      }),
+    /endpoint do Ollama precisa ser local/,
+  );
+});
+
+test('restore without attachments redacts chat document traces', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-restore-redact-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const store = await import(`../src/server/store.js?restore-redact=${Date.now()}`);
+  await store.ensureRuntime();
+  const secret = 'SUPER-PRIVATE-DOCUMENT-CONTENT';
+  const attachment = {
+    id: 'doc-1',
+    name: 'secret.md',
+    mimeType: 'text/markdown',
+    size: secret.length,
+    kind: 'text',
+    path: '/tmp/secret.md',
+    extractedText: secret,
+    previewText: secret,
+    dataBase64: Buffer.from(secret).toString('base64'),
+  };
+
+  await store.importRuntimeData(
+    {
+      version: 2,
+      chats: [
+        {
+          metadata: { id: 'restore-chat', title: 'Restore chat', provider: 'ollama', model: 'llama3.2' },
+          messages: [
+            {
+              id: 'assistant-1',
+              role: 'assistant',
+              content: `Li o arquivo: ${secret}`,
+              attachments: [attachment],
+              toolUses: [{ name: 'chat_document', result: { content: secret, attachment } }],
+              executionTrace: [{ output: secret }],
+              pendingToolApproval: {
+                providerMessages: [{ role: 'tool', content: secret }],
+              },
+            },
+          ],
+          memory: `# Memory\n${secret}`,
+          contextSummary: `# Context\n${secret}`,
+          contextWindow: `# Window\n${secret}`,
+          attachments: [attachment],
+        },
+      ],
+    },
+    { config: false, persistentMemory: false, persistentMemoryUser: false, chats: true, attachments: false, events: false },
+  );
+
+  const [chatMetadata] = await store.listChats();
+  const chat = await store.readChat(chatMetadata.id);
+  const contextWindow = await fs.readFile(path.join(tempDir, 'chats', chatMetadata.id, 'context-window.md'), 'utf8');
+  assert.equal(chat.attachments.length, 0);
+  assert.doesNotMatch(JSON.stringify(chat), new RegExp(secret));
+  assert.doesNotMatch(contextWindow, new RegExp(secret));
+});
+
+test('failed restore rolls back earlier runtime writes', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-restore-rollback-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const store = await import(`../src/server/store.js?restore-rollback=${Date.now()}`);
+  await store.ensureRuntime();
+  await store.writePersistentMemory('# Before\n');
+
+  await assert.rejects(
+    () =>
+      store.importRuntimeData(
+        {
+          version: 2,
+          persistentMemory: '# After\n',
+          events: [{ type: 'bad.event', value: BigInt(1) }],
+        },
+        { config: false, persistentMemory: true, persistentMemoryUser: false, chats: false, events: true },
+      ),
+    /serialize|BigInt|JSON/i,
+  );
+
+  assert.equal(await store.readPersistentMemory(), '# Before\n');
+});

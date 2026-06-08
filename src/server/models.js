@@ -791,10 +791,14 @@ export const providerCatalog = Object.freeze([
 export const groqModels = Object.freeze(getProvider('groq').models);
 
 export async function refreshRuntimeModelCatalog(config = {}, options = {}) {
-  const next = new Map(runtimeDiscoveredModelsByProvider);
+  const next = config.privacy?.offlineMode === true ? new Map() : new Map(runtimeDiscoveredModelsByProvider);
 
   if (Array.isArray(options.ollamaInstalledModels)) {
     next.set('ollama', buildInstalledOllamaModels(options.ollamaInstalledModels));
+  }
+
+  if (config.privacy?.offlineMode === true) {
+    return getRuntimeModelCatalogFromMap(next);
   }
 
   const openRouterModels = await discoverOpenRouterModels(config);
@@ -901,6 +905,11 @@ export function normalizeCustomModelList(value) {
 
 function getRuntimeModelCatalog() {
   return Object.fromEntries(runtimeDiscoveredModelsByProvider.entries());
+}
+
+function getRuntimeModelCatalogFromMap(modelsByProvider) {
+  runtimeDiscoveredModelsByProvider = modelsByProvider;
+  return getRuntimeModelCatalog();
 }
 
 function resolveCatalogModel(providerId, modelId, config = {}) {
