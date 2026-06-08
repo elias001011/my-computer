@@ -55,6 +55,197 @@ const state = {
 };
 
 const CUSTOM_MODEL_VALUE = '__custom__';
+const DEFAULT_UI_LANGUAGE = 'en-US';
+const SUPPORTED_UI_LANGUAGES = ['en-US', 'pt-BR'];
+
+const EN_TEXT = new Map([
+  ['Tour inicial', 'Initial tour'],
+  ['My Computer', 'My Computer'],
+  ['Revise as escolhas iniciais sem apagar chats, logs, anexos ou memórias.', 'Review the initial choices without deleting chats, logs, attachments, or memories.'],
+  ['Um painel local para conversar com uma IA, usar tools do seu computador com controle e manter contexto entre chats.', 'A local panel to chat with AI, use your computer tools with control, and keep context across chats.'],
+  ['Refazer tour', 'Restart tour'],
+  ['Configurar agora', 'Set up now'],
+  ['Escolher provider, API key, tema, nível técnico, busca, tools e rede.', 'Choose provider, API key, theme, technical level, search, tools, and network.'],
+  ['Voltar ao painel', 'Back to panel'],
+  ['Pular para o painel', 'Skip to panel'],
+  ['Não altera nada e retorna ao chat.', 'Does not change anything and returns to chat.'],
+  ['Usar defaults agora e ajustar tudo depois em Configurações gerais.', 'Use defaults now and adjust everything later in General settings.'],
+  ['Qual provider você pretende usar primeiro?', 'Which provider do you want to use first?'],
+  ['Escolha o provider/modelo inicial, incluindo modo offline se quiser usar só Ollama local.', 'Choose the initial provider/model, including offline mode if you want to use only local Ollama.'],
+  ['Agora ajuste como a IA deve falar com você e quanto contexto técnico deve assumir.', 'Now adjust how the AI should talk to you and how much technical context it should assume.'],
+  ['Defina como busca e tools locais funcionam antes do primeiro chat.', 'Define how search and local tools work before the first chat.'],
+  ['Por fim, escolha se o painel fica só neste computador ou também na rede local.', 'Finally, choose whether the panel stays on this computer only or opens to the local network.'],
+  ['Configuração inicial guiada. Tudo pode ser alterado depois nas configurações gerais.', 'Guided initial setup. Everything can be changed later in General settings.'],
+  ['Isso vira o padrão dos chats novos. Você pode trocar por chat depois.', 'This becomes the default for new chats. You can change it per chat later.'],
+  ['Modo offline desta seção', 'Offline mode for this section'],
+  ['Força Ollama local, bloqueia providers online, desliga busca nativa e remove rotatórias para serviços externos.', 'Forces local Ollama, blocks online providers, disables native search, and removes external-service routing.'],
+  ['Provider', 'Provider'],
+  ['Modelo padrão', 'Default model'],
+  ['Modelo personalizado', 'Custom model'],
+  ['Este modelo suporta imagens', 'This model supports images'],
+  ['Ative apenas se o endpoint aceitar imagens no formato OpenAI vision.', 'Enable only if the endpoint accepts images in OpenAI vision format.'],
+  ['Endpoint/base URL', 'Endpoint/base URL'],
+  ['Adicionar key', 'Add key'],
+  ['Ocultar keys', 'Hide keys'],
+  ['Ver keys', 'Show keys'],
+  ['Se houver mais de uma key, o backend alterna quando uma falha por rate limit, autenticação ou erro temporário.', 'If there is more than one key, the backend rotates when one fails because of rate limits, authentication, or temporary errors.'],
+  ['Este provider não precisa de API key local.', 'This provider does not need a local API key.'],
+  ['Como a IA deve adaptar as respostas?', 'How should the AI adapt its responses?'],
+  ['Isso muda o nível de explicação, cautela e autonomia. Não altera segurança de tools.', 'This changes explanation level, caution, and autonomy. It does not change tool safety.'],
+  ['Apelido', 'Nickname'],
+  ['Idioma da IA', 'AI response language'],
+  ['Idioma da interface', 'Interface language'],
+  ['Tema do painel', 'Panel theme'],
+  ['Nível técnico', 'Technical level'],
+  ['Adaptar resposta ao nível', 'Adapt response to level'],
+  ['Níveis mais baixos explicam mais e confirmam mais coisas; isso pode gastar mais tokens.', 'Lower levels explain more and confirm more things; this can spend more tokens.'],
+  ['System prompt geral', 'General system prompt'],
+  ['Como a IA pode usar tools?', 'How can the AI use tools?'],
+  ['Busca nativa não executa comando local. Terminal e tools locais continuam sob aprovação quando “sempre permitir” estiver desligado.', 'Native search does not execute local commands. Terminal and local tools still require approval when “always allow” is off.'],
+  ['Sempre permitir qualquer tool', 'Always allow any tool'],
+  ['Desligado por padrão. Quando desligado, a IA precisa da sua aprovação na UI antes de executar tools.', 'Off by default. When off, the AI needs your approval in the UI before running tools.'],
+  ['Incentivar a IA a fazer investigações mais profundas', 'Encourage deeper AI investigations'],
+  ['Adiciona instruções para inspecionar arquivos, scripts, logs e outputs por mais rodadas antes da resposta final.', 'Adds instructions to inspect files, scripts, logs, and outputs across more rounds before the final answer.'],
+  ['Memória persistente', 'Persistent memory'],
+  ['Você pode adicionar arquivos Markdown/texto depois. O índice sempre ajuda a IA a saber que os arquivos existem; leitura e edição são permissões separadas.', 'You can add Markdown/text files later. The index helps the AI know the files exist; reading and editing are separate permissions.'],
+  ['Permitir que a IA liste e leia arquivos adicionais', 'Allow the AI to list and read additional files'],
+  ['Enviar arquivos adicionados a todo prompt', 'Send added files with every prompt'],
+  ['Permitir edição de arquivos de memória', 'Allow memory file editing'],
+  ['Lembrar a IA de manter esses arquivos atualizados', 'Remind the AI to keep these files updated'],
+  ['Pesquisa web', 'Web search'],
+  ['Busca nativa usa o provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a máquina local.', 'Native search uses the provider and does not ask for confirmation. In Both mode, the app falls back to terminal if native search fails or returns empty. Terminal search uses the local machine.'],
+  ['Quer abrir o painel na rede local?', 'Open the panel on the local network?'],
+  ['Se ligar, salve e reinicie. No outro dispositivo, use o IP mostrado depois em Configurações gerais > Rede.', 'If enabled, save and restart. On another device, use the IP shown later in General settings > Network.'],
+  ['Abrir painel para a rede local', 'Open panel to local network'],
+  ['Exige senha abaixo e só vale depois de reiniciar o servidor. Use apenas em rede confiável.', 'Requires the password below and only applies after restarting the server. Use only on trusted networks.'],
+  ['Senha da rede local', 'Local network password'],
+  ['Sem senha, o app não permite abrir o painel para a rede.', 'Without a password, the app will not allow opening the panel to the network.'],
+  ['Voltar', 'Back'],
+  ['Continuar', 'Continue'],
+  ['Salvar e voltar ao painel', 'Save and return to panel'],
+  ['Salvar e abrir chat', 'Save and open chat'],
+  ['Novo chat', 'New chat'],
+  ['Configurações gerais', 'General settings'],
+  ['Comece uma conversa.', 'Start a conversation.'],
+  ['Digite uma mensagem...', 'Type a message...'],
+  ['Digite para criar o primeiro chat...', 'Type to create the first chat...'],
+  ['Aprove ou negue a tool pendente antes de enviar outra mensagem.', 'Approve or deny the pending tool before sending another message.'],
+  ['Parar agente', 'Stop agent'],
+  ['Enviar', 'Send'],
+  ['Você', 'You'],
+  ['Assistente', 'Assistant'],
+  ['Copiar', 'Copy'],
+  ['Ver detalhes', 'View details'],
+  ['Tentar novamente', 'Try again'],
+  ['Permitir', 'Allow'],
+  ['Negar', 'Deny'],
+  ['Verificar execução', 'Check execution'],
+  ['Permitir esta tool', 'Allow this tool'],
+  ['Negar esta tool', 'Deny this tool'],
+  ['Fontes', 'Sources'],
+  ['Fontes usadas', 'Sources used'],
+  ['Pensando...', 'Thinking...'],
+  ['Configurações gerais', 'General settings'],
+  ['Preferências globais, providers, segurança, tools e dados locais.', 'Global preferences, providers, security, tools, and local data.'],
+  ['Seções', 'Sections'],
+  ['Identidade', 'Identity'],
+  ['Providers', 'Providers'],
+  ['Modelos', 'Models'],
+  ['Memória', 'Memory'],
+  ['Tools', 'Tools'],
+  ['Contexto', 'Context'],
+  ['Rede', 'Network'],
+  ['Atualizações', 'Updates'],
+  ['Backup', 'Backup'],
+  ['Servidor', 'Server'],
+  ['Seção', 'Section'],
+  ['Sem chat ativo', 'No active chat'],
+  ['Salvar snapshot', 'Save snapshot'],
+  ['Compactar contexto', 'Compact context'],
+  ['Editar contexto compactado', 'Edit compacted context'],
+  ['Configurações de chat', 'Chat settings'],
+  ['Configurações do chat', 'Chat settings'],
+  ['Nome do chat', 'Chat name'],
+  ['Provider deste chat', 'This chat provider'],
+  ['Modelo deste chat', 'This chat model'],
+  ['Use para modelos personalizados vision. Se desligado, imagens ficam bloqueadas.', 'Use for custom vision models. If disabled, images are blocked.'],
+  ['Se o modelo local não estiver instalado, o My Computer chama o pull do Ollama antes da primeira resposta.', 'If the local model is not installed, My Computer runs Ollama pull before the first response.'],
+  ['Prompt e memória', 'Prompt and memory'],
+  ['Configurações do modelo', 'Model settings'],
+  ['Apagar chat', 'Delete chat'],
+  ['Status', 'Status'],
+  ['Pronto', 'Ready'],
+  ['Eventos', 'Events'],
+  ['Copiar eventos', 'Copy events'],
+  ['Seções e usuários', 'Sections and users'],
+  ['Cada seção usa chats, configurações, memória persistente, arquivos de memória e eventos isolados. A seção Default preserva o runtime antigo.', 'Each section uses isolated chats, settings, persistent memory, memory files, and events. The Default section preserves the old runtime.'],
+  ['Criar seção', 'Create section'],
+  ['Identidade e padrão', 'Identity and defaults'],
+  ['Essas escolhas viram padrão para chats novos; cada chat ainda pode ter provider/modelo próprios.', 'These choices become defaults for new chats; each chat can still have its own provider/model.'],
+  ['Força provider/modelo local via Ollama, bloqueia providers online, desliga busca nativa e impede rotatórias externas.', 'Forces local provider/model through Ollama, blocks online providers, disables native search, and prevents external routing.'],
+  ['Idioma da IA', 'AI response language'],
+  ['Tema do painel', 'Panel theme'],
+  ['Providers e APIs', 'Providers and APIs'],
+  ['Provider para editar', 'Provider to edit'],
+  ['Adicionar API key', 'Add API key'],
+  ['Rotatória de modelos', 'Model rotation'],
+  ['Rotatória de providers', 'Provider rotation'],
+  ['Limite de voltas da rotatória', 'Rotation pass limit'],
+  ['Adicionar modelo alternativo', 'Add alternate model'],
+  ['Adicionar fallback', 'Add fallback'],
+  ['Índice de modelos', 'Model index'],
+  ['Arquivos adicionais', 'Additional files'],
+  ['Adicionar arquivos', 'Add files'],
+  ['Permitir que a IA edite arquivos adicionais', 'Allow the AI to edit additional files'],
+  ['Lembrar a IA de manter seus arquivos de memória atualizados', 'Remind the AI to keep your memory files updated'],
+  ['Nível de isolamento', 'Isolation level'],
+  ['Sudo no My Computer', 'Sudo in My Computer'],
+  ['Compactar automaticamente', 'Auto-compact'],
+  ['Limite estimado para compactar', 'Estimated compaction limit'],
+  ['Mínimo de mensagens entre compactações', 'Minimum messages between compactions'],
+  ['Rede local', 'Local network'],
+  ['Como funciona', 'How it works'],
+  ['Abrir painel para a rede', 'Open panel to network'],
+  ['Senha de acesso', 'Access password'],
+  ['Verificar atualização', 'Check update'],
+  ['Atualizar e reiniciar', 'Update and restart'],
+  ['Exportar dados', 'Export data'],
+  ['Importar dados', 'Import data'],
+  ['Limpeza de chats', 'Chat cleanup'],
+  ['Excluir todos os chats', 'Delete all chats'],
+  ['Servidor local', 'Local server'],
+  ['Refazer tour inicial', 'Restart initial tour'],
+  ['Encerrar My Computer', 'Shut down My Computer'],
+  ['Cancelar', 'Cancel'],
+  ['Salvar configurações', 'Save settings'],
+  ['Alterações não salvas', 'Unsaved changes'],
+  ['Claro', 'Light'],
+  ['Escuro', 'Dark'],
+  ['Sistema', 'System'],
+  ['Automático', 'Automatic'],
+  ['Português brasileiro', 'Brazilian Portuguese'],
+  ['Mesmo idioma do usuário', 'Same as user'],
+  ['Português', 'Portuguese'],
+  ['Inglês', 'English'],
+  ['Espanhol', 'Spanish'],
+  ['Iniciante: explica e confirma mais', 'Beginner: explains and confirms more'],
+  ['Cuidadoso: transparente e cauteloso', 'Careful: transparent and cautious'],
+  ['Equilibrado: padrão recomendado', 'Balanced: recommended default'],
+  ['Avançado: direto e confiante', 'Advanced: direct and confident'],
+  ['Especialista: mínimo de explicação', 'Expert: minimal explanation'],
+  ['Desligada', 'Off'],
+  ['Nativa', 'Native'],
+  ['Terminal', 'Terminal'],
+  ['Ambos', 'Both'],
+  ['enviando', 'sending'],
+  ['aguardando aprovação', 'waiting for approval'],
+  ['executando tool', 'running tool'],
+  ['executando tools', 'running tools'],
+  ['tool negada', 'tool denied'],
+  ['falhou', 'failed'],
+  ['incompleto', 'incomplete'],
+  ['concluído', 'completed'],
+]);
 
 const app = document.querySelector('#app');
 const themeMediaQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -89,9 +280,11 @@ function render() {
   applyTheme(state.settingsDraft?.config?.appearance?.theme || state.config?.appearance?.theme);
   if (!state.config?.setupComplete || state.setupReviewOpen) {
     renderSetup();
+    applyPanelLanguage();
     return;
   }
   renderApp();
+  applyPanelLanguage();
 }
 
 function applyTheme(theme = 'light') {
@@ -101,6 +294,84 @@ function applyTheme(theme = 'light') {
     : selected;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = selected;
+}
+
+function getUiLanguage() {
+  const draftLanguage =
+    state.settingsDraft?.config?.appearance?.uiLanguage ||
+    state.setupDraft?.appearance?.uiLanguage ||
+    state.config?.appearance?.uiLanguage;
+  return normalizeUiLanguage(draftLanguage);
+}
+
+function normalizeUiLanguage(language) {
+  return SUPPORTED_UI_LANGUAGES.includes(language) ? language : DEFAULT_UI_LANGUAGE;
+}
+
+function applyPanelLanguage(root = app) {
+  const language = getUiLanguage();
+  document.documentElement.lang = language === 'pt-BR' ? 'pt-BR' : 'en';
+  if (language !== 'en-US' || !root) return;
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+      if (shouldSkipTranslationNode(node.parentElement)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  textNodes.forEach((node) => {
+    node.textContent = translateUiValue(node.textContent);
+  });
+
+  root.querySelectorAll('[placeholder], [title], [aria-label], [alt]').forEach((element) => {
+    for (const attribute of ['placeholder', 'title', 'aria-label', 'alt']) {
+      const value = element.getAttribute(attribute);
+      if (value) element.setAttribute(attribute, translateUiValue(value));
+    }
+  });
+}
+
+function shouldSkipTranslationNode(element) {
+  return Boolean(
+    element?.closest?.(
+      'pre, code, textarea, .message:not(.pending) .bubble, .viewer-text, .diff-viewer, .event-list, .message-source-card',
+    ),
+  );
+}
+
+function translateUiValue(value) {
+  const raw = String(value || '');
+  const leading = raw.match(/^\s*/)?.[0] || '';
+  const trailing = raw.match(/\s*$/)?.[0] || '';
+  const normalized = raw.trim().replace(/\s+/g, ' ');
+  if (!normalized) return raw;
+  const translated = EN_TEXT.get(normalized) || translateDynamicUiValue(normalized);
+  return translated ? `${leading}${translated}${trailing}` : raw;
+}
+
+function translateDynamicUiValue(value) {
+  const replacements = [
+    [/^Defina uma senha para abrir o painel na rede local\.$/, 'Set a password before opening the panel to the local network.'],
+    [/^Defina o endpoint\/base URL de (.+)\.$/, (_match, provider) => `Set the endpoint/base URL for ${provider}.`],
+    [/^Adicione ao menos uma API key de (.+)\.$/, (_match, provider) => `Add at least one API key for ${provider}.`],
+    [/^Defina o endpoint\/base URL de (.+) antes de salvar esse provider como padrão\.$/, (_match, provider) => `Set the endpoint/base URL for ${provider} before saving it as the default provider.`],
+    [/^Adicione ao menos uma API key de (.+) antes de salvar esse provider como padrão\.$/, (_match, provider) => `Add at least one API key for ${provider} before saving it as the default provider.`],
+    [/^Criando primeiro chat\.\.\.$/, 'Creating first chat...'],
+    [/^Criando chat para anexos\.\.\.$/, 'Creating chat for attachments...'],
+    [/^Criando chat\.\.\.$/, 'Creating chat...'],
+    [/^Salvando configurações gerais\.\.\.$/, 'Saving general settings...'],
+    [/^Salvando configuração\.\.\.$/, 'Saving configuration...'],
+    [/^Abrindo painel\.\.\.$/, 'Opening panel...'],
+  ];
+  for (const [pattern, replacement] of replacements) {
+    const match = value.match(pattern);
+    if (!match) continue;
+    return typeof replacement === 'function' ? replacement(...match) : replacement;
+  }
+  return '';
 }
 
 function renderSetup() {
@@ -145,6 +416,7 @@ function renderSetup() {
       renderSetup();
     });
     document.querySelector('#skip-guided-setup').addEventListener('click', state.setupReviewOpen ? closeSetupReview : skipSetup);
+    applyPanelLanguage();
     return;
   }
   const step = state.setupStep || 'provider';
@@ -237,6 +509,12 @@ function renderSetup() {
             Tema do painel
             <select name="theme">
               ${renderThemeOptions(setupConfig.appearance?.theme || 'light')}
+            </select>
+          </label>
+          <label>
+            Idioma da interface
+            <select name="uiLanguage">
+              ${renderUiLanguageOptions(setupConfig.appearance?.uiLanguage || DEFAULT_UI_LANGUAGE)}
             </select>
           </label>
           <div class="setup-grid">
@@ -378,6 +656,15 @@ function renderSetup() {
     }
     renderSetup();
   });
+  document.querySelector('[name="uiLanguage"]')?.addEventListener('change', (event) => {
+    captureSetupDraftFromForm(document.querySelector('#setup-form'));
+    if (!state.setupDraft) state.setupDraft = buildSetupDraft();
+    state.setupDraft.appearance = {
+      ...(state.setupDraft.appearance || {}),
+      uiLanguage: normalizeUiLanguage(event.target.value),
+    };
+    renderSetup();
+  });
   document.querySelector('#setup-model')?.addEventListener('change', toggleSetupCustomModel);
   document.querySelector('#setup-technical-guidance')?.addEventListener('change', () => toggleTechnicalLevelField('setup'));
   document.querySelector('#setup-network-enabled')?.addEventListener('change', () => toggleNetworkPasswordField('setup'));
@@ -402,6 +689,7 @@ function renderSetup() {
   document.querySelectorAll('.remove-ollama-model').forEach((button) => {
     button.addEventListener('click', () => removeOllamaModel(button.dataset.model));
   });
+  applyPanelLanguage();
 }
 
 function renderApp() {
@@ -411,11 +699,13 @@ function renderApp() {
   const chatModel = offlineMode && chat?.provider !== 'ollama' ? state.config.model : chat?.model || state.config.model;
   const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
   const agentRunning = Boolean(chat?.id && state.busy && state.activeAgentChatId === chat.id);
-  const composerDisabled = !chat || state.busy || toolApprovalBlocksComposer;
-  const composerActionDisabled = !chat || toolApprovalBlocksComposer || (state.busy && !agentRunning) || state.stopInFlight;
+  const composerDisabled = state.busy || toolApprovalBlocksComposer;
+  const composerActionDisabled = toolApprovalBlocksComposer || (state.busy && !agentRunning) || state.stopInFlight;
   const composerPlaceholder = toolApprovalBlocksComposer
     ? 'Aprove ou negue a tool pendente antes de enviar outra mensagem.'
-    : 'Digite uma mensagem...';
+    : chat
+      ? 'Digite uma mensagem...'
+      : 'Digite para criar o primeiro chat...';
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
@@ -640,6 +930,12 @@ function renderSettingsModal() {
                 Tema do painel
                 <select name="theme">
                   ${renderThemeOptions(draftConfig.appearance?.theme || 'light')}
+                </select>
+              </label>
+              <label>
+                Idioma da interface
+                <select name="uiLanguage">
+                  ${renderUiLanguageOptions(draftConfig.appearance?.uiLanguage || DEFAULT_UI_LANGUAGE)}
                 </select>
               </label>
               <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
@@ -1097,6 +1393,7 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
     draft.appearance = {
       ...(draft.appearance || {}),
       theme: form.get('theme') || draft.appearance?.theme || 'light',
+      uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draft.appearance?.uiLanguage),
     };
   }
   if (form.has('alwaysAllowTools') || form.has('searchEnabled') || form.has('searchMode')) {
@@ -1971,13 +2268,11 @@ function renderMessage(message) {
   const detailsButton = shouldShowMessageDetails(message)
     ? `<button type="button" class="open-message-details" data-message-id="${escapeAttr(message.id)}">Ver detalhes</button>`
     : '';
+  const bubbleContent = `${renderMessageSources(sources)}${formatContent(visibleContent, message.role)}`;
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
       <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
-      <div class="bubble">
-        ${renderMessageSources(sources)}
-        ${formatContent(visibleContent, message.role)}
-      </div>
+      <div class="bubble">${bubbleContent}</div>
       ${renderToolApprovalPanel(message)}
       ${renderUserMemoryChangeChips(message)}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
@@ -2794,6 +3089,19 @@ function renderThemeOptions(selectedTheme = 'light') {
   return themes
     .map(([value, label]) => {
       const selected = selectedTheme === value ? 'selected' : '';
+      return `<option value="${escapeAttr(value)}" ${selected}>${escapeHtml(label)}</option>`;
+    })
+    .join('');
+}
+
+function renderUiLanguageOptions(selectedLanguage = DEFAULT_UI_LANGUAGE) {
+  const languages = [
+    ['en-US', 'English'],
+    ['pt-BR', 'Português'],
+  ];
+  return languages
+    .map(([value, label]) => {
+      const selected = normalizeUiLanguage(selectedLanguage) === value ? 'selected' : '';
       return `<option value="${escapeAttr(value)}" ${selected}>${escapeHtml(label)}</option>`;
     })
     .join('');
@@ -3778,7 +4086,18 @@ async function deleteUserMemoryFile(fileId) {
 async function uploadSelectedFiles(event) {
   const files = [...(event.target.files || [])];
   event.target.value = '';
-  if (!files.length || !state.activeChat) return;
+  if (!files.length || state.busy) return;
+  if (!state.activeChat) {
+    const draftContent = document.querySelector('#composer textarea')?.value || getComposerDraft();
+    try {
+      await ensureActiveChat({ draftContent, status: 'Criando chat para anexos...' });
+    } catch (error) {
+      state.error = error.message;
+      renderPreservingVisualState();
+      return;
+    }
+  }
+  if (!state.activeChat) return;
 
   for (const file of files) {
     if (!isSupportedUpload(file)) {
@@ -4153,14 +4472,39 @@ function removeApiKeyRow(index) {
 async function createNewChat() {
   await runAction('Criando chat...', async () => {
     const data = await api('/api/chats', { method: 'POST' });
-    state.chats = data.chats;
-    state.activeChat = data.chat;
-    state.activeChatEvents = [];
-    state.messageDetailsOpen = false;
-    state.messageDetailsMessageId = null;
-    state.chatSettingsDraft = null;
-    state.chatSettingsDirty = false;
+    applyCreatedChat(data);
   });
+}
+
+async function ensureActiveChat(options = {}) {
+  if (state.activeChat?.id) return state.activeChat;
+  const draftId = getCurrentComposerDraftId();
+  const previousBusy = state.busy;
+  state.busy = true;
+  state.status = options.status || 'Criando chat...';
+  renderPreservingVisualState();
+  try {
+    const data = await api('/api/chats', { method: 'POST' });
+    applyCreatedChat(data);
+    if (options.draftContent) {
+      setComposerDraft(state.activeChat.id, options.draftContent);
+      clearComposerDraft(draftId);
+    }
+  } finally {
+    state.busy = previousBusy;
+  }
+  renderPreservingVisualState();
+  return state.activeChat;
+}
+
+function applyCreatedChat(data = {}) {
+  state.chats = data.chats || state.chats;
+  state.activeChat = data.chat || state.activeChat;
+  state.activeChatEvents = [];
+  state.messageDetailsOpen = false;
+  state.messageDetailsMessageId = null;
+  state.chatSettingsDraft = null;
+  state.chatSettingsDirty = false;
 }
 
 async function loadChat(chatId) {
@@ -4180,24 +4524,43 @@ async function sendMessage(event) {
   if (state.busy) return;
   const textarea = event.currentTarget.elements.content;
   const content = textarea.value.trim();
-  if ((!content && !state.pendingAttachments.length) || !state.activeChat) return;
+  if (!content && !state.pendingAttachments.length) return;
+  if (!state.activeChat) {
+    try {
+      await ensureActiveChat({ draftContent: content, status: 'Criando primeiro chat...' });
+    } catch (error) {
+      state.error = error.message;
+      renderPreservingVisualState();
+      return;
+    }
+  }
   if (state.chatSettingsDirty || state.modelSettingsDirty) {
     saveComposerDraft();
     state.confirmDialog = { type: 'send-chat-settings' };
     renderPreservingVisualState();
     return;
   }
-  await sendMessageFromValues(textarea, content);
+  await sendMessageFromValues(document.querySelector('#composer textarea') || textarea, content);
 }
 
 async function sendMessageFromComposerDraft() {
   const textarea = document.querySelector('#composer textarea');
   const content = (textarea?.value || getComposerDraft(state.activeChat?.id)).trim();
-  if ((!content && !state.pendingAttachments.length) || !state.activeChat) return;
-  await sendMessageFromValues(textarea, content);
+  if (!content && !state.pendingAttachments.length) return;
+  if (!state.activeChat) {
+    try {
+      await ensureActiveChat({ draftContent: content, status: 'Criando primeiro chat...' });
+    } catch (error) {
+      state.error = error.message;
+      renderPreservingVisualState();
+      return;
+    }
+  }
+  await sendMessageFromValues(document.querySelector('#composer textarea') || textarea, content);
 }
 
 async function sendMessageFromValues(textarea, content) {
+  if (!state.activeChat) return;
   const chatId = state.activeChat?.id;
   if (chatHasActiveToolApproval(state.activeChat)) {
     state.error = 'Aprove ou negue a tool pendente antes de enviar outra mensagem neste chat.';
@@ -4475,14 +4838,16 @@ function handleComposerInput() {
 }
 
 function getComposerDraft(chatId) {
-  if (!chatId) return '';
-  return localStorage.getItem(getComposerDraftKey(chatId)) || '';
+  const draftId = chatId || getCurrentComposerDraftId();
+  if (!draftId) return '';
+  return localStorage.getItem(getComposerDraftKey(draftId)) || '';
 }
 
 function saveComposerDraft() {
   const textarea = document.querySelector('#composer textarea');
-  if (!textarea || !state.activeChat?.id) return;
-  localStorage.setItem(getComposerDraftKey(state.activeChat.id), textarea.value);
+  const draftId = getCurrentComposerDraftId();
+  if (!textarea || !draftId) return;
+  localStorage.setItem(getComposerDraftKey(draftId), textarea.value);
 }
 
 function clearComposerDraft(chatId) {
@@ -4497,6 +4862,10 @@ function setComposerDraft(chatId, content) {
 
 function getComposerDraftKey(chatId) {
   return `my-computer:draft:${chatId}`;
+}
+
+function getCurrentComposerDraftId() {
+  return state.activeChat?.id || `new:${state.activeProfile?.id || 'default'}`;
 }
 
 async function retryLastAction() {
@@ -4839,7 +5208,9 @@ async function saveGeneralSettings(event, options = {}) {
     renderPreservingVisualState();
     return;
   }
-  const validationError = validateGeneralSettingsForm(form, provider);
+  const validationError = shouldValidateProviderSensitiveSettings(form, provider, model)
+    ? validateGeneralSettingsForm(form, provider)
+    : '';
   if (validationError) {
     state.error = validationError;
     state.settingsSection = 'providers';
@@ -4882,6 +5253,7 @@ async function saveGeneralSettings(event, options = {}) {
         systemPromptExtra: form.get('systemPromptExtra'),
         appearance: {
           theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
+          uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draftConfig.appearance?.uiLanguage),
         },
         tools,
         userMemory: {
@@ -4963,7 +5335,7 @@ function syncProviderApiDraft() {
 
 function markSettingsDirty(event) {
   if (event?.target?.id === 'user-memory-file-input') return;
-  if (event?.target?.name === 'theme') {
+  if (['theme', 'uiLanguage'].includes(event?.target?.name)) {
     captureSettingsDraftFromForm();
     state.settingsDirty = true;
     updateDirtyIndicators();
@@ -5015,6 +5387,7 @@ function captureSettingsDraftFromForm() {
   draftConfig.appearance = {
     ...(draftConfig.appearance || {}),
     theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
+    uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draftConfig.appearance?.uiLanguage),
   };
   const rawSearchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
   const searchMode = offlineMode && ['native', 'both'].includes(rawSearchMode) ? 'off' : rawSearchMode;
@@ -5068,6 +5441,68 @@ function updateDirtyIndicators() {
   });
   document.querySelector('#general-settings-form button[type="submit"]')?.classList.toggle('dirty-save', state.settingsDirty);
   document.querySelector('#save-chat-settings')?.classList.toggle('dirty-save', state.chatSettingsDirty);
+}
+
+function shouldValidateProviderSensitiveSettings(form, provider, model) {
+  const currentConfig = state.config || {};
+  const draftConfig = state.settingsDraft?.config || currentConfig;
+  const offlineMode = form.get('offlineMode') === 'on';
+  const currentOfflineMode = isOfflineMode(currentConfig);
+  const currentProvider = currentOfflineMode ? 'ollama' : currentConfig.provider || 'groq';
+  const currentModel =
+    currentOfflineMode && currentConfig.provider !== 'ollama'
+      ? getProvider('ollama').defaultModel
+      : currentConfig.model || getProvider(currentProvider).defaultModel;
+
+  if (offlineMode !== currentOfflineMode) return true;
+  if (provider !== currentProvider || model !== currentModel) return true;
+
+  const currentProviderSettings = comparableProviderSettings(currentConfig.providerSettings?.[provider]);
+  const draftProviderSettings = comparableProviderSettings(draftConfig.providerSettings?.[provider]);
+  if (stableJson(currentProviderSettings) !== stableJson(draftProviderSettings)) return true;
+
+  const nextRouting = offlineMode
+    ? normalizeOfflineRoutingForClient()
+    : {
+        modelRotationEnabled: form.get('modelRotationEnabled') === 'on',
+        modelFallbacks: readModelFallbackRows(),
+        providerRotationEnabled: form.get('providerRotationEnabled') === 'on',
+        maxProviderPasses: Number(form.get('maxProviderPasses') || 2),
+        fallbacks: readRoutingFallbackRows(),
+      };
+  const currentRouting = comparableRouting(currentConfig.routing);
+  return stableJson(comparableRouting(nextRouting)) !== stableJson(currentRouting);
+}
+
+function comparableProviderSettings(settings = {}) {
+  return {
+    baseUrl: String(settings.baseUrl || '').trim(),
+    apiKeys: (settings.apiKeys || [])
+      .map((item) => ({
+        value: String(item.value || item || '').trim(),
+      }))
+      .filter((item) => item.value),
+  };
+}
+
+function comparableRouting(routing = {}) {
+  return {
+    modelRotationEnabled: routing.modelRotationEnabled === true,
+    modelFallbacks: (routing.modelFallbacks || []).map((item) => ({
+      provider: item.provider || '',
+      model: item.model || '',
+    })),
+    providerRotationEnabled: routing.providerRotationEnabled === true,
+    maxProviderPasses: Number(routing.maxProviderPasses || 2),
+    fallbacks: (routing.fallbacks || []).map((item) => ({
+      provider: item.provider || '',
+      model: item.model || '',
+    })),
+  };
+}
+
+function stableJson(value) {
+  return JSON.stringify(value);
 }
 
 function validateGeneralSettingsForm(form, defaultProvider) {
@@ -5539,6 +5974,7 @@ function autoResizeComposer() {
 
 function renderError(error) {
   app.innerHTML = `<main class="setup-screen"><p class="error">${escapeHtml(error.message)}</p></main>`;
+  applyPanelLanguage();
 }
 
 function formatContent(content, role = 'assistant') {

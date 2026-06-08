@@ -44,11 +44,12 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.server.networkEnabled, false);
   assert.equal(config.technicalLevel, 'balanced');
   assert.equal(config.technicalGuidanceEnabled, true);
+  assert.equal(config.appearance.uiLanguage, 'en-US');
 
   await store.saveConfig({
     technicalLevel: 'beginner',
     technicalGuidanceEnabled: false,
-    appearance: { theme: 'dark' },
+    appearance: { theme: 'dark', uiLanguage: 'pt-BR' },
     tools: {
       ...config.tools,
       alwaysAllow: true,
@@ -72,6 +73,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(securityConfig.technicalLevel, 'beginner');
   assert.equal(securityConfig.technicalGuidanceEnabled, false);
   assert.equal(securityConfig.appearance.theme, 'dark');
+  assert.equal(securityConfig.appearance.uiLanguage, 'pt-BR');
   assert.equal(securityConfig.tools.alwaysAllow, true);
   assert.equal(securityConfig.tools.terminalMode, 'isolated');
   assert.equal(securityConfig.tools.deepInvestigation, true);

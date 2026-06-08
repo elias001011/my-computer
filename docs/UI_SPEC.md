@@ -60,6 +60,7 @@ Se o provider for Ollama, o setup mostra um bloco próprio com:
 - Erros de request aparecem no próprio chat.
 - Retry reaproveita a mensagem do usuário que falhou.
 - O chat mostra só a tentativa mais recente de cada grupo; tentativas antigas ficam no modal `Ver detalhes`.
+- Se não existir chat ativo, o composer continua disponível; o primeiro envio cria um chat automaticamente antes de mandar a mensagem.
 - `Tentar novamente` cria uma nova tentativa sem apagar a anterior.
 - `Continuar` retoma a partir da última saída parcial e mostra a nova tentativa no mesmo grupo.
 - Durante uma execução, o botão de enviar vira `Parar`; ele interrompe o agente no servidor, mantém o histórico parcial e marca a tentativa como incompleta. Se a finalização não terminar imediatamente, a UI mostra que a interrupção foi solicitada e aguarda salvar a tentativa.
@@ -96,6 +97,7 @@ Se o provider for Ollama, o setup mostra um bloco próprio com:
 O modal de configuração geral concentra o que o usuário precisa para operar o app sem abrir arquivo nenhum:
 
 - Identidade: apelido, idioma, nível técnico e tema do painel.
+- Idioma da interface: inglês é o padrão para instalações novas; português continua disponível em `Identidade` sem alterar o idioma das respostas da IA.
 - Providers e APIs: provider padrão, endpoint/base URL e múltiplas API keys.
 - Rotação: rotatória de modelos e rotatória de providers com fallback.
 - Models: modelo padrão, catálogo curado e índice técnico.
@@ -106,6 +108,7 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Export/import: backup e restauração seletivos de configuração completa, memória persistente, arquivos adicionais de memória, chats, anexos e eventos.
 - Backup: botão de excluir todos os chats da seção atual com confirmação dupla, preservando configurações e memórias persistentes.
 - Seções: chamadas da UI carregam o id da seção ativa para manter abas diferentes isoladas no backend.
+- Salvar apenas aparência, identidade, memória, tools, contexto ou rede não exige API key do provider padrão; validação de key/base URL acontece quando provider, modelo, settings do provider ou rotatórias mudam.
 - Segurança: avisos de sudo e de acesso remoto.
 
 ## Índice de modelos

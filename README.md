@@ -1,130 +1,118 @@
 # My Computer
 
-Atualizado em 08/06/2026.
+Updated on 2026-06-08.
 
-My Computer é um painel local para conversar com uma IA e deixar ela usar ferramentas do seu computador com controle explícito. Ele ajuda a manter memória entre chats, organizar contextos por seção/usuário, alternar entre providers e trabalhar com modelos locais como Ollama.
+My Computer is a local web panel for chatting with an AI assistant and letting it use tools on your machine with explicit control. It is built for long-running work: persistent memory, isolated sections/users, file attachments, provider routing, web search, terminal tools, backups, and local models through Ollama.
 
-Ele roda na sua máquina em Node.js. O painel abre no navegador, mas os chats, anexos, memórias e configurações ficam em um runtime local separado do código do projeto.
+The app runs on your own machine with Node.js. The browser is only the UI; chats, attachments, memory files, settings, and event logs live in a local runtime folder separate from the source code.
 
-## Comece aqui
+## Quick Start
 
-Para instalar e abrir o painel:
+Install and open the panel:
 
 ```bash
 ./install.sh
 ```
 
-Depois que já estiver instalado:
+After the first install:
 
 ```bash
 npm run start:open
 ```
 
-Use `./install.sh --fresh` quando quiser refazer o setup inicial sem misturar com o runtime antigo. Use `./uninstall.sh` para remover a instalação preservando seus dados, ou `./uninstall.sh --remove-data` para apagar também chats, anexos, memórias e configurações.
+Use `./install.sh --fresh` to move the current runtime aside and show the initial setup again. Use `./uninstall.sh` to remove the install while preserving data, or `./uninstall.sh --remove-data` to delete chats, attachments, memories, and settings too.
 
-## Para que serve
+## What It Does
 
-- Conversar com modelos online ou locais em uma UI única.
-- Usar terminal, busca web, memória, anexos e compactação por meio de tools.
-- Pedir aprovação antes de ações sensíveis.
-- Manter memória persistente por chat e por seção.
-- Adicionar arquivos Markdown/texto como memória do usuário.
-- Rodar uma seção offline focada em Ollama e privacidade local.
-- Fazer backup/restore do runtime.
+- Chat with online or local models in one UI.
+- Let the AI use terminal, web search, memory, attachments, and context compaction through tools.
+- Ask for approval before sensitive tool calls.
+- Keep persistent memory per chat and per isolated section.
+- Add Markdown/text files as user memory.
+- Run privacy-focused offline sections backed by Ollama.
+- Export and restore runtime data.
+- Switch the panel UI between English and Brazilian Portuguese.
 
-## O que fica local
+## What Stays Local
 
-Por padrão, os dados ficam em `~/.my-computer`. Seções novas ficam em `~/.my-computer/profiles/<id>`.
+By default, data lives in `~/.my-computer`. New isolated sections live in `~/.my-computer/profiles/<id>`.
 
-Isso inclui:
+This includes:
 
-- histórico dos chats
-- anexos copiados para o runtime
-- memória persistente
-- arquivos adicionais de memória do usuário
-- configuração de providers, modelos e tools
-- eventos de execução para auditoria/debug
+- chat history
+- copied attachments
+- persistent memory
+- additional user memory files
+- provider, model, tool, and UI settings
+- execution events for audit/debug
 
-Arquivos adicionados à memória do usuário são copiados para o runtime do My Computer. Quando a IA edita um arquivo de memória, ela edita essa cópia, não o arquivo original que você enviou.
+Files added to user memory are copied into the My Computer runtime. If the AI edits a memory file, it edits that runtime copy, not the original file you uploaded from outside the app.
 
-## Segurança prática
+## Practical Safety
 
-Tools locais podem pedir aprovação antes de rodar. A busca web em modo `Terminal` ou `Ambos` também pede aprovação quando `Sempre permitir qualquer tool` está desligado, porque pode fazer consulta pública via DuckDuckGo a partir da sua máquina.
+Local tools can require approval before they run. Web search in `Terminal` or `Both` mode also follows tool approval when `Always allow any tool` is off, because it may make a public DuckDuckGo query from your machine.
 
-O modo offline por seção força Ollama, bloqueia providers online no backend e desliga busca nativa. Se você habilitar busca web nessa seção, use consultas neutras e sem dados privados.
+Offline mode is configured per section. It forces Ollama, blocks online providers in the backend, disables native provider search, and removes external provider/model fallback routes. If web search is enabled in an offline section, the prompt instructs the AI to use neutral, generic searches without private names, paths, code, memory, terminal output, or user messages.
 
-## Seções e isolamento
+## Sections And Isolation
 
-O painel tem seções/usuários isolados. A seção `Default` usa o runtime antigo em `~/.my-computer`, enquanto seções novas ficam em `~/.my-computer/profiles/<id>`.
+The panel supports isolated sections/users. The `Default` section keeps the old runtime at `~/.my-computer`; new sections use `~/.my-computer/profiles/<id>`.
 
-Cada seção mantém seus próprios:
+Each section has its own:
 
-- chats e anexos
-- configuração de provider/modelo/tools
-- memória persistente global
-- arquivos adicionais de memória persistente
-- eventos locais
+- chats and attachments
+- provider/model/tool configuration
+- global persistent memory
+- additional persistent memory files
+- local event log
 
-Você pode trocar de seção pelo seletor na barra lateral ou gerenciar em `Configurações gerais > Seções`. Cada aba envia a seção ativa nas chamadas da API, e o backend congela esse escopo durante a requisição para evitar mistura entre abas.
+Switch sections from the sidebar, or manage them in `General settings > Sections`. Each browser tab sends the active section with API calls, and the backend freezes that scope during the request to avoid mixing data between tabs.
 
-### Modo offline por seção
+## Offline Mode
 
-Em `Configurações gerais > Identidade`, ligue `Modo offline desta seção` para usar a seção com paranoia de privacidade:
+In `General settings > Identity`, enable `Offline mode for this section` to run a privacy-focused local section.
 
-- força o provider padrão e os chats para `Ollama`
-- bloqueia chamadas para providers online no backend
-- desliga busca nativa do provider
-- remove rotatórias/fallbacks para providers externos
-- mantém a UI focada em Ollama e opções locais
+Offline mode:
 
-Se a pesquisa web estiver habilitada no modo offline, ela fica limitada à busca via terminal. O prompt orienta a IA a usar consultas neutras e genéricas, sem nomes, caminhos locais, código, memória, mensagens do usuário, outputs de terminal ou detalhes privados.
+- forces the default provider and chats to `Ollama`
+- blocks online provider calls in the backend
+- disables native provider search
+- removes fallback routing to external providers
+- keeps the UI focused on Ollama and local options
 
-## O que este projeto usa
+## Requirements
 
-- Node.js 20 ou mais novo.
-- Git, para update direto do repositório.
-- npm, para instalar dependências.
-- Python 3, quando você usa a pesquisa web via terminal.
-- Uma ou mais API keys, dependendo dos providers que você quiser usar.
-- Opcional: Ollama, se você quiser modelos locais.
+- Node.js 20 or newer.
+- Git, for repository-based updates.
+- npm, for dependencies.
+- Python 3, only when using terminal-backed web search.
+- One or more API keys, depending on the providers you use.
+- Optional: Ollama for local models.
 
-### Dependências opcionais e quando usar
+Optional tools:
 
-- `ollama` para rodar modelos locais, fazer `pull` e testar vision local.
-- `python3` para a busca web via terminal quando `tools.searchMode` estiver em `terminal` ou `both`.
-- `sudo` só é necessário se você quiser deixar o sistema instalar/remover Ollama automaticamente.
+- `ollama` for local models, `pull`, and local vision tests.
+- `python3` for terminal-backed web search when `tools.searchMode` is `terminal` or `both`.
+- `sudo` only if you want the app to install/remove Ollama automatically.
 
-## Instalação rápida
+## Install
 
-### Qual comando usar?
-
-Use sempre o entrypoint da raiz:
-
-```bash
-./install.sh
-```
-
-`install.sh` é só um wrapper curto que chama `scripts/bootstrap.sh`. O `scripts/bootstrap.sh` é o script interno de bootstrap do projeto, útil para manutenção/desenvolvimento, mas não é o caminho que o usuário final precisa decorar.
-
-Resumo prático:
-
-- primeira instalação ou iniciar com instalação/checagem de dependências: `./install.sh`
-- iniciar depois que já está instalado: `npm run start:open` ou `npm run start`
-- preparar dependências/runtime sem subir servidor: `./install.sh --no-start`
-- resetar o runtime atual para refazer o setup inicial: `./install.sh --fresh`
+Use the root entrypoint:
 
 ```bash
 ./install.sh
 ```
 
-Esse é o caminho normal de instalação. O script faz o seguinte:
+`install.sh` is a small wrapper around `scripts/bootstrap.sh`. End users should use `./install.sh`; `scripts/bootstrap.sh` is the internal maintenance script.
 
-- roda `npm install`
-- cria o runtime em `~/.my-computer` por padrão
-- abre o painel local no navegador
-- deixa o servidor rodando no terminal
+Common commands:
 
-Se quiser controlar melhor o comportamento, use as flags abaixo:
+- first install or dependency check: `./install.sh`
+- start after installation: `npm run start:open` or `npm run start`
+- prepare dependencies/runtime without starting the server: `./install.sh --no-start`
+- reset the runtime and show setup again: `./install.sh --fresh`
+
+Flags:
 
 ```bash
 ./install.sh --fresh
@@ -134,21 +122,21 @@ Se quiser controlar melhor o comportamento, use as flags abaixo:
 ./install.sh --host 127.0.0.1
 ```
 
-- `--fresh` move o runtime atual para um backup e mostra o setup inicial de novo.
-- `--no-open` inicia sem abrir o navegador.
-- `--no-start` instala dependências e prepara o runtime sem subir o servidor.
-- `--port` escolhe a porta do painel.
-- `--host` força o host de bind.
+- `--fresh` moves the current runtime to a backup and shows initial setup again.
+- `--no-open` starts without opening the browser.
+- `--no-start` installs dependencies and prepares the runtime without starting the server.
+- `--port` chooses the panel port.
+- `--host` chooses the bind host.
 
-O script também respeita estas variáveis de ambiente:
+The script also respects:
 
 - `MY_COMPUTER_HOME`
 - `PORT`
 - `HOST`
 
-## Como iniciar
+## Start
 
-Depois da instalação, você pode abrir o painel de três formas:
+After installation:
 
 ```bash
 npm run start:open
@@ -156,56 +144,56 @@ npm run start
 node src/cli/mc.js start --open
 ```
 
-- `npm run start:open` sobe o servidor e abre o navegador.
-- `npm run start` sobe o servidor sem forçar abrir o navegador.
-- `node src/cli/mc.js start --open` usa o mesmo CLI interno do projeto.
+- `npm run start:open` starts the server and opens the browser.
+- `npm run start` starts the server without opening the browser.
+- `node src/cli/mc.js start --open` uses the same internal CLI.
 
-Para diagnosticar o ambiente:
+Diagnostics:
 
 ```bash
 npm run doctor
 node src/cli/mc.js doctor
 ```
 
-## Desinstalação
+## Uninstall
 
 ```bash
 ./uninstall.sh
 ```
 
-Por padrão, isso remove `node_modules` e preserva o runtime em `~/.my-computer`.
+By default this removes `node_modules` and preserves the runtime at `~/.my-computer`.
 
-Para apagar também chats, anexos, memória e configurações:
+To delete chats, attachments, memory, and settings too:
 
 ```bash
 ./uninstall.sh --remove-data
 ```
 
-Outras opções:
+Other options:
 
-- `--keep-data` preserva o runtime.
-- `--yes` funciona como atalho para `--remove-data`.
-- `./uninstall.sh --help` mostra a ajuda completa.
+- `--keep-data` preserves the runtime.
+- `--yes` is a shortcut for `--remove-data`.
+- `./uninstall.sh --help` prints full help.
 
-## Projeto aberto
+## First Use
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) explica setup de desenvolvimento, validação e checklist de PR.
-- [SECURITY.md](SECURITY.md) explica o modelo de segurança local-first e como reportar vulnerabilidades.
-- [RELEASE.md](RELEASE.md) documenta o checklist antes de publicar uma release.
+1. Install with `./install.sh`.
+2. Open the panel and follow initial setup, or adjust later in `General settings`.
+3. Choose a provider and add API keys.
+4. Adjust panel theme, interface language, AI response language, and technical level.
+5. Configure Ollama if you want local models.
+6. Open `Model index` to review selectable and informational models.
+7. Type your first message and send it. If no chat exists yet, the app creates one automatically.
 
-## Primeiro uso
+## Interface Language
 
-1. Instale o projeto com `./install.sh`.
-2. Abra o painel e siga o setup inicial, ou entre depois em `Configurações gerais`.
-3. Escolha um provider e adicione as API keys.
-4. Ajuste o tema do painel, o idioma e o nível técnico.
-5. Se quiser usar modelos locais, configure Ollama.
-6. Abra o `Índice de modelos` para conferir o que é selecionável e o que é apenas informativo.
-7. Comece um chat novo.
+The panel UI defaults to English so the project is easier to share internationally. In `General settings > Identity`, change `Interface language` to `Portuguese` to use the panel in Brazilian Portuguese.
 
-## Providers e chaves
+This is separate from `AI response language`: interface language translates the app UI; AI response language controls the preferred language for model replies.
 
-O app suporta estes providers:
+## Providers
+
+Supported providers:
 
 - OpenAI
 - Anthropic
@@ -215,235 +203,58 @@ O app suporta estes providers:
 - OpenRouter
 - Hugging Face
 - Ollama
-- OpenAI compatível
+- OpenAI-compatible endpoints
 
-As chaves mais comuns são:
+API keys are stored in the local runtime config. Multiple keys per provider are supported; the backend rotates keys when one fails because of rate limits, authentication, or temporary provider errors.
 
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GEMINI_API_KEY`
-- `GROQ_API_KEY`
-- `XAI_API_KEY`
-- `OPENROUTER_API_KEY`
-- `HF_TOKEN`
+## Web Search
 
-Se a variável de ambiente existir, o backend a reaproveita automaticamente no provider correspondente.
+Search modes:
 
-### Como ler o índice de modelos
+- `Off`: no web search tool.
+- `Native`: provider-side search when supported.
+- `Terminal`: local terminal-backed DuckDuckGo search.
+- `Both`: try native search first, then terminal fallback if native search fails or returns empty.
 
-No painel existe uma aba chamada `Índice de modelos`. Ela mostra:
+Terminal search is still a local tool. If tool approval is required, the UI asks before running it.
 
-- `selecionável`: aparece em dropdowns e rotatórias
-- `índice`: não entra no seletor, mas fica documentado
-- `raciocínio`: suporta reasoning ou thinking
-- `visão`: aceita imagens
-- `saída`: limite máximo de tokens de resposta
-- `API`: observações técnicas e restrições do provider
+## Persistent Memory
 
-`openrouter/free` continua como o endpoint gratuito do OpenRouter. `openrouter/auto` continua como o roteador automático.
+The app has two memory layers:
 
-## Modelos e rotação
+- Global Markdown memory for the active section.
+- Additional user memory files copied into the runtime.
 
-O app tem três ideias separadas:
+Additional files can be sent with every prompt, or only exposed as an index. When only the index is sent, the AI can use `persistent_memory_user` to list/read files as needed. If editing is enabled, `edit_persistent_memory_user` proposes text replacements and asks for approval unless automatic tool approval is enabled.
 
-- `Modelo padrão`: o valor salvo para chats novos.
-- `Rotatória de modelos`: troca entre modelos do mesmo provider quando um deles falha.
-- `Rotatória de providers`: troca de provider/modelo quando a chamada falha e existe fallback configurado.
+## Backup And Restore
 
-Se um modelo não aparece no seletor, ele ainda pode aparecer no `Índice de modelos`.
-Se você quiser usar um endpoint ou alias que ainda não entrou na lista, use `Modelo personalizado`.
+In `General settings > Backup`, export/import includes:
 
-## Tema escuro
+- configuration and providers
+- persistent memory
+- additional user memory files
+- chats and messages
+- attachments
+- events
 
-Em `Configurações gerais > Identidade` existe `Tema do painel` com:
+The import dialog lets you choose which parts to restore.
 
-- `Claro`
-- `Escuro`
-- `Sistema`
+## Development
 
-O tema é salvo na configuração e segue a preferência do sistema quando você escolher `Sistema`.
-
-## Backup e restauração
-
-Em `Configurações gerais > Backup`, o export inclui:
-
-- configuração completa, incluindo provider, API keys, tema, tools, contexto, rede e rotatórias
-- memória persistente
-- arquivos adicionais de memória persistente adicionados pelo usuário, com o conteúdo atual da cópia salva no My Computer
-- chats, mensagens, memórias de chat e contexto salvo
-- anexos dos chats, que podem ser ignorados na importação
-- eventos recentes para diagnóstico
-- metadados da seção ativa
-
-Na importação, você escolhe cada grupo. Configuração importada é tratada como snapshot completo: modelos customizados e capacidades que não estão no backup são removidos do runtime atual. Se importar chats sem anexos, o histórico entra sem copiar os arquivos anexados. Chats importados com id já existente ganham um novo id para evitar sobrescrever chats atuais.
-O import restaura dados na seção ativa.
-
-O botão `Excluir todos os chats` fica na mesma aba e exige confirmação dupla. Ele apaga chats, mensagens, anexos, memória de chat e contexto dos chats da seção atual, mas preserva configurações, memória persistente global e arquivos adicionais de memória.
-
-## Ollama local
-
-Ollama é opcional, mas o app sabe trabalhar com ele:
-
-- verificar se o daemon está instalado
-- instalar pelo script oficial
-- listar modelos locais
-- dar `pull` no modelo selecionado
-- remover modelos locais
-- tentar desinstalar o Ollama do sistema
-
-Base local padrão:
-
-```text
-http://127.0.0.1:11434/v1
+```bash
+npm install
+npm test
+node --check src/panel/app.js src/server/assistant.js src/server/tools.js src/server/server.js
+git diff --check
 ```
 
-Se o instalador ou o gerenciamento do Ollama pedir `sudo`, você tem duas opções seguras:
+Project docs:
 
-1. Rodar o comando manualmente no terminal e digitar a senha.
-2. Criar uma regra limitada em `/etc/sudoers.d/my-computer`.
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains development setup, validation, and PR checklist.
+- [SECURITY.md](SECURITY.md) explains the local-first security model and how to report vulnerabilities.
+- [RELEASE.md](RELEASE.md) documents the release checklist.
 
-Exemplo de regra limitada para comandos de serviço do Ollama:
+## License
 
-```sudoers
-elias ALL=(root) NOPASSWD: /usr/bin/systemctl start ollama, /usr/bin/systemctl stop ollama, /usr/bin/systemctl restart ollama, /usr/bin/systemctl enable ollama, /usr/bin/systemctl disable ollama, /usr/bin/systemctl status ollama
-```
-
-- Troque `elias` pelo seu usuário.
-- Ajuste os binários e comandos para o que você realmente confia.
-- Evite liberar `ALL` sem senha.
-- O app mostra stdout, stderr e código de saída quando um comando falha.
-
-## Search e tools
-
-O app tem estes modos de pesquisa web:
-
-- `Web nativa`
-- `Terminal`
-- `Ambos`
-- `Desligado`
-
-`Web nativa` usa o provider quando a API suporta busca.
-`Terminal` usa a tool `web_search` para fazer uma consulta pública via DuckDuckGo Lite/HTML a partir do computador local; isso não é `run_terminal_command`, `curl`, `grep` nem busca em arquivos locais.
-`Ambos` tenta a rota nativa primeiro e cai para essa busca web via terminal; por isso também pede aprovação quando a execução automática de tools está desligada.
-
-No modo offline da seção, `Web nativa` e `Ambos` ficam indisponíveis. Use `Terminal` apenas se aceitar uma consulta web neutra e sem dados privados.
-
-Outras tools locais podem ser ligadas e desligadas nas configurações:
-
-- `run_terminal_command`
-- `memory_chat`
-- `persistent_memory`
-- `persistent_memory_user`
-- `edit_persistent_memory_user`
-- `compact_context`
-- `rename_chat`
-
-`persistent_memory_user` lista e lê arquivos de memória adicionados pelo usuário sem usar terminal. A listagem pode ocorrer sem aprovação; a leitura do conteúdo pede aprovação quando `Sempre permitir qualquer tool` está desligado. `edit_persistent_memory_user` substitui um trecho exato em arquivos texto/Markdown e segue o fluxo de aprovação da UI.
-Por padrão, tools que alteram arquivos, executam terminal ou fazem side effects exigem aprovação manual na UI.
-
-## Memória persistente com arquivos
-
-Em `Configurações gerais > Memória`, além do Markdown global, você pode adicionar arquivos de memória persistente como `.md`, `.txt`, `.html`, `.json`, `.yaml`, código e logs.
-
-Controles principais:
-
-- `Permitir que a IA liste e leia arquivos adicionais`: habilita `persistent_memory_user`. Se desligado, a IA não abre arquivos por conta própria. Com aprovação automática desligada, abrir o conteúdo de um arquivo pede confirmação.
-- `Enviar os arquivos adicionados por você a todo prompt`: injeta o conteúdo dos arquivos no prompt, com limite de tamanho.
-- Envio desligado: injeta só o índice dos arquivos. Se a leitura/listagem estiver ligada, a IA usa `persistent_memory_user` para ler apenas o que precisar.
-- `Permitir que a IA edite arquivos adicionais`: habilita `edit_persistent_memory_user` e depende da leitura/listagem.
-- `Lembrar a IA de manter seus arquivos de memória atualizados`: só funciona quando a edição está ligada e reforça no prompt que fatos duráveis devem ser gravados nos arquivos editáveis.
-
-A lista de arquivos tem `Ver arquivo`, que abre e permite editar a cópia salva dentro do runtime do MC. O arquivo original enviado de fora não é alterado. Quando a IA propõe `edit_persistent_memory_user`, a UI mostra `Ver diff` com as linhas removidas/adicionadas e `Ver arquivo` para conferir o conteúdo atual.
-
-Quando a aprovação automática de tools estiver desligada, você aprova ou nega a alteração antes de gravar no arquivo. A edição é feita por substituição exata: a tool envia `oldText` e `newText`, e o app só grava se `oldText` for encontrado no arquivo.
-
-Leituras grandes por `persistent_memory_user` podem retornar `truncated: true`. Nesse caso o resultado inclui `nextOffset`, e a IA pode continuar lendo o mesmo arquivo com `action: "read"` e `offset: nextOffset`.
-
-## Falhas e continuidade
-
-Quando a IA falha, para no meio ou estoura limite de saída, o app não apaga a tentativa anterior. O chat mostra a tentativa mais recente do grupo; as anteriores ficam em `Ver detalhes`.
-
-O painel mostra:
-
-- `Tentar novamente`: reenvia a solicitação original desde o início.
-- `Continuar`: retoma a partir da última saída parcial e do histórico da tentativa.
-- `Parar`: durante uma execução, o botão de enviar vira parar e solicita interrupção do agente; provider, terminal e compactação recebem o cancelamento quando possível, e a tentativa fica incompleta para poder ser continuada.
-- `Ver detalhes`: abre um modal com o processo, timeline de saídas intermediárias/finais, tool calls e eventos relacionados daquela tentativa.
-- `Copiar eventos`: copia os eventos carregados do chat para análise ou auditoria.
-
-Isso existe para manter o histórico visível e reduzir perda de contexto quando uma resposta sai incompleta.
-Retry e Continue ficam disponíveis apenas na tentativa mais recente do grupo. O backend também rejeita envios, retries e continues simultâneos no mesmo chat para evitar cliques duplicados e side effects repetidos.
-Falhas reais de tools, timeout e signal deixam a tentativa incompleta. Em terminal, exit code diferente de zero ainda aparece destacado, mas se a IA pediu `returnOutput: true` o stdout/stderr volta para o modelo para ele poder corrigir o próximo passo.
-Quando um modelo devolve conteúdo em `<think>`, o app separa esse texto em um bloco recolhível e mantém a resposta final limpa.
-
-## Rede local
-
-Em `Configurações gerais > Rede`, você pode abrir o painel para outros dispositivos na mesma rede.
-
-Quando isso está ligado:
-
-- o próximo restart escuta em `0.0.0.0`
-- a UI pede senha única via Basic Auth
-- o painel mostra a URL local e os IPs LAN detectados
-
-Para ligar:
-
-1. Marque `Abrir painel para a rede`.
-2. Defina uma senha.
-3. Salve as configurações.
-4. Reinicie o servidor.
-
-## Atualizações
-
-O botão de atualização usa o clone Git local.
-
-O fluxo é este:
-
-1. `git fetch --prune`
-2. compara `HEAD` com o upstream
-3. bloqueia atualização se houver mudanças locais
-4. quando você confirma, roda `git pull --ff-only && npm install`
-5. reinicia o servidor na mesma porta
-
-## Runtime
-
-Por padrão, tudo fica em:
-
-```text
-~/.my-computer
-```
-
-Você pode trocar isso com `MY_COMPUTER_HOME`.
-
-Arquivos principais do runtime:
-
-- `config.json`
-- `events.jsonl`
-- `persistent-memory.md`
-- `chats/<chat-id>/metadata.json`
-- `chats/<chat-id>/messages.json`
-- `chats/<chat-id>/memory.md`
-- `chats/<chat-id>/context.md`
-- `chats/<chat-id>/context-window.md`
-- `chats/<chat-id>/attachments/`
-
-## Estrutura do projeto
-
-- `src/panel/` - UI local do painel.
-- `src/server/` - HTTP server, storage, providers e tools.
-- `src/cli/` - comandos do painel.
-- `scripts/` - implementação interna de install e uninstall.
-- `docs/` - documentação do produto e da arquitetura.
-- `tests/` - testes locais.
-
-## Documentação recomendada
-
-- [docs/INDEX.md](./docs/INDEX.md)
-- [docs/PROVIDERS.md](./docs/PROVIDERS.md)
-- [docs/UI_SPEC.md](./docs/UI_SPEC.md)
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
-- [docs/SECURITY.md](./docs/SECURITY.md)
-
-## Dica prática
-
-Se algo parecer errado no catálogo de modelos, abra o `Índice de modelos` no painel e compare com [docs/PROVIDERS.md](./docs/PROVIDERS.md). O catálogo do app é atualizado pelo arquivo `src/server/models.js` e pela descoberta dinâmica dos providers.
+Check the repository license before redistributing modified builds.

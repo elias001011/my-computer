@@ -479,13 +479,21 @@ pre {
 }
 
 .message {
-  width: min(820px, 100%);
-  display: grid;
+  width: 100%;
+  max-width: min(820px, 100%);
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
 .message.user {
   align-self: flex-end;
+  align-items: flex-end;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  align-items: flex-start;
 }
 
 .bubble {
@@ -495,11 +503,14 @@ pre {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  max-width: 100%;
 }
 
 .message.user .bubble {
   background: var(--surface-accent-soft);
   border-color: var(--border-accent-soft);
+  width: fit-content;
+  max-width: min(620px, 100%);
 }
 
 .message.failed .bubble {
@@ -515,6 +526,7 @@ pre {
 .message.assistant .bubble {
   background: var(--bg);
   white-space: normal;
+  width: 100%;
 }
 
 .message.assistant .bubble p {

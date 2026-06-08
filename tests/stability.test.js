@@ -470,7 +470,7 @@ test('config endpoint persists appearance theme changes', async () => {
       body: JSON.stringify({
         provider: 'openai-compatible',
         model: 'gpt-5.5',
-        appearance: { theme: 'dark' },
+        appearance: { theme: 'dark', uiLanguage: 'pt-BR' },
         providerSettings: {
           'openai-compatible': {
             baseUrl: 'https://example.test/v1',
@@ -482,11 +482,13 @@ test('config endpoint persists appearance theme changes', async () => {
     assert.equal(response.status, 200);
     const data = await response.json();
     assert.equal(data.config.appearance.theme, 'dark');
+    assert.equal(data.config.appearance.uiLanguage, 'pt-BR');
 
     const bootstrap = await fetch(`${url}/api/bootstrap`);
     assert.equal(bootstrap.status, 200);
     const bootstrapData = await bootstrap.json();
     assert.equal(bootstrapData.config.appearance.theme, 'dark');
+    assert.equal(bootstrapData.config.appearance.uiLanguage, 'pt-BR');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -504,7 +506,7 @@ test('config endpoint preserves existing fields on partial appearance update', a
     language: 'pt-BR',
     userNickname: 'Elias',
     systemPromptExtra: 'Preserve this prompt.',
-    appearance: { theme: 'dark' },
+    appearance: { theme: 'dark', uiLanguage: 'pt-BR' },
     tools: {
       terminal: false,
       chatMemory: true,
@@ -544,6 +546,7 @@ test('config endpoint preserves existing fields on partial appearance update', a
     assert.equal(response.status, 200);
     const data = await response.json();
     assert.equal(data.config.appearance.theme, 'system');
+    assert.equal(data.config.appearance.uiLanguage, 'pt-BR');
     assert.equal(data.config.language, 'pt-BR');
     assert.equal(data.config.userNickname, 'Elias');
     assert.equal(data.config.systemPromptExtra, 'Preserve this prompt.');
