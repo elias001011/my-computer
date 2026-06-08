@@ -26,6 +26,7 @@ import {
   listUserMemoryFilesWithHints,
   loadConfig,
   readAttachmentFile,
+  readAttachmentTextContent,
   readChat,
   readContextSummary,
   readEvents,
@@ -38,6 +39,7 @@ import {
   updateProfile,
   updateChatMetadata,
   withProfileScope,
+  writeAttachmentTextContent,
   writeUserMemoryFileContent,
   writePersistentMemory,
   writeMemory,
@@ -265,7 +267,7 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'POST' && !chatId) {
     const config = await loadConfig();
-    const chat = await createChat('Novo chat', { provider: config.provider, model: config.model });
+    const chat = await createChat('New chat', { provider: config.provider, model: config.model });
     sendJson(response, 201, { chat, chats: await listChats() });
     return;
   }
@@ -302,7 +304,7 @@ async function handleChatsApi(request, response, parts) {
     let chats = await listChats();
     if (chats.length === 0) {
       const config = await loadConfig();
-      await createChat('Novo chat', { provider: config.provider, model: config.model });
+      await createChat('New chat', { provider: config.provider, model: config.model });
       chats = await listChats();
     }
     const activeChat = chats[0] ? await readChat(chats[0].id) : null;
@@ -338,6 +340,25 @@ async function handleChatsApi(request, response, parts) {
       'Cache-Control': 'no-store',
     });
     response.end(data);
+    return;
+  }
+
+  if (method === 'GET' && chatId && parts[3] === 'attachments' && parts[5] === 'text') {
+    const { attachment, content } = await readAttachmentTextContent(chatId, parts[4]);
+    sendJson(response, 200, { attachment, content, editable: true });
+    return;
+  }
+
+  if (method === 'PUT' && chatId && parts[3] === 'attachments' && parts[5] === 'text') {
+    const body = await readBody(request, { limit: 30_000_000 });
+    const update = await writeAttachmentTextContent(chatId, parts[4], body.content || '');
+    sendJson(response, 200, {
+      attachment: update.attachment,
+      previousContent: update.previousContent,
+      content: update.content,
+      chat: await readChat(chatId),
+      activeChatEvents: await readEvents({ chatId }),
+    });
     return;
   }
 

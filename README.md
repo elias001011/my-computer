@@ -227,6 +227,14 @@ The app has two memory layers:
 
 Additional files can be sent with every prompt, or only exposed as an index. When only the index is sent, the AI can use `persistent_memory_user` to list/read files as needed. If editing is enabled, `edit_persistent_memory_user` proposes text replacements and asks for approval unless automatic tool approval is enabled.
 
+## Attachments And Editable Documents
+
+Files attached in a chat are copied into the My Computer runtime. The original file outside the app is not modified.
+
+Text-like attachments such as Markdown, plain text, HTML, JSON, YAML, CSV, code, and logs can be opened from the chat viewer and edited manually. When the `chat_document` tool is enabled, the AI can also list, read, replace snippets, or rewrite those chat documents. Write operations require tool approval unless `Always allow any tool` is enabled.
+
+This is separate from persistent memory: editable chat documents stay attached to the conversation, while additional memory files are durable context that can be used across chats in the active section.
+
 ## Backup And Restore
 
 In `General settings > Backup`, export/import includes:

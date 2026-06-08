@@ -120,6 +120,9 @@ O app tem tools locais com aprovação por UI:
 - `web_search`
 - `memory_chat`
 - `persistent_memory`
+- `persistent_memory_user`
+- `edit_persistent_memory_user`
+- `chat_document`
 - `compact_context`
 - `rename_chat`
 
@@ -144,6 +147,9 @@ Para saídas longas ou execuções demoradas:
 ## Attachments
 
 - Texto, markdown, json, csv, html e código podem passar por extração local.
+- Anexos texto também podem ser lidos/editados pela tool `chat_document`, sempre na cópia salva dentro do runtime do chat.
+- `chat_document read` retorna conteúdo cru paginado; `replace` troca um trecho exato; `write` substitui o documento inteiro.
+- Edições por `chat_document` atualizam o arquivo, `attachments.json`, previews extraídos e referências do anexo nas mensagens.
 - Imagens só entram como multimodal quando o modelo suporta.
 - Vídeos e áudios ficam como referência com preview local no MVP.
 - PDFs e arquivos complexos ficam anexados com metadados e caminho local.

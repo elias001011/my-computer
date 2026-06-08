@@ -168,8 +168,10 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 - Tools locais podem exigir aprovação manual ou ficar em sempre permitir.
 - A UI mostra no chat apenas a decisão/estado principal da tool; detalhes de requests pendentes, permitidas, negadas, timeout, exit code e erro ficam no modal de detalhes.
 - Arquivos adicionais de memória têm `Ver arquivo`, que abre um editor da cópia salva no My Computer; edições por `edit_persistent_memory_user` têm `Ver diff` com linhas adicionadas/removidas e botão para abrir o arquivo atual.
+- Anexos texto do chat têm `Abrir/editar`, que carrega o arquivo cru salvo no runtime. Edições da IA por `chat_document` aparecem como `Documento atualizado`, com `Ver diff` e `Ver arquivo`.
 - `persistent_memory_user list` pode ocorrer sem aprovação; `persistent_memory_user read` pede aprovação quando tools automáticas estão desligadas.
 - Leituras grandes de `persistent_memory_user` retornam `truncated`, `nextOffset` e faixa lida para a IA continuar com `offset`.
+- `chat_document list/read` pode ocorrer sem aprovação; `chat_document replace/write` pede aprovação quando tools automáticas estão desligadas.
 
 ## Rede local e updates
 

@@ -220,6 +220,64 @@ export const editPersistentMemoryUserToolDefinition = {
   },
 };
 
+export const chatDocumentToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'chat_document',
+    description:
+      'List, read, or edit text-like files attached to the current chat. This operates only on the copy saved inside My Computer, never on the original file outside the app. Use it for Markdown, text, HTML, JSON, YAML, XML, CSV, code, and logs that the user wants edited as chat artifacts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'read', 'replace', 'write'],
+          description:
+            'list returns editable text attachments in this chat. read returns a paginated raw file chunk. replace swaps one exact oldText snippet. write replaces the whole document with content.',
+        },
+        attachmentId: {
+          type: 'string',
+          description: 'ID of the chat attachment. Prefer attachmentId from the attachment index.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Original file name when attachmentId is not available.',
+        },
+        offset: {
+          type: 'number',
+          description: 'Character offset for read pagination. Use nextOffset from a truncated read to continue.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum characters to return for read. Defaults to 20000; max 50000.',
+        },
+        oldText: {
+          type: 'string',
+          description: 'Exact text currently present in the document. Required for replace.',
+        },
+        newText: {
+          type: 'string',
+          description: 'Replacement text for replace.',
+        },
+        content: {
+          type: 'string',
+          description: 'Full desired document content. Required for write.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for reading or editing the chat document.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true for reads and edits when you need to continue reasoning.',
+        },
+      },
+      required: ['action', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const compactContextToolDefinition = {
   type: 'function',
   function: {

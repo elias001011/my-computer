@@ -9,6 +9,7 @@ const fileLocks = new Map();
 const USER_MEMORY_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 const USER_MEMORY_PROMPT_TOTAL_CHARS = 60000;
 const USER_MEMORY_PROMPT_FILE_CHARS = 12000;
+const ATTACHMENT_FILE_LIMIT_BYTES = 20 * 1024 * 1024;
 const profileScope = new AsyncLocalStorage();
 const defaultProfile = Object.freeze({
   id: 'default',
@@ -44,6 +45,7 @@ export const defaultConfig = Object.freeze({
     deepInvestigation: false,
     userMemory: true,
     userMemoryEdit: false,
+    chatDocuments: true,
   },
   userMemory: {
     sendFilesToPrompt: false,
@@ -246,7 +248,7 @@ export async function listChats() {
   return chats.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
-export async function createChat(title = 'Novo chat', options = {}) {
+export async function createChat(title = 'New chat', options = {}) {
   await ensureRuntime();
   const now = new Date();
   const id = `${stamp(now)}-${crypto.randomUUID().slice(0, 8)}`;
@@ -741,7 +743,7 @@ export async function saveAttachment(id, file = {}) {
   }
 
   const buffer = Buffer.from(rawBase64, 'base64');
-  if (buffer.length > 20 * 1024 * 1024) {
+  if (buffer.length > ATTACHMENT_FILE_LIMIT_BYTES) {
     const error = new Error('Arquivo muito grande. Limite atual: 20 MB por arquivo.');
     error.statusCode = 413;
     throw error;
@@ -790,7 +792,7 @@ export async function listAttachments(id) {
 
 export async function readAttachment(id, attachmentId) {
   assertChatId(id);
-  const attachment = (await listAttachments(id)).find((item) => item.id === attachmentId);
+  const attachment = findAttachmentInList(await listAttachments(id), attachmentId);
   if (!attachment) {
     const error = new Error('Anexo não encontrado.');
     error.statusCode = 404;
@@ -801,17 +803,74 @@ export async function readAttachment(id, attachmentId) {
 
 export async function readAttachmentFile(id, attachmentId) {
   const attachment = await readAttachment(id, attachmentId);
-  const chatDir = getChatDir(id);
-  const resolved = path.resolve(attachment.path);
-  if (!resolved.startsWith(`${path.resolve(chatDir)}${path.sep}`)) {
-    const error = new Error('Caminho de anexo inválido.');
-    error.statusCode = 403;
-    throw error;
-  }
+  const resolved = assertAttachmentPath(id, attachment.path);
   return {
     attachment,
     data: await fs.readFile(resolved),
   };
+}
+
+export async function readAttachmentTextContent(id, attachmentId) {
+  const { attachment, data } = await readAttachmentFile(id, attachmentId);
+  assertTextEditableAttachment(attachment);
+  return {
+    attachment,
+    content: data.toString('utf8').replace(/\u0000/g, ''),
+  };
+}
+
+export async function writeAttachmentTextContent(id, attachmentId, content) {
+  assertChatId(id);
+  const target = await readAttachment(id, attachmentId);
+  assertTextEditableAttachment(target);
+  const filePath = assertAttachmentPath(id, target.path);
+  const nextContent = String(content ?? '');
+  const buffer = Buffer.from(nextContent, 'utf8');
+  if (buffer.length > ATTACHMENT_FILE_LIMIT_BYTES) {
+    const error = new Error('Arquivo muito grande. Limite atual: 20 MB por arquivo.');
+    error.statusCode = 413;
+    throw error;
+  }
+
+  return withFileLock(filePath, async () => {
+    const previousContent = (await fs.readFile(filePath)).toString('utf8').replace(/\u0000/g, '');
+    await fs.writeFile(filePath, buffer, { mode: 0o600 });
+    const attachment = await updateAttachmentAfterWrite(id, target, buffer);
+    await appendEvent({ type: 'chat.attachment.manual_updated', chatId: id, details: { name: attachment.name, size: attachment.size } });
+    return { attachment, previousContent, content: nextContent, path: filePath };
+  });
+}
+
+export async function replaceTextInAttachment(id, attachmentId, oldText, newText) {
+  assertChatId(id);
+  const target = await readAttachment(id, attachmentId);
+  assertTextEditableAttachment(target);
+  const filePath = assertAttachmentPath(id, target.path);
+  return withFileLock(filePath, async () => {
+    const previousContent = (await fs.readFile(filePath)).toString('utf8').replace(/\u0000/g, '');
+    const needle = String(oldText ?? '');
+    if (!needle) {
+      const error = new Error('oldText é obrigatório para editar o documento anexado.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!previousContent.includes(needle)) {
+      const error = new Error('Trecho oldText não encontrado no documento anexado.');
+      error.statusCode = 409;
+      throw error;
+    }
+    const content = previousContent.replace(needle, String(newText ?? ''));
+    const buffer = Buffer.from(content, 'utf8');
+    if (buffer.length > ATTACHMENT_FILE_LIMIT_BYTES) {
+      const error = new Error('Arquivo muito grande. Limite atual: 20 MB por arquivo.');
+      error.statusCode = 413;
+      throw error;
+    }
+    await fs.writeFile(filePath, buffer, { mode: 0o600 });
+    const attachment = await updateAttachmentAfterWrite(id, target, buffer);
+    await appendEvent({ type: 'chat.attachment.edited', chatId: id, details: { name: attachment.name, path: filePath } });
+    return { attachment, previousContent, content, path: filePath };
+  });
 }
 
 export async function deleteAttachment(id, attachmentId) {
@@ -1582,7 +1641,7 @@ function isUserMemoryEditable(mimeType, name) {
 
 function normalizeTitle(title) {
   const clean = String(title || '').replace(/\s+/g, ' ').trim();
-  return clean.slice(0, 80) || 'Novo chat';
+  return clean.slice(0, 80) || 'New chat';
 }
 
 function normalizeTools(tools = {}, options = {}) {
@@ -1602,6 +1661,7 @@ function normalizeTools(tools = {}, options = {}) {
     deepInvestigation: tools.deepInvestigation === true,
     userMemory: tools.userMemory !== false,
     userMemoryEdit: tools.userMemory !== false && tools.userMemoryEdit === true,
+    chatDocuments: tools.chatDocuments !== false,
   };
 }
 
@@ -1947,6 +2007,83 @@ function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {
 
 function getAttachmentsMetadataPath(id) {
   return path.join(getChatDir(id), 'attachments.json');
+}
+
+function findAttachmentInList(attachments = [], identifier) {
+  const value = String(identifier || '').trim();
+  if (!value) return null;
+  return (
+    attachments.find((item) => item.id === value) ||
+    attachments.find((item) => item.name === value || path.basename(item.path || '') === value) ||
+    null
+  );
+}
+
+function assertAttachmentPath(id, filePath) {
+  const chatDir = getChatDir(id);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(`${path.resolve(chatDir)}${path.sep}`)) {
+    const error = new Error('Caminho de anexo inválido.');
+    error.statusCode = 403;
+    throw error;
+  }
+  return resolved;
+}
+
+function assertTextEditableAttachment(attachment = {}) {
+  if (!isTextLike(attachment.mimeType || '', attachment.name || '')) {
+    const error = new Error('Este anexo não é um documento de texto editável. Use Markdown, texto, HTML, JSON, CSV, YAML, XML, código ou logs.');
+    error.statusCode = 415;
+    throw error;
+  }
+}
+
+async function updateAttachmentAfterWrite(id, target, buffer) {
+  const extraction = extractAttachmentText(buffer, { name: target.name, mimeType: target.mimeType });
+  const updated = {
+    ...target,
+    size: buffer.length,
+    kind: classifyAttachment(target.mimeType, target.name),
+    sendMode: defaultAttachmentSendMode(target.mimeType, target.name, extraction),
+    extractedText: extraction.text,
+    previewText: truncate(extraction.text, 1800),
+    extractionStatus: extraction.status,
+    extractionNote: extraction.note,
+    updatedAt: new Date().toISOString(),
+  };
+  const attachmentsPath = getAttachmentsMetadataPath(id);
+  await withFileLock(attachmentsPath, async () => {
+    const attachments = await readJson(attachmentsPath, []);
+    await writeJson(
+      attachmentsPath,
+      attachments.map((item) => (item.id === target.id ? updated : item)),
+      0o600,
+    );
+  });
+  await updateAttachmentReferencesInMessages(id, updated);
+  await touchChat(id);
+  return updated;
+}
+
+async function updateAttachmentReferencesInMessages(id, attachment) {
+  const messagesPath = path.join(getChatDir(id), 'messages.json');
+  await withFileLock(messagesPath, async () => {
+    const messages = await readJson(messagesPath, []);
+    let changed = false;
+    const next = messages.map((message) => {
+      if (!Array.isArray(message.attachments)) return message;
+      let messageChanged = false;
+      const attachments = message.attachments.map((item) => {
+        if (item.id !== attachment.id) return item;
+        messageChanged = true;
+        return { ...item, ...attachment };
+      });
+      if (!messageChanged) return message;
+      changed = true;
+      return { ...message, attachments };
+    });
+    if (changed) await writeJson(messagesPath, next, 0o600);
+  });
 }
 
 function classifyAttachment(mimeType, name) {

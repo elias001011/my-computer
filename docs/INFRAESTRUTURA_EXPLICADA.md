@@ -111,6 +111,9 @@ As principais são:
 - `web_search`
 - `memory_chat`
 - `persistent_memory`
+- `persistent_memory_user`
+- `edit_persistent_memory_user`
+- `chat_document`
 - `compact_context`
 - `rename_chat`
 
@@ -128,6 +131,12 @@ Para saídas longas ou tarefas demoradas:
 - a IA pode pedir `timeoutSeconds` na tool de terminal
 - o backend espera o processo terminar antes de devolver `stdout`/`stderr`
 - downloads e rotinas longas devem usar timeout maior, mas não infinito
+
+`chat_document` e memória persistente adicional são caminhos diferentes:
+
+- `persistent_memory_user` e `edit_persistent_memory_user` trabalham em arquivos de memória durável adicionados pelo usuário na seção de memória.
+- `chat_document` trabalha em anexos de texto do chat atual, como `.md`, `.txt`, `.html`, `.json`, `.yaml`, código e logs.
+- A edição de anexo altera só a cópia salva em `attachments/` dentro do runtime do chat; o arquivo original enviado de fora não é modificado.
 
 ### Exemplo mental
 

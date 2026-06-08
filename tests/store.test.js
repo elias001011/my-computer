@@ -211,6 +211,12 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(attachment.kind, 'text');
   assert.match(attachment.extractedText, /Texto extraido/);
   assert.equal((await store.listAttachments(chat.id)).length, 1);
+  const attachmentEdit = await store.replaceTextInAttachment(chat.id, attachment.id, 'Texto extraido.', 'Texto editado.');
+  assert.match(attachmentEdit.content, /Texto editado/);
+  assert.match((await store.readAttachmentTextContent(chat.id, attachment.id)).content, /Texto editado/);
+  const attachmentManualEdit = await store.writeAttachmentTextContent(chat.id, attachment.id, '# Documento\n\nTexto manual.');
+  assert.match(attachmentManualEdit.content, /Texto manual/);
+  assert.match((await store.readChat(chat.id)).attachments[0].previewText, /Texto manual/);
 
   const video = await store.saveAttachment(chat.id, {
     name: 'clip.mp4',

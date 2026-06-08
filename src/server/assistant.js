@@ -12,7 +12,9 @@ import {
   readContextSummary,
   readMemory,
   readPersistentMemory,
+  readAttachmentTextContent,
   readUserMemoryFile,
+  replaceTextInAttachment,
   replaceTextInUserMemoryFile,
   loadConfig,
   readAttachmentFile,
@@ -23,8 +25,10 @@ import {
   updateChatMetadata,
   updateMessage,
   writeContextSummary,
+  writeAttachmentTextContent,
 } from './store.js';
 import {
+  chatDocumentToolDefinition,
   compactContextToolDefinition,
   editPersistentMemoryUserToolDefinition,
   memoryChatToolDefinition,
@@ -48,6 +52,7 @@ const DEFAULT_RUNNING_TOOL_STALE_MS = 20 * 60 * 1000;
 const chatTurnLocks = new Map();
 const toolApprovalLocks = new Map();
 const activeChatRuns = new Map();
+const GENERIC_CHAT_TITLES = new Set(['Novo chat', 'New chat']);
 
 export async function sendUserMessage(chatId, content, options = {}) {
   return withChatTurnLock(chatId, () =>
@@ -218,7 +223,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         if (!approvalToolCalls.length) continue;
 
         throwIfStopped(operationSignal);
-        if (chatBefore.title === 'Novo chat' && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
+        if (isGenericChatTitle(chatBefore.title) && !toolCalls.some((toolCall) => toolCall.function?.name === 'rename_chat')) {
           await updateChatMetadata(chatId, { title: titleSeed });
         }
         const pendingAssistantMessage = createToolApprovalMessage(assistantMessage, toolCalls, workingMessages, effectiveConfig, {
@@ -363,7 +368,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
 
   assistantOutcome = applyStoppedOutcomeIfRequested(assistantOutcome, operationSignal);
 
-  if (chatBefore.title === 'Novo chat' && !toolUses.some((toolUse) => toolUse.name === 'rename_chat') && titleSeed) {
+  if (isGenericChatTitle(chatBefore.title) && !toolUses.some((toolUse) => toolUse.name === 'rename_chat') && titleSeed) {
     await updateChatMetadata(chatId, { title: titleSeed });
   }
 
@@ -425,6 +430,10 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     assistantStatus: assistantOutcome.status,
     chat: await readChat(chatId),
   };
+}
+
+function isGenericChatTitle(title = '') {
+  return GENERIC_CHAT_TITLES.has(String(title || '').trim());
 }
 
 export async function continueToolApproval(chatId, messageId, decision = 'approve', options = {}) {
@@ -1756,6 +1765,9 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
     config.tools?.userMemoryEdit && config.userMemory?.remindModelToUpdateFiles
       ? 'Before a final answer, briefly consider whether any user-added memory file should be updated. If yes, call edit_persistent_memory_user with exact oldText and newText; the user can approve or deny the change in the UI.'
       : '',
+    config.tools?.chatDocuments !== false
+      ? 'Chat attachments are copied into the app runtime. For user requests to inspect or edit Markdown/text/HTML/JSON/YAML/code attachments, use chat_document instead of terminal. The tool edits only the saved chat copy and supports list/read/replace/write; if a read result is truncated, continue with offset=nextOffset.'
+      : 'Reading and editing chat document attachments through tools is disabled by user settings.',
     config.tools?.autoCompact
       ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
       : 'Automatic context compaction through tools is disabled by user settings.',
@@ -1923,6 +1935,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executeEditPersistentMemoryUserToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'chat_document') {
+    return executeChatDocumentToolCall(chatId, toolCall.id, input);
+  }
+
   if (name === 'compact_context') {
     return executeCompactContextToolCall(chatId, toolCall.id, input, config);
   }
@@ -2067,6 +2083,7 @@ function buildEnabledToolDefinitions(tools = {}) {
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
     tools.userMemory !== false ? persistentMemoryUserToolDefinition : null,
     tools.userMemoryEdit === true ? editPersistentMemoryUserToolDefinition : null,
+    tools.chatDocuments !== false ? chatDocumentToolDefinition : null,
     tools.autoCompact !== false ? compactContextToolDefinition : null,
     tools.chatTitle !== false ? renameChatToolDefinition : null,
   ].filter(Boolean);
@@ -2132,7 +2149,7 @@ function extractSyntheticToolCalls(content = '', tools = {}) {
   }
 
   const inlinePattern =
-    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
+    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
   for (const match of text.matchAll(inlinePattern)) {
     candidates.push({ name: match[1], body: match[2] });
   }
@@ -2168,6 +2185,7 @@ function normalizeSyntheticToolName(name = '') {
     'persistent_memory',
     'persistent_memory_user',
     'edit_persistent_memory_user',
+    'chat_document',
     'compact_context',
     'rename_chat',
   ].includes(value)
@@ -2178,7 +2196,7 @@ function normalizeSyntheticToolName(name = '') {
 function recoverMalformedToolCall(name, args) {
   const trimmedName = String(name || '').trim();
   const trimmedArgs = String(args || '').trim();
-  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|compact_context|rename_chat)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
+  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
   if (directTool) return { name: directTool[1], arguments: directTool[2] };
   if (trimmedName === 'web_search' || trimmedName.endsWith('.web_search')) return { name: 'web_search', arguments: trimmedArgs };
   return { name: trimmedName, arguments: trimmedArgs };
@@ -2194,6 +2212,13 @@ function normalizeToolInput(name, input = {}) {
       ? String(normalizedInput.action).trim()
       : 'list';
     if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 2_000_000, 0);
+    if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 50000, 20000);
+  }
+  if (name === 'chat_document') {
+    normalizedInput.action = ['list', 'read', 'replace', 'write'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'list';
+    if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 5_000_000, 0);
     if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 50000, 20000);
   }
   return normalizedInput;
@@ -2299,6 +2324,7 @@ function describeEnabledTools(tools = {}) {
     tools.persistentMemory !== false ? 'persistent_memory' : null,
     tools.userMemory !== false ? 'persistent_memory_user' : null,
     tools.userMemoryEdit === true ? 'edit_persistent_memory_user' : null,
+    tools.chatDocuments !== false ? 'chat_document' : null,
     tools.autoCompact !== false ? 'compact_context' : null,
     tools.chatTitle !== false ? 'rename_chat' : null,
   ].filter(Boolean);
@@ -2311,6 +2337,7 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'persistent_memory') return tools.persistentMemory !== false;
   if (name === 'persistent_memory_user') return tools.userMemory !== false;
   if (name === 'edit_persistent_memory_user') return tools.userMemoryEdit === true;
+  if (name === 'chat_document') return tools.chatDocuments !== false;
   if (name === 'compact_context') return tools.autoCompact !== false;
   if (name === 'rename_chat') return tools.chatTitle !== false;
   return true;
@@ -2330,6 +2357,10 @@ function toolRequiresApproval(toolCall, config = {}) {
   }
   if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat') {
     return true;
+  }
+  if (name === 'chat_document') {
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return input.action === 'replace' || input.action === 'write';
   }
   if (name === 'web_search') {
     const searchMode = getSearchMode(config.tools);
@@ -2383,7 +2414,7 @@ function shouldReturnToolOutput(toolCall) {
 
 function appendToolResultForModel(messages, toolCall, toolUse) {
   if (!shouldReturnToolOutput(toolCall)) return false;
-  const outputLimit = toolUse.name === 'persistent_memory_user' ? 30000 : 12000;
+  const outputLimit = ['persistent_memory_user', 'chat_document'].includes(toolUse.name) ? 30000 : 12000;
   messages.push({
     role: 'tool',
     tool_call_id: toolCall.id,
@@ -2795,6 +2826,175 @@ async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input
     },
     createdAt: new Date().toISOString(),
   };
+}
+
+async function executeChatDocumentToolCall(chatId, toolCallId, input) {
+  const normalizedInput = normalizeToolInput('chat_document', input);
+  const action = normalizedInput.action || 'list';
+  if (action === 'list') {
+    const chat = await readChat(chatId);
+    const documents = (chat.attachments || []).filter(isChatTextAttachment).map(serializeChatDocumentAttachmentForTool);
+    await appendEvent({ type: 'tool.chat_document.list', chatId, details: { reason: input.reason, documentCount: documents.length } });
+    return {
+      id: toolCallId,
+      name: 'chat_document',
+      input: normalizedInput,
+      result: {
+        action,
+        documents,
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const identifier = normalizedInput.attachmentId || normalizedInput.fileName;
+  if (!identifier) {
+    return {
+      id: toolCallId,
+      name: 'chat_document',
+      input: normalizedInput,
+      status: 'failed',
+      result: { action, error: 'attachmentId or fileName is required' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  if (action === 'read') {
+    const offset = normalizedInput.offset || 0;
+    const limit = normalizedInput.limit || 20000;
+    const file = await readAttachmentTextContent(chatId, identifier);
+    const totalChars = file.content.length;
+    const content = file.content.slice(offset, offset + limit);
+    const nextOffset = offset + content.length;
+    const truncated = nextOffset < totalChars;
+    await appendEvent({
+      type: 'tool.chat_document.read',
+      chatId,
+      details: {
+        reason: input.reason,
+        attachmentId: file.attachment.id,
+        name: file.attachment.name,
+        offset,
+        limit,
+        truncated,
+        nextOffset: truncated ? nextOffset : null,
+      },
+    });
+    return {
+      id: toolCallId,
+      name: 'chat_document',
+      input: normalizedInput,
+      result: {
+        action,
+        document: serializeChatDocumentAttachmentForTool(file.attachment),
+        offset,
+        limit,
+        totalChars,
+        nextOffset: truncated ? nextOffset : null,
+        truncated,
+        content,
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  if (action === 'replace') {
+    const oldText = String(normalizedInput.oldText ?? '');
+    if (!oldText) {
+      return {
+        id: toolCallId,
+        name: 'chat_document',
+        input: normalizedInput,
+        status: 'failed',
+        result: { action, error: 'oldText is required for replace' },
+        createdAt: new Date().toISOString(),
+      };
+    }
+    const update = await replaceTextInAttachment(chatId, identifier, oldText, String(normalizedInput.newText ?? ''));
+    await appendEvent({
+      type: 'tool.chat_document.replace',
+      chatId,
+      details: { reason: input.reason, attachmentId: update.attachment.id, name: update.attachment.name, path: update.path },
+    });
+    return {
+      id: toolCallId,
+      name: 'chat_document',
+      input: normalizedInput,
+      result: {
+        action,
+        document: serializeChatDocumentAttachmentForTool(update.attachment),
+        previousContent: truncate(update.previousContent, 4000),
+        content: truncate(update.content, 12000),
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  if (action === 'write') {
+    const update = await writeAttachmentTextContent(chatId, identifier, String(normalizedInput.content ?? ''));
+    await appendEvent({
+      type: 'tool.chat_document.write',
+      chatId,
+      details: { reason: input.reason, attachmentId: update.attachment.id, name: update.attachment.name, path: update.path },
+    });
+    return {
+      id: toolCallId,
+      name: 'chat_document',
+      input: normalizedInput,
+      result: {
+        action,
+        document: serializeChatDocumentAttachmentForTool(update.attachment),
+        previousContent: truncate(update.previousContent, 4000),
+        content: truncate(update.content, 12000),
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    id: toolCallId,
+    name: 'chat_document',
+    input: normalizedInput,
+    status: 'failed',
+    result: { action, error: 'action must be list, read, replace, or write' },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function serializeChatDocumentAttachmentForTool(attachment = {}) {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    kind: attachment.kind,
+    sendMode: attachment.sendMode,
+    extractionStatus: attachment.extractionStatus || '',
+    title: inferDocumentTitle(attachment.extractedText || attachment.previewText || ''),
+    preview: truncate(String(attachment.previewText || attachment.extractedText || ''), 500),
+    updatedAt: attachment.updatedAt || attachment.createdAt || '',
+  };
+}
+
+function isChatTextAttachment(attachment = {}) {
+  const mimeType = String(attachment.mimeType || '').toLowerCase();
+  const name = String(attachment.name || '').toLowerCase();
+  return (
+    attachment.kind === 'text' ||
+    mimeType.startsWith('text/') ||
+    /\.(md|markdown|txt|json|jsonl|csv|tsv|html?|xml|ya?ml|js|mjs|cjs|ts|tsx|jsx|css|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql|log|ini|toml)$/i.test(name) ||
+    ['application/json', 'application/xml', 'application/x-yaml'].includes(mimeType)
+  );
+}
+
+function inferDocumentTitle(text = '') {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const heading = lines.find((line) => /^#{1,6}\s+/.test(line));
+  if (heading) return heading.replace(/^#{1,6}\s+/, '').trim().slice(0, 160);
+  return (lines[0] || '').slice(0, 160);
 }
 
 async function executeMemoryToolCall(chatId, toolCallId, input) {

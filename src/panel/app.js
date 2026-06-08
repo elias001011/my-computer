@@ -34,6 +34,7 @@ const state = {
   setupDraft: null,
   pendingAttachments: [],
   attachmentViewer: null,
+  attachmentDiff: null,
   userMemoryViewer: null,
   userMemoryDiff: null,
   messageDetailsOpen: false,
@@ -245,6 +246,260 @@ const EN_TEXT = new Map([
   ['falhou', 'failed'],
   ['incompleto', 'incomplete'],
   ['concluído', 'completed'],
+  ['Título do chat', 'Chat title'],
+  ['Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.', 'Allows the AI to rename the chat with rename_chat, usually after the first message.'],
+  ['Provider, modelo e atalhos deste chat.', 'Provider, model, and shortcuts for this chat.'],
+  ['Use apenas se o endpoint aceitar imagens multimodais.', 'Use only if the endpoint accepts multimodal images.'],
+  ['Prompt e memória do chat', 'Chat prompt and memory'],
+  ['Preferências e notas duráveis específicas deste chat.', 'Preferences and durable notes specific to this chat.'],
+  ['System prompt do chat', 'Chat system prompt'],
+  ['Preferências específicas deste chat.', 'Specific preferences for this chat.'],
+  ['Memória do chat', 'Chat memory'],
+  ['A tool memory_chat usa este Markdown como base quando precisa ler, anexar ou reescrever memória do chat.', 'The memory_chat tool uses this Markdown when it needs to read, append, or rewrite chat memory.'],
+  ['Contexto compactado', 'Compacted context'],
+  ['Este Markdown entra no prompt das próximas mensagens como resumo durável do chat. Edite para corrigir fatos, remover ruído ou preservar decisões importantes.', 'This Markdown is added to the next prompts as a durable chat summary. Edit it to fix facts, remove noise, or preserve important decisions.'],
+  ['Salvar contexto', 'Save context'],
+  ['Esses parâmetros valem só para este chat. Campos não compatíveis com o provider ficam ocultos para reduzir erro de API.', 'These parameters apply only to this chat. Fields unsupported by the provider are hidden to reduce API errors.'],
+  ['Nota do modelo', 'Model note'],
+  ['Temperatura:', 'Temperature:'],
+  ['aumenta ou reduz variação/criatividade. Valores baixos tendem a ser mais previsíveis.', 'increases or reduces variation/creativity. Lower values tend to be more predictable.'],
+  ['Top P:', 'Top P:'],
+  ['limita a amostragem por probabilidade acumulada. Use junto com temperatura só quando souber o motivo.', 'limits sampling by cumulative probability. Use it together with temperature only when you know why.'],
+  ['Máximo de tokens:', 'Max tokens:'],
+  ['teto da resposta do modelo. Alto demais pode custar mais ou falhar por limite do provider.', 'caps the model response. Too high can cost more or fail because of provider limits.'],
+  ['Stop:', 'Stop:'],
+  ['sequências que interrompem a geração quando aparecem.', 'sequences that stop generation when they appear.'],
+  ['Temperatura', 'Temperature'],
+  ['Máximo de tokens de saída', 'Max output tokens'],
+  ['Esforço de raciocínio', 'Reasoning effort'],
+  ['Padrão do provider', 'Provider default'],
+  ['Uma sequência por linha', 'One sequence per line'],
+  ['Limpar ajustes', 'Clear settings'],
+  ['Salvar', 'Save'],
+  ['Você editou as configurações gerais. Escolha o que fazer antes de fechar.', 'You edited general settings. Choose what to do before closing.'],
+  ['Continuar editando', 'Keep editing'],
+  ['Descartar', 'Discard'],
+  ['Salvar e fechar', 'Save and close'],
+  ['Configurações do chat pendentes', 'Pending chat settings'],
+  ['Este chat tem ajustes não salvos. Você pode salvar antes de enviar ou enviar com as configurações já salvas no servidor.', 'This chat has unsaved settings. You can save before sending, or send with the settings already saved on the server.'],
+  ['Enviar sem salvar', 'Send without saving'],
+  ['Salvar e enviar', 'Save and send'],
+  ['Arquivo de memória', 'Memory file'],
+  ['cópia salva no My Computer', 'copy saved in My Computer'],
+  ['Edite a cópia salva dentro do My Computer. O arquivo original enviado de fora não é alterado.', 'Edit the copy saved inside My Computer. The original file uploaded from outside is not changed.'],
+  ['Este arquivo está como somente leitura para edição manual.', 'This file is read-only for manual editing.'],
+  ['Salvar arquivo', 'Save file'],
+  ['Diff da memória', 'Memory diff'],
+  ['Ver arquivo', 'View file'],
+  ['Arquivo não encontrado no índice da seção ativa. O diff ainda mostra o trecho que a IA tentou substituir.', 'File not found in the active section index. The diff still shows the text the AI tried to replace.'],
+  ['Diff da alteração proposta', 'Proposed change diff'],
+  ['Importar backup', 'Import backup'],
+  ['Escolha o que importar. Chats com o mesmo id podem ser sobrescritos.', 'Choose what to import. Chats with the same id can be overwritten.'],
+  ['Configurações e providers', 'Settings and providers'],
+  ['Inclui provider padrão, API keys, tema, tools, contexto, rede e rotatórias.', 'Includes default provider, API keys, theme, tools, context, network, and routing.'],
+  ['Substitui a memória global compartilhada entre chats.', 'Replaces the global memory shared between chats.'],
+  ['Arquivos de memória persistente', 'Persistent memory files'],
+  ['Restaura os arquivos adicionais adicionados pelo usuário nesta seção.', 'Restores additional files added by the user in this section.'],
+  ['Chats e mensagens', 'Chats and messages'],
+  ['Importa metadados, histórico, memória e contexto dos chats.', 'Imports chat metadata, history, memory, and context.'],
+  ['Anexos', 'Attachments'],
+  ['Inclui arquivos salvos dentro dos chats importados.', 'Includes files saved inside imported chats.'],
+  ['Anexa eventos do backup ao log local para diagnóstico.', 'Appends backup events to the local diagnostic log.'],
+  ['Importar selecionados', 'Import selected'],
+  ['Nenhum modelo alternativo em', 'No alternate model in'],
+  ['Modelo alternativo em', 'Alternate model in'],
+  ['Selecione um modelo alternativo', 'Select an alternate model'],
+  ['Remover', 'Remove'],
+  ['Produção', 'Production'],
+  ['Raciocínio', 'Reasoning'],
+  ['Imagem', 'Image'],
+  ['Padrão', 'Default'],
+  ['visão', 'vision'],
+  ['texto', 'text'],
+  ['raciocínio', 'reasoning'],
+  ['instalado', 'installed'],
+  ['índice', 'index'],
+  ['selecionável', 'selectable'],
+  ['saída', 'output'],
+  ['imagem(ns)', 'image(s)'],
+  ['Modelo personalizado ou ainda não instalado', 'Custom model or not installed yet'],
+  ['Erro na requisição', 'Request error'],
+  ['Compactação automática', 'Automatic compaction'],
+  ['Contexto compactado atualizado.', 'Compacted context updated.'],
+  ['Editar contexto', 'Edit context'],
+  ['Histórico da execução', 'Execution history'],
+  ['Saída intermediária da IA', 'Intermediate AI output'],
+  ['Tool solicitada:', 'Requested tool:'],
+  ['Comando', 'Command'],
+  ['Input', 'Input'],
+  ['Output', 'Output'],
+  ['Resultado', 'Result'],
+  ['Fontes encontradas', 'Sources found'],
+  ['Detalhes da execução', 'Execution details'],
+  ['Tentativas', 'Attempts'],
+  ['Prompt original', 'Original prompt'],
+  ['Histórico desta tentativa', 'This attempt history'],
+  ['Saída selecionada', 'Selected output'],
+  ['Eventos relacionados', 'Related events'],
+  ['Copiar eventos relacionados', 'Copy related events'],
+  ['Os eventos abaixo pertencem a esta tentativa e ao prompt que a originou.', 'The events below belong to this attempt and to the prompt that created it.'],
+  ['Desinstalar o Ollama do sistema? Pode pedir sudo e falhar pelo navegador se precisar de senha.', 'Uninstall Ollama from the system? It may ask for sudo and fail in the browser if a password is required.'],
+  ['Trocar de seção e descartar alterações não salvas?', 'Switch section and discard unsaved changes?'],
+  ['Nome da nova seção/usuário:', 'New section/user name:'],
+  ['Nova seção', 'New section'],
+  ['Novo nome da seção:', 'New section name:'],
+  ['Descartar alterações não salvas neste arquivo de memória?', 'Discard unsaved changes in this memory file?'],
+  ['Para confirmar, digite exatamente: APAGAR TODOS OS CHATS', 'To confirm, type exactly: APAGAR TODOS OS CHATS'],
+  ['Atualizar o My Computer agora? O servidor vai rodar git pull, npm install e reiniciar.', 'Update My Computer now? The server will run git pull, npm install, and restart.'],
+  ['Encerrar o servidor local do My Computer? Para iniciar depois, rode ./install.sh ou npm run start:open.', 'Shut down the local My Computer server? To start later, run ./install.sh or npm run start:open.'],
+  ['Obrigatória para abrir na rede', 'Required to open on the network'],
+  ['Como a IA deve chamar você', 'How the AI should call you'],
+  ['Preferências gerais de tom, formato, limites e jeito de trabalhar.', 'General preferences for tone, format, limits, and working style.'],
+  ['provider/model ou nome local', 'provider/model or local name'],
+  ['https://api.exemplo.com/v1', 'https://api.example.com/v1'],
+  ['arquivo', 'file'],
+  ['documento', 'document'],
+  ['editável', 'editable'],
+  ['somente leitura', 'read-only'],
+  ['Primeiro, escolha a IA principal e como o app deve se conectar a ela.', 'First, choose the main AI and how the app should connect to it.'],
+  ['Provider padrão', 'Default provider'],
+  ['Ative somente se o endpoint aceitar imagens. O app bloqueia imagem quando isso estiver desligado.', 'Enable only if the endpoint accepts images. The app blocks images when this is off.'],
+  ['Quando ligado, adiciona uma instrução ao prompt para calibrar autonomia, explicações e cautela.', 'When enabled, adds a prompt instruction to calibrate autonomy, explanations, and caution.'],
+  ['Cada provider guarda endpoint e keys próprias. Rotação entre keys já acontece por provider; a rotação abaixo troca também de provider/modelo quando uma chamada falha.', 'Each provider stores its own endpoint and keys. Key rotation already happens per provider; the routing below also switches provider/model when a call fails.'],
+  ['Ollama local normalmente não usa API key. O endpoint padrão é http://127.0.0.1:11434/v1.', 'Local Ollama usually does not use an API key. The default endpoint is http://127.0.0.1:11434/v1.'],
+  ['Modo offline ativo', 'Offline mode active'],
+  ['Rotatórias de modelo/provider ficam desligadas nesta seção para evitar fallback em serviços online.', 'Model/provider routing stays disabled in this section to avoid fallback to online services.'],
+  ['Antes de trocar API key, tenta outros modelos do mesmo provider. Útil quando um modelo específico cai em rate limit ou falha no meio das tools.', 'Before switching API keys, tries other models from the same provider. Useful when a specific model hits a rate limit or fails during tools.'],
+  ['Se o provider/modelo atual falhar, tenta os fallbacks abaixo em ordem e registra tudo nos eventos do chat.', 'If the current provider/model fails, tries the fallbacks below in order and records everything in chat events.'],
+  ['Use este provider para Minimax, Together, Fireworks, servidores próprios ou qualquer API que aceite o formato /v1/chat/completions.', 'Use this provider for Minimax, Together, Fireworks, self-hosted servers, or any API that accepts the /v1/chat/completions format.'],
+  ['Revisado para o fim de maio de 2026. Modelos marcados como índice são informativos ou dependem de outra API, enquanto os selecionáveis entram nas rotatórias e no seletor do chat.', 'Reviewed for late May 2026. Models marked as index are informational or depend on another API, while selectable models appear in routing and chat selectors.'],
+  ['O Markdown global entra no prompt de todos os chats desta seção. Arquivos adicionais podem entrar completos ou apenas como índice para leitura por tool.', 'The global Markdown is added to every chat prompt in this section. Additional files can be sent in full or only as an index for tool-based reading.'],
+  ['Esses arquivos são memória persistente adicionada por você. O app pode só mostrar o índice no prompt, ou enviar o conteúdo completo quando você ligar essa opção.', 'These files are persistent memory added by you. The app can show only the index in the prompt, or send the full content when you enable that option.'],
+  ['Habilita a tool', 'Enables the tool'],
+  ['. Sem isso, a IA só usa o que já foi injetado no prompt e não consegue abrir arquivos por conta própria.', '. Without it, the AI only uses what was injected into the prompt and cannot open files by itself.'],
+  ['Enviar os arquivos adicionados por você a todo prompt', 'Send the files you added with every prompt'],
+  ['Quando desligado, a IA recebe só o índice. Se a leitura acima estiver ligada, ela usa', 'When off, the AI receives only the index. If reading above is enabled, it uses'],
+  ['para abrir apenas o que precisar.', 'to open only what it needs.'],
+  ['. Ela substitui um trecho exato em arquivos de texto/Markdown e pede aprovação quando tools automáticas estão desligadas.', '. It replaces an exact snippet in text/Markdown files and asks for approval when automatic tools are off.'],
+  ['Só funciona quando a edição está ligada. Injeta uma instrução para atualizar arquivos editáveis conforme os chats avançam.', 'Only works when editing is enabled. Injects an instruction to update editable files as chats progress.'],
+  ['Leitura/listagem desligada: edição também fica indisponível, porque a IA não tem como localizar arquivos nem confirmar trechos atuais.', 'Reading/listing is off: editing is also unavailable because the AI cannot locate files or confirm current snippets.'],
+  ['Quando desligado, tools locais aparecem uma por vez para você permitir ou negar antes de executar.', 'When off, local tools appear one at a time for you to allow or deny before execution.'],
+  ['Modo offline: busca nativa e modo Ambos ficam indisponíveis. Se habilitar pesquisa, use terminal com consulta neutra e sem dados privados.', 'Offline mode: native search and Both mode are unavailable. If you enable search, use terminal with a neutral query and no private data.'],
+  ['Busca nativa roda no servidor do provider e não pede confirmação. No modo Ambos, o app cai no terminal se a busca nativa falhar ou vier vazia. Busca via terminal usa a tool local e segue permissão.', 'Native search runs on the provider server and does not ask for confirmation. In Both mode, the app falls back to terminal if native search fails or returns empty. Terminal search uses the local tool and follows permissions.'],
+  ['Permite que a IA execute comandos no terminal por run_terminal_command.', 'Allows the AI to run terminal commands through run_terminal_command.'],
+  ['Quando ligado, injeta instruções para usar mais rodadas de tools, seguir referências e olhar outputs antes da resposta final.', 'When enabled, injects instructions to use more tool rounds, follow references, and inspect outputs before the final answer.'],
+  ['Permite que a IA edite o memory.md do chat atual por memory_chat.', 'Allows the AI to edit the current chat memory.md through memory_chat.'],
+  ['Permite que a IA edite a memória global por persistent_memory.', 'Allows the AI to edit global memory through persistent_memory.'],
+  ['Documentos anexados ao chat', 'Chat attachments as documents'],
+  ['Permite que a IA liste, leia e edite anexos de texto do chat por chat_document. Edições alteram apenas a cópia salva no My Computer.', 'Allows the AI to list, read, and edit text attachments in the chat through chat_document. Edits change only the copy saved in My Computer.'],
+  ['Tool de compactar contexto', 'Context compaction tool'],
+  ['Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.', 'Allows the AI to call compact_context when the context is large or decisions need to be preserved.'],
+  ['O app executa comandos como seu usuário. Para permitir sudo sem digitar senha no navegador, configure uma regra NOPASSWD limitada aos comandos que você aceita delegar.', 'The app runs commands as your OS user. To allow sudo without typing a password in the browser, configure a NOPASSWD rule limited to commands you accept delegating.'],
+  ['O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.', 'The isolated method is lightweight containment by directory and HOME, not a VM/container. Commands can still access absolute paths if instructed to do so.'],
+  ['Depois de uma resposta, o app compacta o chat quando o contexto estimado passar do limite configurado.', 'After a response, the app compacts the chat when estimated context exceeds the configured limit.'],
+  ['Janela interna do modelo:', 'Model internal window:'],
+  ['limite real do modelo/provider em uso. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.', 'the real limit of the model/provider in use. The app still estimates by characters, so a smaller model can reject calls if the prompt gets too large.'],
+  ['Salvar snapshot:', 'Save snapshot:'],
+  ['salva uma fotografia Markdown do estado atual em context-snapshots e atualiza context-window.md. Não muda o prompt futuro por si só.', 'saves a Markdown snapshot of the current state in context-snapshots and updates context-window.md. It does not change future prompts by itself.'],
+  ['Compactar contexto:', 'Compact context:'],
+  ['pede ao modelo para resumir histórico, memória e decisões em context.md. Esse arquivo entra no prompt das próximas mensagens.', 'asks the model to summarize history, memory, and decisions into context.md. That file is added to future prompts.'],
+  ['compact_context:', 'compact_context:'],
+  ['tool opcional para a própria IA atualizar context.md quando perceber que a conversa está longa.', 'optional tool for the AI itself to update context.md when it notices the conversation is long.'],
+  ['Por padrão o My Computer escuta só em 127.0.0.1. Ao abrir para a rede, o próximo restart passa a escutar em 0.0.0.0 e o navegador pede Basic Auth. Essa senha de rede é única; seções/usuários internos isolam dados do app, mas não criam contas de login separadas.', 'By default My Computer listens only on 127.0.0.1. When opened to the network, the next restart listens on 0.0.0.0 and the browser asks for Basic Auth. This network password is shared; internal sections/users isolate app data, but do not create separate login accounts.'],
+  ['Endereços de acesso', 'Access addresses'],
+  ['Na máquina:', 'On this machine:'],
+  ['Na rede:', 'On the network:'],
+  ['Rede local desligada. Ligue e reinicie para acessar por outro dispositivo.', 'Local network is off. Enable it and restart to access from another device.'],
+  ['Permite acessar pelo IP local da máquina. Para acesso fora da rede, precisaremos projetar HTTPS, usuários e permissões com mais calma.', 'Allows access through the machine local IP. For access outside the local network, HTTPS, users, and permissions need a more careful design.'],
+  ['Obrigatória para rede local', 'Required for local network'],
+  ['Obrigatória para habilitar rede local. A mudança vale no próximo restart.', 'Required to enable local network. The change applies on next restart.'],
+  ['Atualiza direto do repositório Git configurado nesta pasta: faz', 'Updates directly from the Git repository configured in this folder: runs'],
+  [', compara com o upstream e, se você confirmar, roda', ', compares with upstream, and if you confirm, runs'],
+  ['. O servidor reinicia depois da atualização.', '. The server restarts after the update.'],
+  ['Exporta ou importa configurações, chats, memórias, arquivos adicionais, anexos e contexto salvo da seção atual.', 'Exports or imports settings, chats, memories, additional files, attachments, and saved context from the current section.'],
+  ['Apaga todos os chats, mensagens, anexos e memórias de chat da seção atual. Configurações, memória persistente global e arquivos adicionais de memória ficam preservados.', 'Deletes all chats, messages, attachments, and chat memories from the current section. Settings, global persistent memory, and additional memory files are preserved.'],
+  ['Encerrar para o processo do My Computer. Para iniciar de novo, rode', 'Stops the My Computer process. To start again, run'],
+  ['ou', 'or'],
+  ['nesta pasta.', 'in this folder.'],
+  ['Ativar', 'Activate'],
+  ['Renomear', 'Rename'],
+  ['saída(s)', 'output(s)'],
+  ['A IA quer usar uma tool', 'The AI wants to use a tool'],
+  ['Tool aprovada em execução', 'Approved tool running'],
+  ['Confira o resumo abaixo. O input completo e o histórico ficam em Ver detalhes.', 'Review the summary below. Full input and history are in View details.'],
+  ['O app está aguardando o resultado. Use verificar se a execução ficou presa.', 'The app is waiting for the result. Use check execution if it got stuck.'],
+  ['Think do modelo', 'Model thinking'],
+  ['Think desta saída', 'This output thinking'],
+  ['Resposta final do modelo', 'Final model response'],
+  ['Linha do tempo da tentativa', 'Attempt timeline'],
+  ['Copiar relacionados', 'Copy related'],
+  ['Nenhum evento relacionado encontrado ainda.', 'No related events found yet.'],
+  ['Aguardando decisão da tool anterior.', 'Waiting for the previous tool decision.'],
+  ['Tool usada:', 'Tool used:'],
+  ['Ver input completo', 'View full input'],
+  ['Memória atualizada:', 'Memory updated:'],
+  ['arquivo', 'file'],
+  ['Ver diff', 'View diff'],
+  ['Arquivo de memória atualizado', 'Memory file updated'],
+  ['Alteração de memória proposta', 'Proposed memory change'],
+  ['Arquivo de memória consultado', 'Memory file read'],
+  ['Veja o diff antes/depois da substituição exata.', 'View the before/after diff for the exact replacement.'],
+  ['Abra a cópia atual salva dentro do My Computer.', 'Open the current copy saved inside My Computer.'],
+  ['Arquivo não encontrado no índice da seção ativa. Ele pode ter sido removido, estar em outra seção ou ter sido informado incorretamente pela IA.', 'File not found in the active section index. It may have been removed, be in another section, or have been incorrectly provided by the AI.'],
+  ['Trecho', 'Chunk'],
+  ['Resultado truncado; a IA deve continuar com offset', 'Result truncated; the AI should continue with offset'],
+  ['Arquivo lido até o fim.', 'File read to the end.'],
+  ['caractere(s).', 'character(s).'],
+  ['Visualizar', 'Preview'],
+  ['Colar texto', 'Paste text'],
+  ['O histórico completo fica em Ver detalhes quando a resposta terminar.', 'The full history is available in View details when the response finishes.'],
+  ['Atividade de tool', 'Tool activity'],
+  ['Contexto sendo organizado', 'Context being organized'],
+  ['Atividade', 'Activity'],
+  ['Nenhuma checagem feita nesta sessão.', 'No checks made in this session.'],
+  ['Commits disponíveis', 'Available commits'],
+  ['Mudanças locais que bloqueiam update', 'Local changes blocking update'],
+  ['Status de atualização', 'Update status'],
+  ['Atrás:', 'Behind:'],
+  ['À frente:', 'Ahead:'],
+  ['Local sujo:', 'Dirty local:'],
+  ['sim', 'yes'],
+  ['não', 'no'],
+  ['não configurado', 'not configured'],
+  ['tentativa', 'attempt'],
+  ['modelo', 'model'],
+  ['volta', 'pass'],
+  ['modelo(s)', 'model(s)'],
+  ['rotatória de modelos ligada', 'model rotation enabled'],
+  ['rotatória de providers ligada', 'provider rotation enabled'],
+  ['stdout disponível', 'stdout available'],
+  ['stderr disponível', 'stderr available'],
+  ['Instale pelo terminal usando o comando oficial abaixo e depois clique em verificar. Se o comando pedir sudo/senha, rode no terminal; o navegador não consegue digitar essa senha por você. O painel baixa/remove modelos quando detectar o Ollama instalado.', 'Install from the terminal using the official command below, then click check. If the command asks for sudo/password, run it in the terminal; the browser cannot type that password for you. The panel downloads/removes models when it detects Ollama installed.'],
+  ['Verificar Ollama', 'Check Ollama'],
+  ['Modelo instalado', 'Model installed'],
+  ['Baixar modelo selecionado', 'Pull selected model'],
+  ['Nenhum modelo local encontrado ainda.', 'No local model found yet.'],
+  ['Quando a verificação encontrar o Ollama, esta área mostra botões para baixar o modelo escolhido e remover modelos locais.', 'When the check finds Ollama, this area shows buttons to pull the chosen model and remove local models.'],
+  ['Sem texto extraído para visualizar.', 'No extracted text to preview.'],
+  ['Carregando conteúdo do arquivo...', 'Loading file content...'],
+  ['Abrir/editar', 'Open/edit'],
+  ['Diff do documento', 'Document diff'],
+  ['Documento do chat', 'Chat document'],
+  ['Documento do chat atualizado', 'Chat document updated'],
+  ['Documento do chat consultado', 'Chat document read'],
+  ['Documentos do chat listados', 'Chat documents listed'],
+  ['Documento não encontrado no chat atual. O diff ainda mostra o trecho que a IA tentou alterar.', 'Document not found in the current chat. The diff still shows the snippet the AI tried to change.'],
+  ['Veja o diff ou abra a cópia salva neste chat.', 'Review the diff or open the copy saved in this chat.'],
+  ['Lista arquivos texto anexados ao chat atual.', 'Lists text files attached to the current chat.'],
+  ['Edite a cópia salva dentro deste chat. O arquivo original enviado de fora não é alterado.', 'Edit the copy saved inside this chat. The original file sent from outside is not changed.'],
+  ['Salvar documento', 'Save document'],
+  ['Esta imagem excede o limite informado do modelo', 'This image exceeds the model reported limit'],
+  ['Será enviado ao modelo como imagem multimodal', 'Will be sent to the model as a multimodal image'],
+  ['Este modelo não está marcado como vision. Troque de modelo ou ative suporte para modelos personalizados.', 'This model is not marked as vision-capable. Switch models or enable support for custom models.'],
+  ['Texto extraído será enviado em uma seção de documentos, com truncamento.', 'Extracted text will be sent in a documents section, with truncation.'],
+  ['Texto extraído será enviado em uma seção de documentos.', 'Extracted text will be sent in a documents section.'],
+  ['Vídeo fica salvo no chat e é enviado como referência/caminho. Gemini pode aceitar vídeo por Files API, mas esse adapter nativo ainda não está implementado no MVP.', 'Video stays saved in the chat and is sent as a reference/path. Gemini may accept video through Files API, but this native adapter is not implemented in the MVP yet.'],
+  ['Arquivo salvo no chat. A IA verá caminho e metadados; para ler o conteúdo, pode usar o terminal.', 'File saved in the chat. The AI will see path and metadata; to read content, it can use the terminal.'],
 ]);
 
 const app = document.querySelector('#app');
@@ -365,6 +620,79 @@ function translateDynamicUiValue(value) {
     [/^Salvando configurações gerais\.\.\.$/, 'Saving general settings...'],
     [/^Salvando configuração\.\.\.$/, 'Saving configuration...'],
     [/^Abrindo painel\.\.\.$/, 'Opening panel...'],
+    [/^Verificando Ollama\.\.\.$/, 'Checking Ollama...'],
+    [/^Instalando Ollama\.\.\.$/, 'Installing Ollama...'],
+    [/^Desinstalando Ollama\.\.\.$/, 'Uninstalling Ollama...'],
+    [/^Trocando seção\.\.\.$/, 'Switching section...'],
+    [/^Criando seção\.\.\.$/, 'Creating section...'],
+    [/^Renomeando seção\.\.\.$/, 'Renaming section...'],
+    [/^Apagando seção\.\.\.$/, 'Deleting section...'],
+    [/^Removendo arquivo de memória\.\.\.$/, 'Removing memory file...'],
+    [/^Carregando arquivo de memória\.\.\.$/, 'Loading memory file...'],
+    [/^Salvando arquivo de memória\.\.\.$/, 'Saving memory file...'],
+    [/^Salvando documento\.\.\.$/, 'Saving document...'],
+    [/^Criando chat\.\.\.$/, 'Creating chat...'],
+    [/^Abrindo chat\.\.\.$/, 'Opening chat...'],
+    [/^Atualizando chat\.\.\.$/, 'Updating chat...'],
+    [/^Apagando chat\.\.\.$/, 'Deleting chat...'],
+    [/^Salvando memória\.\.\.$/, 'Saving memory...'],
+    [/^Salvando prompt e memória\.\.\.$/, 'Saving prompt and memory...'],
+    [/^Salvando parâmetros do modelo\.\.\.$/, 'Saving model parameters...'],
+    [/^Salvando configurações do chat\.\.\.$/, 'Saving chat settings...'],
+    [/^Exportando dados\.\.\.$/, 'Exporting data...'],
+    [/^Verificando atualização\.\.\.$/, 'Checking update...'],
+    [/^Resposta recebida\.$/, 'Response received.'],
+    [/^Mensagem copiada\.$/, 'Message copied.'],
+    [/^Eventos copiados\.$/, 'Events copied.'],
+    [/^Eventos relacionados copiados\.$/, 'Related events copied.'],
+    [/^Diff da edição de documento não encontrado\.$/, 'Document edit diff not found.'],
+    [/^Falha ao carregar documento\.$/, 'Failed to load document.'],
+    [/^Exclusão de todos os chats cancelada\.$/, 'Delete all chats canceled.'],
+    [/^A IA pediu aprovação de tool\.$/, 'The AI requested tool approval.'],
+    [/^A IA falhou antes de concluir\. Use Tentar novamente ou Continuar\.$/, 'The AI failed before finishing. Use Try again or Continue.'],
+    [/^A IA parou antes do final\. Use Continuar para retomar\.$/, 'The AI stopped before the end. Use Continue to resume.'],
+    [/^Interrompendo agente\.\.\.$/, 'Stopping agent...'],
+    [/^Execução interrompida\.$/, 'Execution stopped.'],
+    [/^Interrupção solicitada\. Salvando tentativa interrompida\.\.\.$/, 'Stop requested. Saving interrupted attempt...'],
+    [/^Nenhuma execução em andamento\.$/, 'No execution is running.'],
+    [/^A tool aprovada falhou antes de concluir\.$/, 'The approved tool failed before finishing.'],
+    [/^A tool aprovada parou antes do final\. Use Continuar\.$/, 'The approved tool stopped before the end. Use Continue.'],
+    [/^A tool aprovada foi concluída\.$/, 'The approved tool completed.'],
+    [/^A tool ainda está em execução\.$/, 'The tool is still running.'],
+    [/^My Computer está encerrando\. Para iniciar novamente, rode \.\/install\.sh\.$/, 'My Computer is shutting down. To start again, run ./install.sh.'],
+    [/^Seção ativa: (.+)$/, (_match, section) => `Active section: ${section}`],
+    [/^Seção criada: (.+)$/, (_match, section) => `Section created: ${section}`],
+    [/^Arquivo "(.+)" salvo\.$/, (_match, file) => `File "${file}" saved.`],
+    [/^Documento "(.+)" salvo\.$/, (_match, file) => `Document "${file}" saved.`],
+    [/^Documento atualizado: (.+)$/, (_match, file) => `Document updated: ${file}`],
+    [/^(.+) · ([^·]+) · ([^·]+) · cópia salva no My Computer$/, (_match, size, mimeType, kind) => `${size} · ${mimeType.trim()} · ${uiText(kind.trim())} · copy saved in My Computer`],
+    [/^(\d+) chat\(s\) excluído\(s\)\.$/, (_match, count) => `${count} chat(s) deleted.`],
+    [/^Snapshot salvo em (.+)$/, (_match, filePath) => `Snapshot saved at ${filePath}`],
+    [/^Enviando para (.+)\.\.\.$/, (_match, provider) => `Sending to ${provider}...`],
+    [/^Baixando (.+) no Ollama\.\.\.$/, (_match, model) => `Pulling ${model} in Ollama...`],
+    [/^Adicionando (.+) à memória\.\.\.$/, (_match, file) => `Adding ${file} to memory...`],
+    [/^Formato ainda não compatível: (.+)\. Envie imagens, vídeo, áudio, PDF, texto, código, JSON, CSV, HTML, XML, YAML ou Markdown\.$/, (_match, file) => `Unsupported format for now: ${file}. Send images, video, audio, PDF, text, code, JSON, CSV, HTML, XML, YAML, or Markdown.`],
+    [/^O modelo atual não aceita imagens: (.+)\. Troque para um modelo vision ou marque o modelo personalizado como compatível\.$/, (_match, file) => `The current model does not accept images: ${file}. Switch to a vision model or mark the custom model as compatible.`],
+    [/^O modelo atual aceita até (.+) imagem\(ns\) por mensagem\.$/, (_match, count) => `The current model accepts up to ${count} image(s) per message.`],
+    [/^(.+) excede o limite de (.+) MB deste modelo\.$/, (_match, file, mb) => `${file} exceeds this model's ${mb} MB limit.`],
+    [/^Remover o modelo Ollama "(.+)" da máquina\?$/, (_match, model) => `Remove Ollama model "${model}" from this machine?`],
+    [/^Apagar a seção "(.+)" e todos os seus chats, configurações e memórias\?$/, (_match, section) => `Delete section "${section}" and all its chats, settings, and memories?`],
+    [/^Remover "(.+)" dos arquivos de memória persistente\?$/, (_match, file) => `Remove "${file}" from persistent memory files?`],
+    [/^Descartar alterações não salvas neste documento\?$/, 'Discard unsaved changes in this document?'],
+    [/^Apagar o chat "(.+)"\?$/, (_match, title) => `Delete chat "${displayChatTitle(title)}"?`],
+    [/^Excluir todos os (\d+) chat\(s\) desta seção\? Isso apaga mensagens, anexos, memória e contexto dos chats\. Faça um backup antes se quiser preservar algo\.$/, (_match, count) => `Delete all ${count} chat(s) in this section? This deletes chat messages, attachments, memory, and context. Make a backup first if you want to preserve anything.`],
+    [/^(\d+) saída\(s\) · (\d+) tool\(s\)$/, (_match, outputs, tools) => `${outputs} output(s) · ${tools} tool(s)`],
+    [/^(\d+) tool\(s\) · (\d+) saída\(s\) da IA$/, (_match, tools, outputs) => `${tools} tool(s) · ${outputs} AI output(s)`],
+    [/^Trecho (\d+)-(\d+) de (\d+) caractere\(s\)\. Resultado truncado; a IA deve continuar com offset (\d+)\.$/, (_match, start, end, total, offset) => `Chunk ${start}-${end} of ${total} character(s). Result truncated; the AI should continue with offset ${offset}.`],
+    [/^Trecho (\d+)-(\d+) de (\d+) caractere\(s\)\. Arquivo lido até o fim\.$/, (_match, start, end, total) => `Chunk ${start}-${end} of ${total} character(s). File read to the end.`],
+    [/^Trecho a partir de (\d+)\. Resultado truncado; a IA deve continuar com offset (\d+)\.$/, (_match, start, offset) => `Chunk starting at ${start}. Result truncated; the AI should continue with offset ${offset}.`],
+    [/^Trecho a partir de (\d+)\. Arquivo lido até o fim\.$/, (_match, start) => `Chunk starting at ${start}. File read to the end.`],
+    [/^Esta imagem excede o limite informado do modelo \((.+) MB\)\.$/, (_match, mb) => `This image exceeds the model reported limit (${mb} MB).`],
+    [/^Será enviado ao modelo como imagem multimodal(?: \((.+)\))?\.$/, (_match, limits) => `Will be sent to the model as a multimodal image${limits ? ` (${uiText(limits)})` : ''}.`],
+    [/^até (.+) imagem\(ns\)$/, (_match, count) => `up to ${count} image(s)`],
+    [/^Branch: (.+) · Upstream: (.+)$/, (_match, branch, upstream) => `Branch: ${branch} · Upstream: ${upstream}`],
+    [/^Atrás: (.+) · À frente: (.+) · Local sujo: (sim|não)$/, (_match, behind, ahead, dirty) => `Behind: ${behind} · Ahead: ${ahead} · Dirty local: ${dirty === 'sim' ? 'yes' : 'no'}`],
+    [/^Remote: não configurado$/, 'Remote: not configured'],
   ];
   for (const [pattern, replacement] of replacements) {
     const match = value.match(pattern);
@@ -372,6 +700,40 @@ function translateDynamicUiValue(value) {
     return typeof replacement === 'function' ? replacement(...match) : replacement;
   }
   return '';
+}
+
+function uiText(value) {
+  const text = String(value || '');
+  return getUiLanguage() === 'en-US' ? translateUiValue(text) : text;
+}
+
+function displayChatTitle(title = '') {
+  const clean = String(title || '').trim();
+  if (!isGenericChatTitle(clean)) return clean;
+  return getUiLanguage() === 'pt-BR' ? 'Novo chat' : 'New chat';
+}
+
+function isGenericChatTitle(title = '') {
+  return ['Novo chat', 'New chat'].includes(String(title || '').trim());
+}
+
+function confirmUi(message) {
+  return window.confirm(uiText(message));
+}
+
+function promptUi(message, defaultValue = '') {
+  return window.prompt(uiText(message), isGenericChatTitle(defaultValue) ? displayChatTitle(defaultValue) : defaultValue);
+}
+
+function displayModelKind(kind = '') {
+  const text = String(kind || '');
+  if (getUiLanguage() !== 'en-US') return text;
+  return {
+    Produção: 'Production',
+    Raciocínio: 'Reasoning',
+    Imagem: 'Image',
+    Padrão: 'Default',
+  }[text] || text;
 }
 
 function renderSetup() {
@@ -735,7 +1097,7 @@ function renderApp() {
       <main class="chat-main">
         <header class="chat-header">
           <div>
-            <h2 class="chat-title">${escapeHtml(chat?.title || 'Chat')}</h2>
+            <h2 class="chat-title">${escapeHtml(displayChatTitle(chat?.title || 'Chat'))}</h2>
             <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(providerLabel(chatProviderId))} - ${escapeHtml(chatModel)}` : 'Sem chat ativo'}</div>
           </div>
           <div class="chat-header-actions">
@@ -776,7 +1138,7 @@ function renderApp() {
           <div class="settings-block">
             <label>
               Nome do chat
-              <input id="chat-title-input" value="${escapeAttr(chat?.title || '')}" ${!chat ? 'disabled' : ''} />
+              <input id="chat-title-input" value="${escapeAttr(displayChatTitle(chat?.title || ''))}" ${!chat ? 'disabled' : ''} />
             </label>
             <label>
               Provider deste chat
@@ -836,6 +1198,7 @@ function renderApp() {
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
     ${state.messageDetailsOpen ? renderMessageDetailsModal() : ''}
     ${state.attachmentViewer ? renderAttachmentViewerModal() : ''}
+    ${state.attachmentDiff ? renderAttachmentDiffModal() : ''}
     ${state.userMemoryDiff ? renderUserMemoryDiffModal() : ''}
     ${state.userMemoryViewer ? renderUserMemoryViewerModal() : ''}
     ${state.importModalOpen ? renderImportModal() : ''}
@@ -1126,6 +1489,7 @@ function renderSettingsModal() {
                 ${renderToolToggle('deepInvestigation', 'Incentivar a IA a fazer investigações mais profundas', 'Quando ligado, injeta instruções para usar mais rodadas de tools, seguir referências e olhar outputs antes da resposta final.')}
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
+                ${renderToolToggle('chatDocuments', 'Documentos anexados ao chat', 'Permite que a IA liste, leia e edite anexos de texto do chat por chat_document. Edições alteram apenas a cópia salva no My Computer.')}
                 ${renderToolToggle('autoCompact', 'Tool de compactar contexto', 'Permite que a IA chame compact_context quando o contexto estiver grande ou precisar preservar decisões.')}
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
               </div>
@@ -1577,13 +1941,13 @@ function renderModelIndex(config = {}) {
 
 function renderModelIndexCard(provider, model, config = {}) {
   const chips = [
-    model.selectable === false ? 'índice' : 'selecionável',
-    model.kind,
+    model.selectable === false ? uiText('índice') : uiText('selecionável'),
+    displayModelKind(model.kind),
     model.contextTokens ? `${formatCompactNumber(model.contextTokens)} ctx` : '',
-    model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} saída` : '',
-    model.supportsImages ? 'visão' : 'texto',
-    model.supportsReasoning ? 'raciocínio' : '',
-    provider.id === 'ollama' && model.installed ? 'instalado' : '',
+    model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} ${uiText('saída')}` : '',
+    model.supportsImages ? uiText('visão') : uiText('texto'),
+    model.supportsReasoning ? uiText('raciocínio') : '',
+    provider.id === 'ollama' && model.installed ? uiText('instalado') : '',
   ].filter(Boolean);
   return `
     <article class="model-index-card">
@@ -1592,8 +1956,8 @@ function renderModelIndexCard(provider, model, config = {}) {
         <code>${escapeHtml(model.id)}</code>
       </div>
       <div class="model-chip-row">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join('')}</div>
-      ${model.reasoningEfforts?.length ? `<p>Raciocínio: ${escapeHtml(model.reasoningEfforts.join(', '))}</p>` : ''}
-      ${model.maxInputImages || model.maxFileSizeMB ? `<p>Imagem: ${escapeHtml([model.maxInputImages ? `${model.maxInputImages} imagem(ns)` : '', model.maxFileSizeMB ? `${model.maxFileSizeMB} MB` : ''].filter(Boolean).join(', '))}</p>` : ''}
+      ${model.reasoningEfforts?.length ? `<p>${escapeHtml(uiText('Raciocínio'))}: ${escapeHtml(model.reasoningEfforts.join(', '))}</p>` : ''}
+      ${model.maxInputImages || model.maxFileSizeMB ? `<p>${escapeHtml(uiText('Imagem'))}: ${escapeHtml([model.maxInputImages ? `${model.maxInputImages} ${uiText('imagem(ns)')}` : '', model.maxFileSizeMB ? `${model.maxFileSizeMB} MB` : ''].filter(Boolean).join(', '))}</p>` : ''}
       ${model.description ? `<p>${escapeHtml(model.description)}</p>` : ''}
       ${model.apiNotes ? `<p><strong>API:</strong> ${escapeHtml(model.apiNotes)}</p>` : ''}
     </article>
@@ -1657,7 +2021,7 @@ function renderChatSettingsModal() {
               <div class="settings-block">
                 <label>
                   Nome do chat
-                  <input id="mobile-chat-title-input" value="${escapeAttr(chat?.title || '')}" ${!chat ? 'disabled' : ''} />
+                  <input id="mobile-chat-title-input" value="${escapeAttr(displayChatTitle(chat?.title || ''))}" ${!chat ? 'disabled' : ''} />
                 </label>
                 <label>
                   Provider deste chat
@@ -1897,8 +2261,14 @@ function renderAttachmentViewerModal() {
   const chatId = state.activeChat?.id || '';
   if (!attachment || !chatId) return '';
   const contentUrl = withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`);
+  const editable = isEditableAttachment(attachment);
   let preview = '';
-  if (attachment.kind === 'image') {
+  if (editable) {
+    const text = attachment.viewerLoading
+      ? uiText('Carregando conteúdo do arquivo...')
+      : attachment.content ?? attachment.extractedText ?? attachment.previewText ?? '';
+    preview = `<textarea id="attachment-viewer-input" class="viewer-text user-memory-viewer-text" ${attachment.viewerLoading || state.busy ? 'disabled' : ''}>${escapeHtml(text)}</textarea>`;
+  } else if (attachment.kind === 'image') {
     preview = `<img class="viewer-media" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`;
   } else if (attachment.kind === 'video') {
     preview = `<video class="viewer-media" src="${escapeAttr(contentUrl)}" controls></video>`;
@@ -1912,16 +2282,59 @@ function renderAttachmentViewerModal() {
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal attachment-viewer-modal" role="dialog" aria-modal="true" aria-labelledby="attachment-viewer-title">
+        ${editable ? '<form id="attachment-viewer-form">' : ''}
         <header class="modal-header">
           <div>
             <h2 id="attachment-viewer-title">${escapeHtml(attachment.name)}</h2>
-            <p>${escapeHtml(formatBytes(attachment.size))} · ${escapeHtml(attachment.mimeType || 'arquivo')} · ${escapeHtml(attachment.kind || 'documento')}</p>
+            <p>${escapeHtml(formatBytes(attachment.size))} · ${escapeHtml(attachment.mimeType || 'arquivo')} · ${escapeHtml(attachment.kind || 'documento')} · cópia salva no My Computer</p>
           </div>
           <button type="button" id="close-attachment-viewer" aria-label="Fechar">×</button>
         </header>
         <div class="modal-body viewer-body">
           ${preview}
-          <p class="help-text">${escapeHtml(getAttachmentWarning(attachment).text)}</p>
+          <p class="help-text">${escapeHtml(
+            editable
+              ? 'Edite a cópia salva dentro deste chat. O arquivo original enviado de fora não é alterado.'
+              : getAttachmentWarning(attachment).text,
+          )}</p>
+        </div>
+        ${
+          editable
+            ? `<footer class="modal-footer">
+                <button type="button" id="cancel-attachment-viewer">Cancelar</button>
+                <button type="submit" class="primary" ${attachment.viewerLoading || state.busy ? 'disabled' : ''}>Salvar arquivo</button>
+              </footer>`
+            : ''
+        }
+        ${editable ? '</form>' : ''}
+      </section>
+    </div>
+  `;
+}
+
+function renderAttachmentDiffModal() {
+  const diff = state.attachmentDiff;
+  if (!diff) return '';
+  const lines = buildLineDiff(diff.oldText || '', diff.newText || '');
+  const knownAttachment = resolveAttachment(diff.attachmentId || diff.fileName);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wide-modal attachment-diff-modal" role="dialog" aria-modal="true" aria-labelledby="attachment-diff-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="attachment-diff-title">Diff do documento</h2>
+            <p>${escapeHtml(diff.fileName || diff.attachmentId || 'Documento do chat')} ${diff.reason ? `· ${escapeHtml(diff.reason)}` : ''}</p>
+          </div>
+          <div class="modal-header-actions">
+            ${knownAttachment ? `<button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(knownAttachment.id)}">Ver arquivo</button>` : ''}
+            <button type="button" id="close-attachment-diff" aria-label="Fechar">×</button>
+          </div>
+        </header>
+        <div class="modal-body">
+          ${diff.attachmentId && !knownAttachment ? '<p class="help-text">Documento não encontrado no chat atual. O diff ainda mostra o trecho que a IA tentou alterar.</p>' : ''}
+          <div class="diff-viewer" role="table" aria-label="Diff da alteração proposta">
+            ${lines.map(renderDiffLine).join('')}
+          </div>
         </div>
       </section>
     </div>
@@ -2109,7 +2522,7 @@ function renderChatItem(chat) {
   const active = state.activeChat?.id === chat.id ? 'active' : '';
   return `
     <button class="chat-item ${active}" data-chat-id="${escapeAttr(chat.id)}">
-      <strong>${escapeHtml(chat.title)}</strong>
+      <strong>${escapeHtml(displayChatTitle(chat.title))}</strong>
       <span class="meta">${escapeHtml(providerLabel(chat.provider || state.config.provider))} · ${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
     </button>
   `;
@@ -2275,6 +2688,7 @@ function renderMessage(message) {
       <div class="bubble">${bubbleContent}</div>
       ${renderToolApprovalPanel(message)}
       ${renderUserMemoryChangeChips(message)}
+      ${renderDocumentChangeChips(message)}
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
       ${renderMessageActions(message)}
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
@@ -2535,6 +2949,7 @@ function renderToolUse(toolUse, message = null) {
       <div class="tool-body">
         ${approvalActions}
         ${renderUserMemoryToolCard(toolUse)}
+        ${renderChatDocumentToolCard(toolUse)}
         ${
           command
             ? `<div><div class="message-label">Comando</div><pre>${escapeHtml(command)}</pre></div>`
@@ -2573,6 +2988,11 @@ function formatToolInputSummary(toolUse = {}) {
   }
   if (toolUse.name === 'edit_persistent_memory_user') {
     if (input.fileId) parts.push(`arquivo: ${input.fileId}`);
+    if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
+  }
+  if (toolUse.name === 'chat_document') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.attachmentId || input.fileName) parts.push(`documento: ${input.attachmentId || input.fileName}`);
     if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
   }
   if (!parts.length) {
@@ -2725,6 +3145,110 @@ function getUserMemoryEditDiffData(toolUse = {}) {
   };
 }
 
+function renderDocumentChangeChips(message = {}) {
+  if (message.role !== 'assistant') return '';
+  const edits = (message.toolUses || []).filter((toolUse) => toolUse.name === 'chat_document' && ['replace', 'write'].includes(toolUse.result?.action));
+  if (!edits.length) return '';
+  return `
+    <div class="memory-change-chips">
+      ${edits
+        .slice(0, 3)
+        .map((toolUse) => {
+          const file = getChatDocumentToolFile(toolUse);
+          const knownAttachment = resolveAttachment(file.identifier);
+          return `
+            <div class="memory-change-chip">
+              <span>Documento atualizado: ${escapeHtml(file.label || 'arquivo')}</span>
+              <button type="button" class="open-attachment-diff" data-tool-use-id="${escapeAttr(toolUse.id)}">Ver diff</button>
+              ${knownAttachment ? `<button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(knownAttachment.id)}">Ver arquivo</button>` : ''}
+            </div>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function renderChatDocumentToolCard(toolUse = {}) {
+  if (toolUse.name !== 'chat_document') return '';
+  const action = toolUse.result?.action || toolUse.input?.action || '';
+  const file = getChatDocumentToolFile(toolUse);
+  const title =
+    action === 'replace' || action === 'write'
+      ? 'Documento do chat atualizado'
+      : action === 'read'
+        ? 'Documento do chat consultado'
+        : 'Documentos do chat listados';
+  const detail =
+    action === 'replace' || action === 'write'
+      ? 'Veja o diff ou abra a cópia salva neste chat.'
+      : getChatDocumentReadRangeLabel(toolUse) || 'Lista arquivos texto anexados ao chat atual.';
+  const buttons = renderChatDocumentToolButtons(toolUse);
+  if (!buttons && action !== 'read') return '';
+  return `
+    <div class="user-memory-tool-card">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(file.label || 'Documento do chat')} ${toolUse.input?.reason ? `· ${escapeHtml(toolUse.input.reason)}` : ''}</span>
+        <small>${escapeHtml(detail)}</small>
+      </div>
+      <div class="button-row">${buttons}</div>
+    </div>
+  `;
+}
+
+function renderChatDocumentToolButtons(toolUse = {}) {
+  const file = getChatDocumentToolFile(toolUse);
+  const buttons = [];
+  if (getChatDocumentEditDiffData(toolUse)) {
+    buttons.push(`<button type="button" class="open-attachment-diff" data-tool-use-id="${escapeAttr(toolUse.id)}">Ver diff</button>`);
+  }
+  const knownAttachment = resolveAttachment(file.identifier);
+  if (knownAttachment) {
+    buttons.push(`<button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(knownAttachment.id)}">Ver arquivo</button>`);
+  }
+  return buttons.join('');
+}
+
+function getChatDocumentToolFile(toolUse = {}) {
+  const input = toolUse.input || {};
+  const result = toolUse.result || {};
+  const documentFile = result.document || {};
+  const identifier = input.attachmentId || documentFile.id || input.fileName || documentFile.name || '';
+  const label = input.fileName || documentFile.name || input.attachmentId || documentFile.id || '';
+  return { identifier, label };
+}
+
+function getChatDocumentReadRangeLabel(toolUse = {}) {
+  if (toolUse.name !== 'chat_document' || toolUse.result?.action !== 'read') return '';
+  const result = toolUse.result || {};
+  const offset = Number(result.offset || 0);
+  const contentLength = String(result.content || '').length;
+  const total = Number(result.totalChars || 0);
+  const end = offset + contentLength;
+  const range = total ? `Trecho ${offset}-${end} de ${total} caractere(s).` : `Trecho a partir de ${offset}.`;
+  return result.truncated ? `${range} Resultado truncado; a IA deve continuar com offset ${result.nextOffset}.` : `${range} Arquivo lido até o fim.`;
+}
+
+function getChatDocumentEditDiffData(toolUse = {}) {
+  if (toolUse.name !== 'chat_document') return null;
+  const input = toolUse.input || {};
+  const result = toolUse.result || {};
+  if (!['replace', 'write'].includes(result.action || input.action)) return null;
+  const file = getChatDocumentToolFile(toolUse);
+  const oldText = result.action === 'replace' ? input.oldText : result.previousContent ?? '';
+  const newText = result.action === 'replace' ? input.newText : input.content ?? result.content ?? '';
+  if (!String(oldText) && !String(newText)) return null;
+  return {
+    toolUseId: toolUse.id,
+    attachmentId: file.identifier,
+    fileName: file.label,
+    reason: input.reason || '',
+    oldText: String(oldText),
+    newText: String(newText),
+  };
+}
+
 function toolUseHasFailure(toolUse = {}) {
   const result = toolUse.result || {};
   if (result.error) return true;
@@ -2743,8 +3267,11 @@ function formatToolUseState(toolUse = {}) {
 }
 
 function renderAttachmentCard(attachment, options = {}) {
+  if (!attachment) return '';
+  attachment = resolveAttachment(attachment.id) || attachment;
   const chatId = state.activeChat?.id || '';
   const contentUrl = chatId ? withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`) : '';
+  const actionLabel = isEditableAttachment(attachment) ? 'Abrir/editar' : 'Visualizar';
   const imagePreview =
     attachment.kind === 'image' && contentUrl
       ? `<img class="attachment-thumb" src="${escapeAttr(contentUrl)}" alt="${escapeAttr(attachment.name)}" />`
@@ -2757,12 +3284,12 @@ function renderAttachmentCard(attachment, options = {}) {
   const actions = options.pending
     ? `
       <div class="attachment-actions">
-        <button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Visualizar</button>
+        <button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">${escapeHtml(actionLabel)}</button>
         ${attachment.extractedText ? `<button type="button" class="paste-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Colar texto</button>` : ''}
         <button type="button" class="remove-pending-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Remover</button>
       </div>
     `
-    : `<div class="attachment-actions"><button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">Visualizar</button></div>`;
+    : `<div class="attachment-actions"><button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(attachment.id)}">${escapeHtml(actionLabel)}</button></div>`;
   return `
     <article class="attachment-card ${warning.level}" data-attachment-id="${escapeAttr(attachment.id)}">
       ${imagePreview || videoPreview}
@@ -3118,13 +3645,13 @@ function renderModelOptions(providerId, selectedModel) {
     .map((model) => {
       const selected = model.id === selectedModel ? 'selected' : '';
       const installed = provider.id === 'ollama' && model.installed ? '&#10003; ' : '';
-      const vision = model.supportsImages ? ' · visão' : '';
-      const reasoning = model.supportsReasoning ? ' · raciocínio' : '';
-      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(model.kind)}${vision}${reasoning} · ${escapeHtml(model.id)}</option>`;
+      const vision = model.supportsImages ? ` · ${uiText('visão')}` : '';
+      const reasoning = model.supportsReasoning ? ` · ${uiText('raciocínio')}` : '';
+      return `<option value="${escapeAttr(model.id)}" ${selected}>${installed}${escapeHtml(model.label)} · ${escapeHtml(displayModelKind(model.kind))}${escapeHtml(vision)}${escapeHtml(reasoning)} · ${escapeHtml(model.id)}</option>`;
     })
     .join('');
   const customSelected = selectedModel && !known.has(selectedModel) ? 'selected' : '';
-  const customLabel = provider.id === 'ollama' ? 'Modelo personalizado ou ainda não instalado' : 'Modelo personalizado';
+  const customLabel = provider.id === 'ollama' ? uiText('Modelo personalizado ou ainda não instalado') : uiText('Modelo personalizado');
   const customOption = `<option value="${CUSTOM_MODEL_VALUE}" ${customSelected}>${escapeHtml(customLabel)}</option>`;
 
   return `${options}${customOption}`;
@@ -3578,6 +4105,9 @@ function bindAppEvents() {
   document.querySelectorAll('.open-user-memory-diff').forEach((button) => {
     button.addEventListener('click', () => openUserMemoryDiff(button.dataset.toolUseId));
   });
+  document.querySelectorAll('.open-attachment-diff').forEach((button) => {
+    button.addEventListener('click', () => openAttachmentDiff(button.dataset.toolUseId));
+  });
   document.querySelector('#user-memory-viewer-form')?.addEventListener('submit', saveUserMemoryViewer);
   document.querySelector('#close-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
   document.querySelector('#cancel-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
@@ -3764,7 +4294,10 @@ function bindAppEvents() {
     document.querySelector('#confirm-save-send')?.addEventListener('click', saveChatSettingsAndSend);
   }
 
+  document.querySelector('#attachment-viewer-form')?.addEventListener('submit', saveAttachmentViewer);
   document.querySelector('#close-attachment-viewer')?.addEventListener('click', closeAttachmentViewer);
+  document.querySelector('#cancel-attachment-viewer')?.addEventListener('click', closeAttachmentViewer);
+  document.querySelector('#close-attachment-diff')?.addEventListener('click', closeAttachmentDiff);
   document.querySelector('#close-import-modal')?.addEventListener('click', closeImportModal);
   document.querySelector('#cancel-import-modal')?.addEventListener('click', closeImportModal);
   document.querySelector('#confirm-import-modal')?.addEventListener('click', confirmImportData);
@@ -3956,7 +4489,7 @@ function getCurrentOllamaModelDraft() {
 }
 
 async function removeOllamaModel(model) {
-  const confirmed = window.confirm(`Remover o modelo Ollama "${model}" da máquina?`);
+  const confirmed = confirmUi(`Remover o modelo Ollama "${model}" da máquina?`);
   if (!confirmed) return;
   await runAction(`Removendo ${model}...`, async () => {
     await api('/api/ollama/rm', {
@@ -3969,7 +4502,7 @@ async function removeOllamaModel(model) {
 }
 
 async function uninstallOllama() {
-  const confirmed = window.confirm('Desinstalar o Ollama do sistema? Pode pedir sudo e falhar pelo navegador se precisar de senha.');
+  const confirmed = confirmUi('Desinstalar o Ollama do sistema? Pode pedir sudo e falhar pelo navegador se precisar de senha.');
   if (!confirmed) return;
   await runAction('Desinstalando Ollama...', async () => {
     const data = await api('/api/ollama/uninstall', { method: 'POST' });
@@ -3981,7 +4514,7 @@ async function uninstallOllama() {
 
 async function switchProfile(profileId) {
   if (!profileId || profileId === state.activeProfile?.id || state.busy) return;
-  if ((state.settingsDirty || state.chatSettingsDirty || state.chatContextDirty || state.modelSettingsDirty) && !window.confirm('Trocar de seção e descartar alterações não salvas?')) {
+  if ((state.settingsDirty || state.chatSettingsDirty || state.chatContextDirty || state.modelSettingsDirty) && !confirmUi('Trocar de seção e descartar alterações não salvas?')) {
     renderPreservingVisualState();
     return;
   }
@@ -4005,7 +4538,7 @@ async function switchProfile(profileId) {
 
 async function createProfileFromPrompt() {
   if (state.busy) return;
-  const name = window.prompt('Nome da nova seção/usuário:', 'Nova seção');
+  const name = promptUi('Nome da nova seção/usuário:', 'Nova seção');
   if (!name?.trim()) return;
   await runAction('Criando seção...', async () => {
     const data = await api('/api/profiles', {
@@ -4023,7 +4556,7 @@ async function createProfileFromPrompt() {
 async function renameProfileFromPrompt(profileId) {
   const profile = state.profiles.find((item) => item.id === profileId);
   if (!profile) return;
-  const name = window.prompt('Novo nome da seção:', profile.name || profile.id);
+  const name = promptUi('Novo nome da seção:', profile.name || profile.id);
   if (!name?.trim()) return;
   await runAction('Renomeando seção...', async () => {
     const data = await api(`/api/profiles/${encodeURIComponent(profileId)}`, {
@@ -4039,7 +4572,7 @@ async function renameProfileFromPrompt(profileId) {
 async function deleteProfileFromButton(profileId) {
   const profile = state.profiles.find((item) => item.id === profileId);
   if (!profile) return;
-  const confirmed = window.confirm(`Apagar a seção "${profile.name}" e todos os seus chats, configurações e memórias?`);
+  const confirmed = confirmUi(`Apagar a seção "${profile.name}" e todos os seus chats, configurações e memórias?`);
   if (!confirmed) return;
   await runAction('Apagando seção...', async () => {
     const data = await api(`/api/profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' });
@@ -4075,7 +4608,7 @@ async function uploadUserMemoryFiles(event) {
 async function deleteUserMemoryFile(fileId) {
   const file = state.userMemoryFiles.find((item) => item.id === fileId);
   if (!file) return;
-  const confirmed = window.confirm(`Remover "${file.name}" dos arquivos de memória persistente?`);
+  const confirmed = confirmUi(`Remover "${file.name}" dos arquivos de memória persistente?`);
   if (!confirmed) return;
   await runAction('Removendo arquivo de memória...', async () => {
     const data = await api(`/api/persistent-memory-user/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
@@ -4123,19 +4656,113 @@ async function uploadSelectedFiles(event) {
   }
 }
 
-function openAttachmentViewer(attachmentId) {
-  const attachment =
-    state.pendingAttachments.find((item) => item.id === attachmentId) ||
-    state.activeChat?.attachments?.find((item) => item.id === attachmentId) ||
-    state.activeChat?.messages?.flatMap((message) => message.attachments || []).find((item) => item.id === attachmentId);
+async function openAttachmentViewer(attachmentId) {
+  const attachment = resolveAttachment(attachmentId);
   if (!attachment) return;
-  state.attachmentViewer = attachment;
+  state.attachmentViewer = {
+    ...attachment,
+    viewerLoading: isEditableAttachment(attachment),
+  };
   renderPreservingVisualState();
+  if (!isEditableAttachment(attachment) || !state.activeChat?.id) return;
+  try {
+    const data = await api(`/api/chats/${encodeURIComponent(state.activeChat.id)}/attachments/${encodeURIComponent(attachment.id)}/text`);
+    if (state.attachmentViewer?.id !== attachment.id) return;
+    state.attachmentViewer = {
+      ...data.attachment,
+      content: data.content || '',
+      viewerLoading: false,
+    };
+    updateAttachmentEverywhere(data.attachment);
+    renderPreservingVisualState();
+  } catch (error) {
+    if (state.attachmentViewer?.id === attachment.id) {
+      state.attachmentViewer = {
+        ...state.attachmentViewer,
+        content: state.attachmentViewer.extractedText || state.attachmentViewer.previewText || '',
+        viewerLoading: false,
+      };
+    }
+    state.error = error.message || 'Falha ao carregar documento.';
+    renderPreservingVisualState();
+  }
 }
 
 function closeAttachmentViewer() {
+  if (hasAttachmentViewerUnsavedChanges()) {
+    const confirmed = confirmUi('Descartar alterações não salvas neste documento?');
+    if (!confirmed) return;
+  }
   state.attachmentViewer = null;
   renderPreservingVisualState();
+}
+
+function hasAttachmentViewerUnsavedChanges() {
+  const textarea = document.querySelector('#attachment-viewer-input');
+  if (!state.attachmentViewer || !textarea || state.attachmentViewer.viewerLoading) return false;
+  return textarea.value !== String(state.attachmentViewer.content || '');
+}
+
+async function saveAttachmentViewer(event) {
+  event.preventDefault();
+  const attachment = state.attachmentViewer;
+  const textarea = document.querySelector('#attachment-viewer-input');
+  if (!attachment || !textarea || state.busy || !state.activeChat?.id) return;
+  await runAction('Salvando documento...', async () => {
+    const data = await api(`/api/chats/${encodeURIComponent(state.activeChat.id)}/attachments/${encodeURIComponent(attachment.id)}/text`, {
+      method: 'PUT',
+      body: { content: textarea.value },
+    });
+    state.activeChat = data.chat || state.activeChat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    updateAttachmentEverywhere(data.attachment);
+    state.attachmentViewer = {
+      ...data.attachment,
+      content: data.content || '',
+      viewerLoading: false,
+    };
+    state.status = `Documento "${data.attachment?.name || attachment.name}" salvo.`;
+  });
+}
+
+function closeAttachmentDiff() {
+  state.attachmentDiff = null;
+  renderPreservingVisualState();
+}
+
+function resolveAttachment(attachmentId) {
+  const value = String(attachmentId || '').trim();
+  if (!value) return null;
+  return (
+    state.pendingAttachments.find((item) => item.id === value || item.name === value) ||
+    state.activeChat?.attachments?.find((item) => item.id === value || item.name === value) ||
+    state.activeChat?.messages?.flatMap((message) => message.attachments || []).find((item) => item.id === value || item.name === value) ||
+    null
+  );
+}
+
+function updateAttachmentEverywhere(updatedAttachment) {
+  if (!updatedAttachment?.id) return;
+  const replace = (attachment) => (attachment?.id === updatedAttachment.id ? { ...attachment, ...updatedAttachment } : attachment);
+  state.pendingAttachments = (state.pendingAttachments || []).map(replace);
+  if (state.activeChat) {
+    state.activeChat.attachments = (state.activeChat.attachments || []).map(replace);
+    state.activeChat.messages = (state.activeChat.messages || []).map((message) => ({
+      ...message,
+      attachments: (message.attachments || []).map(replace),
+    }));
+  }
+}
+
+function isEditableAttachment(attachment = {}) {
+  const mimeType = String(attachment.mimeType || '').toLowerCase();
+  const name = String(attachment.name || '').toLowerCase();
+  return (
+    attachment.kind === 'text' ||
+    mimeType.startsWith('text/') ||
+    /\.(md|markdown|txt|json|jsonl|csv|tsv|html?|xml|ya?ml|js|mjs|cjs|ts|tsx|jsx|css|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql|log|ini|toml)$/i.test(name) ||
+    ['application/json', 'application/xml', 'application/x-yaml'].includes(mimeType)
+  );
 }
 
 async function openUserMemoryFileViewer(fileId) {
@@ -4170,7 +4797,7 @@ async function saveUserMemoryViewer(event) {
 
 function closeUserMemoryViewer() {
   if (hasUserMemoryViewerUnsavedChanges()) {
-    const confirmed = window.confirm('Descartar alterações não salvas neste arquivo de memória?');
+    const confirmed = confirmUi('Descartar alterações não salvas neste arquivo de memória?');
     if (!confirmed) return;
   }
   state.userMemoryViewer = null;
@@ -4186,6 +4813,18 @@ function openUserMemoryDiff(toolUseId) {
     return;
   }
   state.userMemoryDiff = diff;
+  renderPreservingVisualState();
+}
+
+function openAttachmentDiff(toolUseId) {
+  const toolUse = findToolUseById(toolUseId);
+  const diff = getChatDocumentEditDiffData(toolUse);
+  if (!diff) {
+    state.error = 'Diff da edição de documento não encontrado.';
+    renderPreservingVisualState();
+    return;
+  }
+  state.attachmentDiff = diff;
   renderPreservingVisualState();
 }
 
@@ -4951,7 +5590,7 @@ async function copyRelatedEvents() {
 
 async function deleteActiveChat() {
   if (!state.activeChat) return;
-  const confirmed = window.confirm(`Apagar o chat "${state.activeChat.title}"?`);
+  const confirmed = confirmUi(`Apagar o chat "${state.activeChat.title}"?`);
   if (!confirmed) return;
 
   await runAction('Apagando chat...', async () => {
@@ -4969,11 +5608,11 @@ async function deleteActiveChat() {
 async function deleteAllChatsWithDoubleConfirm() {
   const count = (state.chats || []).length;
   if (!count || state.busy) return;
-  const firstConfirm = window.confirm(
+  const firstConfirm = confirmUi(
     `Excluir todos os ${count} chat(s) desta seção? Isso apaga mensagens, anexos, memória e contexto dos chats. Faça um backup antes se quiser preservar algo.`,
   );
   if (!firstConfirm) return;
-  const phrase = window.prompt('Para confirmar, digite exatamente: APAGAR TODOS OS CHATS');
+  const phrase = promptUi('Para confirmar, digite exatamente: APAGAR TODOS OS CHATS');
   if (phrase !== 'APAGAR TODOS OS CHATS') {
     state.status = 'Exclusão de todos os chats cancelada.';
     renderPreservingVisualState();
@@ -5226,6 +5865,7 @@ async function saveGeneralSettings(event, options = {}) {
       searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || (offlineMode ? 'terminal' : 'native') : 'off',
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
+      chatDocuments: form.get('tool_chatDocuments') === 'on',
       autoCompact: form.get('tool_autoCompact') === 'on',
       chatTitle: form.get('tool_chatTitle') === 'on',
       userMemory: userMemoryRead,
@@ -5399,6 +6039,7 @@ function captureSettingsDraftFromForm() {
     deepInvestigation: form.get('tool_deepInvestigation') === 'on',
     chatMemory: form.get('tool_chatMemory') === 'on',
     persistentMemory: form.get('tool_persistentMemory') === 'on',
+    chatDocuments: form.get('tool_chatDocuments') === 'on',
     autoCompact: form.get('tool_autoCompact') === 'on',
     chatTitle: form.get('tool_chatTitle') === 'on',
     userMemory: userMemoryRead,
@@ -5745,7 +6386,7 @@ async function checkUpdate() {
 }
 
 async function applyUpdate() {
-  const confirmed = window.confirm('Atualizar o My Computer agora? O servidor vai rodar git pull, npm install e reiniciar.');
+  const confirmed = confirmUi('Atualizar o My Computer agora? O servidor vai rodar git pull, npm install e reiniciar.');
   if (!confirmed) return;
   await runAction('Atualizando My Computer...', async () => {
     const data = await api('/api/update/apply', {
@@ -5850,7 +6491,7 @@ function toggleApiKeyVisibility() {
 }
 
 async function shutdownApp() {
-  const confirmed = window.confirm('Encerrar o servidor local do My Computer? Para iniciar depois, rode ./install.sh ou npm run start:open.');
+  const confirmed = confirmUi('Encerrar o servidor local do My Computer? Para iniciar depois, rode ./install.sh ou npm run start:open.');
   if (!confirmed) return;
   await api('/api/shutdown', { method: 'POST' });
   state.status = 'My Computer está encerrando. Para iniciar novamente, rode ./install.sh.';
@@ -5883,7 +6524,7 @@ async function runAction(status, action, retry = null) {
 function updateStatusUi() {
   const statusElement = document.querySelector('.inspector .status');
   if (statusElement) {
-    statusElement.textContent = state.error || state.status || 'Pronto';
+    statusElement.textContent = uiText(state.error || state.status || 'Pronto');
     statusElement.classList.toggle('error', Boolean(state.error));
   }
 }
