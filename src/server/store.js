@@ -257,6 +257,7 @@ export async function createChat(title = 'New chat', options = {}) {
   const metadata = {
     id,
     title: normalizeTitle(title),
+    folder: normalizeChatFolder(options.folder || ''),
     provider,
     model: String(options.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(options.modelSettings || {}),
@@ -354,6 +355,10 @@ export async function updateChatMetadata(id, patch) {
       ...metadata,
       ...patch,
       title: patch.title ? normalizeTitle(patch.title) : metadata.title,
+      folder:
+        Object.hasOwn(patch, 'folder') && patch.folder !== undefined
+          ? normalizeChatFolder(patch.folder)
+          : normalizeChatFolder(metadata.folder || ''),
       provider: patch.provider ? normalizeProviderId(patch.provider) : normalizeProviderId(metadata.provider),
       model: patch.model ? String(patch.model).trim() : metadata.model,
       modelSettings:
@@ -1064,6 +1069,7 @@ export async function exportRuntimeData() {
       metadata: {
         id: fullChat.id,
         title: fullChat.title,
+        folder: normalizeChatFolder(fullChat.folder || ''),
         provider: fullChat.provider,
         model: fullChat.model,
         modelSettings: normalizeModelSettings(fullChat.modelSettings || {}),
@@ -1174,6 +1180,7 @@ async function readChatMetadata(id) {
   return {
     ...metadata,
     provider,
+    folder: normalizeChatFolder(metadata.folder || ''),
     model: String(metadata.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(metadata.modelSettings || {}),
     systemPromptExtra: String(metadata.systemPromptExtra || '').trim(),
@@ -1197,6 +1204,7 @@ async function writeImportedChat(importedChat = {}, options = {}) {
   const metadata = {
     id,
     title: normalizeTitle(importedMetadata.title || 'Chat importado'),
+    folder: normalizeChatFolder(importedMetadata.folder || ''),
     provider,
     model: String(importedMetadata.model || getDefaultModelForProvider(provider)).trim(),
     modelSettings: normalizeModelSettings(importedMetadata.modelSettings || {}),
@@ -1654,6 +1662,11 @@ function isUserMemoryEditable(mimeType, name) {
 function normalizeTitle(title) {
   const clean = String(title || '').replace(/\s+/g, ' ').trim();
   return clean.slice(0, 80) || 'New chat';
+}
+
+function normalizeChatFolder(folder) {
+  const clean = String(folder || '').replace(/\s+/g, ' ').trim();
+  return clean.slice(0, 60);
 }
 
 function normalizeTools(tools = {}, options = {}) {

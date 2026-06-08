@@ -108,6 +108,7 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Export/import: backup e restauração seletivos de configuração completa, memória persistente, arquivos adicionais de memória, chats, anexos e eventos.
 - Backup: botão de excluir todos os chats da seção atual com confirmação dupla, preservando configurações e memórias persistentes.
 - Seções: chamadas da UI carregam o id da seção ativa para manter abas diferentes isoladas no backend.
+- Sidebar: chats podem ser filtrados por texto e agrupados por `Pasta do chat`; a pasta organiza visualmente dentro da seção atual e não cria isolamento novo.
 - Salvar apenas aparência, identidade, memória, tools, contexto ou rede não exige API key do provider padrão; validação de key/base URL acontece quando provider, modelo, settings do provider ou rotatórias mudam.
 - Segurança: avisos de sudo e de acesso remoto.
 

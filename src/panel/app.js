@@ -4,6 +4,8 @@ const state = {
   models: [],
   ollamaInstalledModels: [],
   chats: [],
+  chatSearch: '',
+  collapsedChatFolders: new Set(),
   activeChat: null,
   activeChatEvents: [],
   persistentMemory: '',
@@ -69,6 +71,13 @@ const EN_TEXT = new Map([
   ['Escolher provider, API key, tema, nível técnico, busca, tools e rede.', 'Choose provider, API key, theme, technical level, search, tools, and network.'],
   ['Voltar ao painel', 'Back to panel'],
   ['Pular para o painel', 'Skip to panel'],
+  ['Buscar chats', 'Search chats'],
+  ['Filtrar por nome, pasta, provider ou modelo...', 'Filter by name, folder, provider, or model...'],
+  ['Pasta do chat', 'Chat folder'],
+  ['Ex.: Trabalho, Estudos, Ficção', 'Example: Work, Study, Fiction'],
+  ['Sem pasta', 'No folder'],
+  ['Nenhum chat encontrado.', 'No chat found.'],
+  ['Digite uma pasta curta para organizar este chat no sidebar. Vazio deixa em Sem pasta.', 'Enter a short folder name to organize this chat in the sidebar. Empty keeps it in No folder.'],
   ['Não altera nada e retorna ao chat.', 'Does not change anything and returns to chat.'],
   ['Usar defaults agora e ajustar tudo depois em Configurações gerais.', 'Use defaults now and adjust everything later in General settings.'],
   ['Qual provider você pretende usar primeiro?', 'Which provider do you want to use first?'],
@@ -682,6 +691,7 @@ function translateDynamicUiValue(value) {
     [/^Apagar a seção "(.+)" e todos os seus chats, configurações e memórias\?$/, (_match, section) => `Delete section "${section}" and all its chats, settings, and memories?`],
     [/^Remover "(.+)" dos arquivos de memória persistente\?$/, (_match, file) => `Remove "${file}" from persistent memory files?`],
     [/^Descartar alterações não salvas neste documento\?$/, 'Discard unsaved changes in this document?'],
+    [/^Descartar alterações não salvas neste chat\?$/, 'Discard unsaved changes in this chat?'],
     [/^Descartar alterações não salvas nos parâmetros do modelo\?$/, 'Discard unsaved model parameter changes?'],
     [/^Apagar o chat "(.+)"\?$/, (_match, title) => `Delete chat "${displayChatTitle(title)}"?`],
     [/^Excluir todos os (\d+) chat\(s\) desta seção\? Isso apaga mensagens, anexos, memória e contexto dos chats\. Faça um backup antes se quiser preservar algo\.$/, (_match, count) => `Delete all ${count} chat(s) in this section? This deletes chat messages, attachments, memory, and context. Make a backup first if you want to preserve anything.`],
@@ -1092,8 +1102,12 @@ function renderApp() {
           <button class="primary" id="new-chat">Novo chat</button>
           <button id="open-settings">Configurações gerais</button>
         </div>
+        <label class="chat-search">
+          <span>Buscar chats</span>
+          <input id="chat-search-input" value="${escapeAttr(state.chatSearch)}" placeholder="Filtrar por nome, pasta, provider ou modelo..." />
+        </label>
         <div class="chat-list">
-          ${state.chats.map(renderChatItem).join('')}
+          ${renderChatList()}
         </div>
         <div class="runtime">${escapeHtml(state.runtimeHome)}</div>
       </aside>
@@ -1143,6 +1157,12 @@ function renderApp() {
             <label>
               Nome do chat
               <input id="chat-title-input" value="${escapeAttr(displayChatTitle(chat?.title || ''))}" ${!chat ? 'disabled' : ''} />
+            </label>
+            <label>
+              Pasta do chat
+              <input id="chat-folder-input" list="chat-folder-options" value="${escapeAttr(normalizeChatFolder(chat?.folder || ''))}" ${!chat ? 'disabled' : ''} placeholder="Ex.: Trabalho, Estudos, Ficção" />
+              <small class="field-note">Digite uma pasta curta para organizar este chat no sidebar. Vazio deixa em Sem pasta.</small>
+              ${renderChatFolderDatalist('chat-folder-options')}
             </label>
             <label>
               Provider deste chat
@@ -2028,6 +2048,12 @@ function renderChatSettingsModal() {
                   <input id="mobile-chat-title-input" value="${escapeAttr(displayChatTitle(chat?.title || ''))}" ${!chat ? 'disabled' : ''} />
                 </label>
                 <label>
+                  Pasta do chat
+                  <input id="mobile-chat-folder-input" list="mobile-chat-folder-options" value="${escapeAttr(normalizeChatFolder(chat?.folder || ''))}" ${!chat ? 'disabled' : ''} placeholder="Ex.: Trabalho, Estudos, Ficção" />
+                  <small class="field-note">Digite uma pasta curta para organizar este chat no sidebar. Vazio deixa em Sem pasta.</small>
+                  ${renderChatFolderDatalist('mobile-chat-folder-options')}
+                </label>
+                <label>
                   Provider deste chat
                   <select id="mobile-chat-provider-input" ${!chat ? 'disabled' : ''}>
                     ${renderProviderOptions(chatProviderId, { offlineOnly: offlineMode })}
@@ -2522,12 +2548,103 @@ function renderToolToggle(name, title, description) {
   `;
 }
 
+function renderChatList() {
+  const groups = groupChatsForSidebar(state.chats, state.chatSearch);
+  if (!groups.length) return '<p class="empty chat-list-empty">Nenhum chat encontrado.</p>';
+  return groups.map(renderChatFolderGroup).join('');
+}
+
+function groupChatsForSidebar(chats = [], query = '') {
+  const needle = normalizeSearchText(query);
+  const groups = new Map();
+  for (const chat of chats || []) {
+    const folder = normalizeChatFolder(chat.folder);
+    const haystack = normalizeSearchText([chat.title, folder, chat.provider, chat.model].filter(Boolean).join(' '));
+    if (needle && !haystack.includes(needle)) continue;
+    const key = folder ? `folder:${folder}` : 'folder:';
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: folder || 'Sem pasta',
+        folder,
+        chats: [],
+        hasActive: false,
+      });
+    }
+    const group = groups.get(key);
+    group.chats.push(chat);
+    if (state.activeChat?.id === chat.id) group.hasActive = true;
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (!a.folder) return -1;
+    if (!b.folder) return 1;
+    return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
+  });
+}
+
+function renderChatFolderGroup(group) {
+  const collapsed = !state.chatSearch && state.collapsedChatFolders.has(group.key) && !group.hasActive;
+  return `
+    <section class="chat-folder ${collapsed ? 'collapsed' : ''}">
+      <button type="button" class="chat-folder-toggle" data-chat-folder-key="${escapeAttr(group.key)}" aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span>${collapsed ? '›' : '⌄'}</span>
+        <strong>${escapeHtml(group.label)}</strong>
+        <small>${group.chats.length}</small>
+      </button>
+      <div class="chat-folder-items">
+        ${collapsed ? '' : group.chats.map(renderChatItem).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderChatFolderDatalist(id = 'chat-folder-options') {
+  const folders = getKnownChatFolders();
+  if (!folders.length) return '';
+  return `
+    <datalist id="${escapeAttr(id)}">
+      ${folders.map((folder) => `<option value="${escapeAttr(folder)}"></option>`).join('')}
+    </datalist>
+  `;
+}
+
+function getKnownChatFolders() {
+  return [...new Set((state.chats || []).map((chat) => normalizeChatFolder(chat.folder)).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' }),
+  );
+}
+
+function normalizeChatFolder(folder = '') {
+  return String(folder || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+function normalizeSearchText(value = '') {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function updateChatSearch(event) {
+  state.chatSearch = event.target.value || '';
+  renderPreservingVisualState();
+}
+
+function toggleChatFolder(folderKey) {
+  const key = String(folderKey || '');
+  if (!key) return;
+  if (state.collapsedChatFolders.has(key)) state.collapsedChatFolders.delete(key);
+  else state.collapsedChatFolders.add(key);
+  renderPreservingVisualState();
+}
+
 function renderChatItem(chat) {
   const active = state.activeChat?.id === chat.id ? 'active' : '';
+  const folder = normalizeChatFolder(chat.folder);
   return `
     <button class="chat-item ${active}" data-chat-id="${escapeAttr(chat.id)}">
       <strong>${escapeHtml(displayChatTitle(chat.title))}</strong>
-      <span class="meta">${escapeHtml(providerLabel(chat.provider || state.config.provider))} · ${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
+      <span class="meta">${folder && state.chatSearch ? `${escapeHtml(folder)} · ` : ''}${escapeHtml(providerLabel(chat.provider || state.config.provider))} · ${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
     </button>
   `;
 }
@@ -3884,6 +4001,11 @@ function captureChatSettingsDraftFromForm() {
     state.chatSettingsDraft?.title ??
     state.activeChat.title ??
     '';
+  const folder =
+    findField('chat-folder-input')?.value ??
+    state.chatSettingsDraft?.folder ??
+    state.activeChat.folder ??
+    '';
   const prefix = document.querySelector(`#${getChatSettingsPrefix()}chat-model-input`) ? getChatSettingsPrefix() : prefixes[0];
   const modelSelect = findField('chat-model-input');
   let model = state.chatSettingsDraft?.model || state.activeChat.model || getProvider(provider).defaultModel;
@@ -3896,7 +4018,7 @@ function captureChatSettingsDraftFromForm() {
   } else {
     model = getModelValue(`#${prefix}chat-model-input`, `#${prefix}chat-custom-model-input`, provider);
   }
-  state.chatSettingsDraft = { title, provider, model };
+  state.chatSettingsDraft = { title, folder: normalizeChatFolder(folder), provider, model };
   return state.chatSettingsDraft;
 }
 
@@ -4093,6 +4215,10 @@ function bindAppEvents() {
   document.querySelector('#open-settings').addEventListener('click', openSettings);
   document.querySelector('#active-profile-select')?.addEventListener('change', (event) => switchProfile(event.target.value));
   document.querySelector('#quick-create-profile')?.addEventListener('click', createProfileFromPrompt);
+  document.querySelector('#chat-search-input')?.addEventListener('input', updateChatSearch);
+  document.querySelectorAll('.chat-folder-toggle').forEach((button) => {
+    button.addEventListener('click', () => toggleChatFolder(button.dataset.chatFolderKey));
+  });
   document.querySelector('#open-chat-settings-mobile')?.addEventListener('click', openChatSettings);
   document.querySelectorAll('[data-chat-id]').forEach((button) => {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
@@ -4127,6 +4253,7 @@ function bindAppEvents() {
   document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
   document.querySelector('#chat-model-input')?.addEventListener('change', () => toggleChatCustomModel());
   document.querySelector('#chat-title-input')?.addEventListener('input', markChatSettingsDirty);
+  document.querySelector('#chat-folder-input')?.addEventListener('input', markChatSettingsDirty);
   document.querySelector('#chat-provider-input')?.addEventListener('change', markChatSettingsDirty);
   document.querySelector('#chat-model-input')?.addEventListener('change', markChatSettingsDirty);
   document.querySelector('#chat-custom-model-input')?.addEventListener('input', markChatSettingsDirty);
@@ -5161,6 +5288,7 @@ function removeApiKeyRow(index) {
 }
 
 async function createNewChat() {
+  if (!canLeaveActiveChatDraft()) return;
   await runAction('Criando chat...', async () => {
     const data = await api('/api/chats', { method: 'POST' });
     applyCreatedChat(data);
@@ -5191,6 +5319,7 @@ async function ensureActiveChat(options = {}) {
 function applyCreatedChat(data = {}) {
   state.chats = data.chats || state.chats;
   state.activeChat = data.chat || state.activeChat;
+  state.chatSearch = '';
   state.activeChatEvents = [];
   state.messageDetailsOpen = false;
   state.messageDetailsMessageId = null;
@@ -5199,6 +5328,8 @@ function applyCreatedChat(data = {}) {
 }
 
 async function loadChat(chatId) {
+  if (state.activeChat?.id === chatId) return;
+  if (!canLeaveActiveChatDraft()) return;
   await runAction('Abrindo chat...', async () => {
     const data = await api(`/api/chats/${chatId}`);
     state.activeChat = data.chat;
@@ -5208,6 +5339,19 @@ async function loadChat(chatId) {
     state.chatSettingsDraft = null;
     state.chatSettingsDirty = false;
   });
+}
+
+function canLeaveActiveChatDraft() {
+  if (!state.chatSettingsDirty && !state.chatContextDirty && !state.modelSettingsDirty) return true;
+  const confirmed = confirmUi('Descartar alterações não salvas neste chat?');
+  if (!confirmed) return false;
+  state.chatSettingsDraft = null;
+  state.chatSettingsDirty = false;
+  state.chatContextDirty = false;
+  state.chatContextOpen = false;
+  state.modelSettingsDirty = false;
+  state.modelSettingsOpen = false;
+  return true;
 }
 
 async function sendMessage(event) {
@@ -5719,6 +5863,7 @@ async function saveChatContext(event) {
       method: 'PUT',
       body: {
         title: state.activeChat.title,
+        folder: state.activeChat.folder || '',
         provider: state.activeChat.provider,
         model: state.activeChat.model,
         modelSettings: state.activeChat.modelSettings || {},
@@ -5808,6 +5953,7 @@ async function saveModelSettings(event, overrideSettings = null, options = {}) {
       method: 'PUT',
       body: {
         title: chat.title,
+        folder: chat.folder || state.activeChat.folder || '',
         provider: chat.provider,
         model: chat.model,
         modelSettings: settings,
@@ -5846,6 +5992,7 @@ async function saveChatSettings(event, options = {}) {
   const draft = captureChatSettingsDraftFromForm() || {};
   const prefix = getChatSettingsPrefix();
   const title = draft.title || '';
+  const folder = normalizeChatFolder(draft.folder || '');
   const offlineMode = isOfflineMode(state.config);
   const provider = offlineMode ? 'ollama' : draft.provider || state.activeChat.provider || state.config.provider;
   const model = offlineMode && state.activeChat.provider !== 'ollama' ? state.config.model : draft.model || state.activeChat.model || getProvider(provider).defaultModel;
@@ -5867,6 +6014,7 @@ async function saveChatSettings(event, options = {}) {
       method: 'PUT',
       body: {
         title,
+        folder,
         provider,
         model,
         modelCapabilities,

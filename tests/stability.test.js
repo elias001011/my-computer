@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
 test('normalizes web_search tool calls and fake tool text', async () => {
@@ -143,6 +144,56 @@ test('bootstrap does not create a ghost chat when no chat exists', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('offline partial chat metadata update preserves chat model', async () => {
+  const script = String.raw`
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs/promises';
+    import os from 'node:os';
+    import path from 'node:path';
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-offline-chat-metadata-'));
+    process.env.MY_COMPUTER_HOME = tempDir;
+    const store = await import('./src/server/store.js');
+    const serverModule = await import('./src/server/server.js');
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'ollama',
+      model: 'section-model',
+      privacy: { offlineMode: true },
+    });
+    const chat = await store.createChat('Offline chat', {
+      provider: 'ollama',
+      model: 'chat-specific-model',
+    });
+    const { server, url } = await serverModule.startServer({ port: 0, host: '127.0.0.1' });
+    try {
+      const response = await fetch(url + '/api/chats/' + chat.id, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-My-Computer-Request': 'panel',
+        },
+        body: JSON.stringify({ folder: 'Folder only' }),
+      });
+      assert.equal(response.status, 200);
+      const data = await response.json();
+      assert.equal(data.chat.folder, 'Folder only');
+      assert.equal(data.chat.provider, 'ollama');
+      assert.equal(data.chat.model, 'chat-specific-model');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
 test('groq native search starts with compound-mini and parses nested search results', async () => {

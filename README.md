@@ -28,6 +28,7 @@ Use `./install.sh --fresh` to move the current runtime aside and show the initia
 - Let the AI use terminal, web search, memory, attachments, and context compaction through tools.
 - Ask for approval before sensitive tool calls.
 - Keep persistent memory per chat and per isolated section.
+- Organize chats into lightweight folders inside each section.
 - Add Markdown/text files as user memory.
 - Run privacy-focused offline sections backed by Ollama.
 - Export and restore runtime data.
@@ -67,6 +68,8 @@ Each section has its own:
 - local event log
 
 Switch sections from the sidebar, or manage them in `General settings > Sections`. Each browser tab sends the active section with API calls, and the backend freezes that scope during the request to avoid mixing data between tabs.
+
+Chats can also have a lightweight folder label for sidebar organization. Folders do not isolate data like sections do; they only group the chat list visually inside the current section.
 
 ## Offline Mode
 

@@ -161,12 +161,16 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const chat = await store.createChat('Teste', {
     provider: securityConfig.provider,
     model: securityConfig.model,
+    folder: 'Projetos',
     modelSettings: { temperature: 0.4, maxTokens: 1000 },
   });
   assert.equal(chat.title, 'Teste');
+  assert.equal(chat.folder, 'Projetos');
   assert.equal(chat.provider, 'openai-compatible');
   assert.equal(chat.modelSettings.temperature, 0.4);
   assert.match(chat.paths.memory, /memory\.md$/);
+  await store.updateChatMetadata(chat.id, { folder: 'Projetos / Escrita' });
+  assert.equal((await store.readChat(chat.id)).folder, 'Projetos / Escrita');
 
   await store.writeMemory(chat.id, '# Memory\n\n- keep this');
   const updated = await store.readChat(chat.id);
@@ -313,6 +317,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(exported.config.context.autoCompactEnabled, true);
   assert.equal(exported.config.routing.modelRotationEnabled, true);
   assert.deepEqual(exported.config.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
+  assert.equal(exported.chats[0].metadata.folder, 'Projetos / Escrita');
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 3);
   assert.equal(exported.chats[0].attachments.some((item) => item.name === 'remove-me.md'), false);
@@ -349,6 +354,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const importedChats = await store.listChats();
   assert.equal(importedChats.length, 2);
   const importedChat = await store.readChat(importedChats[0].id);
+  assert.equal(importedChat.folder, 'Projetos / Escrita');
   assert.equal(importedChat.attachments.length, 0);
   assert.ok((importedChat.messages || []).every((message) => !message.attachments?.length));
   assert.match(await store.readPersistentMemory(), /keep local memory/);

@@ -279,17 +279,33 @@ async function handleChatsApi(request, response, parts) {
     }
     const config = await loadConfig();
     const offlineMode = config.privacy?.offlineMode === true;
+    const currentChat = offlineMode ? await readChat(chatId) : null;
+    const hasProvider = Object.hasOwn(body, 'provider') && body.provider !== undefined;
+    const hasModel = Object.hasOwn(body, 'model') && body.model !== undefined;
+    let nextProvider = hasProvider ? body.provider : undefined;
+    let nextModel = hasModel ? body.model : undefined;
+    if (offlineMode && (hasProvider || hasModel)) {
+      const requestedProvider = hasProvider ? body.provider : currentChat?.provider || config.provider;
+      if (requestedProvider === 'ollama') {
+        nextProvider = 'ollama';
+        nextModel = hasModel ? body.model : currentChat?.provider === 'ollama' ? currentChat.model : config.model;
+      } else {
+        nextProvider = 'ollama';
+        nextModel = config.model;
+      }
+    }
     await updateChatMetadata(chatId, {
       title: body.title,
-      provider: offlineMode ? 'ollama' : body.provider,
-      model: offlineMode && body.provider !== 'ollama' ? config.model : body.model,
+      folder: body.folder,
+      provider: nextProvider,
+      model: nextModel,
       modelSettings: body.modelSettings,
       systemPromptExtra: body.systemPromptExtra,
     });
     await appendEvent({
       type: 'chat.metadata.updated',
       chatId,
-      details: { title: body.title, provider: body.provider, model: body.model },
+      details: { title: body.title, provider: nextProvider ?? body.provider, model: nextModel ?? body.model },
     });
     sendJson(response, 200, {
       chat: await readChat(chatId),

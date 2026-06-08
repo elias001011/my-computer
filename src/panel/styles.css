@@ -379,6 +379,20 @@ pre {
   gap: 8px;
 }
 
+.chat-search {
+  display: grid;
+  gap: 5px;
+}
+
+.chat-search span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-search input {
+  min-width: 0;
+}
+
 .profile-switcher {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
@@ -392,9 +406,51 @@ pre {
 
 .chat-list {
   display: grid;
-  gap: 8px;
+  align-content: start;
+  gap: 12px;
   overflow: auto;
   min-height: 0;
+}
+
+.chat-folder {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-folder-toggle {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-folder-toggle strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chat-folder-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-folder-items {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-list-empty {
+  padding: 8px;
 }
 
 .chat-item {
@@ -2014,7 +2070,7 @@ pre {
   }
 
   .app-shell {
-    grid-template-rows: 128px minmax(0, 1fr) auto;
+    grid-template-rows: 184px minmax(0, 1fr) auto;
   }
 
   .sidebar,
@@ -2042,6 +2098,15 @@ pre {
   .chat-list {
     display: flex;
     overflow-x: auto;
+    gap: 8px;
+  }
+
+  .chat-folder {
+    min-width: 260px;
+  }
+
+  .chat-folder-items {
+    display: flex;
     gap: 8px;
   }
 

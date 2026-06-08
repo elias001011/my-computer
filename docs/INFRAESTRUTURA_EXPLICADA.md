@@ -72,6 +72,8 @@ O prompt não é só a última mensagem. Ele é montado com várias peças:
 
 Isso explica por que o app consegue continuar a conversa sem esquecer tudo.
 
+Pastas de chat são só organização visual da lista dentro da seção atual. Elas ficam no metadado do chat, entram no backup/restore e não mudam o isolamento de dados.
+
 ## 4. Onde as coisas ficam salvas
 
 Por padrão:
