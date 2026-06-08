@@ -245,12 +245,37 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
       attachments: [removedAttachment],
       status: 'sent',
     }),
+    store.createMessage('assistant', 'Li PRIVATE_TOKEN_123 pelo anexo.', {
+      status: 'needs_tool_approval',
+      toolUses: [
+        {
+          id: 'doc-read-1',
+          name: 'chat_document',
+          input: { action: 'read', attachmentId: removedAttachment.id },
+          status: 'completed',
+          result: {
+            action: 'read',
+            content: '# Remove me\n\nPRIVATE_TOKEN_123\n',
+            document: removedAttachment,
+          },
+        },
+      ],
+      executionTrace: [{ type: 'tool_result', content: 'PRIVATE_TOKEN_123', result: { content: 'PRIVATE_TOKEN_123' } }],
+      pendingToolApproval: {
+        providerMessages: [{ role: 'user', content: 'PRIVATE_TOKEN_123' }],
+        toolCalls: [],
+        approvalToolCalls: [],
+      },
+    }),
   ]);
+  await store.writeContextSummary(chat.id, '# Contexto\n\nPRIVATE_TOKEN_123\n');
+  await store.saveCurrentContextWindow(chat.id, '# Janela\n\nPRIVATE_TOKEN_123\n');
   assert.equal((await store.listAttachments(chat.id)).length, 4);
   await store.deleteAttachment(chat.id, removedAttachment.id);
   const chatAfterDelete = await store.readChat(chat.id);
   assert.equal((await store.listAttachments(chat.id)).some((item) => item.id === removedAttachment.id), false);
   assert.doesNotMatch(JSON.stringify(chatAfterDelete.messages), /PRIVATE_TOKEN_123/);
+  assert.doesNotMatch(chatAfterDelete.contextSummary, /PRIVATE_TOKEN_123/);
   const redactedAttachment = chatAfterDelete.messages.flatMap((message) => message.attachments || []).find((item) => item.id === removedAttachment.id);
   assert.equal(redactedAttachment.sendMode, 'deleted');
   assert.equal(redactedAttachment.path, undefined);
@@ -283,6 +308,8 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(exported.chats[0].attachments.length, 3);
   assert.equal(exported.chats[0].attachments.some((item) => item.name === 'remove-me.md'), false);
   assert.doesNotMatch(JSON.stringify(exported.chats[0].messages), /PRIVATE_TOKEN_123/);
+  assert.doesNotMatch(exported.chats[0].contextSummary, /PRIVATE_TOKEN_123/);
+  assert.doesNotMatch(exported.chats[0].contextWindow, /PRIVATE_TOKEN_123/);
   assert.equal(exported.persistentMemoryUserFiles.length, 1);
 
   await store.saveConfig({

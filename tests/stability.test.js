@@ -1184,11 +1184,114 @@ test('deleted attachment snapshots are redacted from later provider prompts', as
     await assistant.sendUserMessage(chat.id, 'Leia o anexo uma vez.', { attachmentIds: [attachment.id] });
     assert.match(JSON.stringify(calls[0]), /PRIVATE_TOKEN_123/);
 
+    await store.writeContextSummary(chat.id, '# Summary\n\nPRIVATE_TOKEN_123\n');
+    await store.saveCurrentContextWindow(chat.id, '# Window\n\nPRIVATE_TOKEN_123\n');
     await store.deleteAttachment(chat.id, attachment.id);
     await assistant.sendUserMessage(chat.id, 'Agora responda sem o anexo.');
     assert.equal(calls.length, 2);
     assert.doesNotMatch(JSON.stringify(calls[1]), /PRIVATE_TOKEN_123/);
     assert.match(JSON.stringify(calls[1]), /removed_by_user/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('deleted attachment content is redacted from pending approval provider messages', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-deleted-attachment-pending-provider-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  const command = `${process.execPath} -e ${JSON.stringify("console.log('approved output')")}`;
+  global.fetch = async (url, options = {}) => {
+    if (String(url).includes('/chat/completions')) {
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      if (calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou rodar uma verificação local.',
+                  tool_calls: [
+                    {
+                      id: 'terminal-after-delete',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Sem segredo reenviado.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  };
+
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-deleted-attachment-pending-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-deleted-attachment-pending-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatDocuments: true,
+        searchMode: 'off',
+        alwaysAllow: false,
+        terminalMode: 'standard',
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Deleted pending provider', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+    const attachment = await store.saveAttachment(chat.id, {
+      name: 'pending-secret.md',
+      mimeType: 'text/markdown',
+      dataBase64: Buffer.from('# Pending Secret\n\nPRIVATE_TOKEN_PENDING\n').toString('base64'),
+    });
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Use uma tool depois de ler o anexo.', { attachmentIds: [attachment.id] });
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+    assert.match(JSON.stringify(calls[0]), /PRIVATE_TOKEN_PENDING/);
+
+    await store.deleteAttachment(chat.id, attachment.id);
+    assert.doesNotMatch(JSON.stringify((await store.readChat(chat.id)).messages), /PRIVATE_TOKEN_PENDING/);
+
+    const completed = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
+      toolCallId: 'terminal-after-delete',
+    });
+    assert.equal(completed.chat.messages.find((message) => message.id === pending.assistantMessage.id).status, 'sent');
+    assert.equal(calls.length, 2);
+    assert.doesNotMatch(JSON.stringify(calls[1]), /PRIVATE_TOKEN_PENDING/);
+    assert.match(JSON.stringify(calls[1]), /conteúdo removido do anexo|removed_by_user/);
   } finally {
     global.fetch = originalFetch;
   }

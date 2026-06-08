@@ -138,7 +138,7 @@ Para saídas longas ou tarefas demoradas:
 - `chat_document` trabalha em anexos de texto do chat atual, como `.md`, `.txt`, `.html`, `.json`, `.yaml`, código e logs.
 - A edição de anexo altera só a cópia salva em `attachments/` dentro do runtime do chat; o arquivo original enviado de fora não é modificado.
 - Quando `Sempre permitir qualquer tool` está desligado, qualquer uso de `chat_document` pede aprovação, inclusive leitura/listagem.
-- Remover um anexo apaga a cópia do runtime e redige referências antigas em mensagens para evitar reenvio/exportação do conteúdo apagado.
+- Remover um anexo apaga a cópia do runtime e redige referências antigas em mensagens, contexto salvo e estados pendentes de tools para evitar reenvio/exportação do conteúdo apagado.
 
 ### Exemplo mental
 

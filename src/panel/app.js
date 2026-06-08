@@ -2320,7 +2320,7 @@ function renderAttachmentDiffModal() {
   const diff = state.attachmentDiff;
   if (!diff) return '';
   const lines = buildLineDiff(diff.oldText || '', diff.newText || '');
-  const knownAttachment = resolveAttachment(diff.attachmentId || diff.fileName);
+  const knownAttachment = resolveAvailableAttachment(diff.attachmentId || diff.fileName);
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal wide-modal attachment-diff-modal" role="dialog" aria-modal="true" aria-labelledby="attachment-diff-title">
@@ -3161,7 +3161,7 @@ function renderDocumentChangeChips(message = {}) {
         .slice(0, 3)
         .map((toolUse) => {
           const file = getChatDocumentToolFile(toolUse);
-          const knownAttachment = resolveAttachment(file.identifier);
+          const knownAttachment = resolveAvailableAttachment(file.identifier);
           return `
             <div class="memory-change-chip">
               <span>Documento atualizado: ${escapeHtml(file.label || 'arquivo')}</span>
@@ -3209,7 +3209,7 @@ function renderChatDocumentToolButtons(toolUse = {}) {
   if (getChatDocumentEditDiffData(toolUse)) {
     buttons.push(`<button type="button" class="open-attachment-diff" data-tool-use-id="${escapeAttr(toolUse.id)}">Ver diff</button>`);
   }
-  const knownAttachment = resolveAttachment(file.identifier);
+  const knownAttachment = resolveAvailableAttachment(file.identifier);
   if (knownAttachment) {
     buttons.push(`<button type="button" class="preview-attachment" data-attachment-id="${escapeAttr(knownAttachment.id)}">Ver arquivo</button>`);
   }
@@ -4671,6 +4671,13 @@ async function uploadSelectedFiles(event) {
 async function openAttachmentViewer(attachmentId) {
   const attachment = resolveAttachment(attachmentId);
   if (!attachment) return;
+  if (isDeletedAttachment(attachment)) {
+    state.error = 'Anexo removido. A cópia e o conteúdo não serão enviados para a IA.';
+    state.attachmentDiff = null;
+    state.attachmentViewer = null;
+    renderPreservingVisualState();
+    return;
+  }
   state.attachmentDiff = null;
   state.attachmentViewer = {
     ...attachment,
@@ -4761,6 +4768,15 @@ function resolveAttachment(attachmentId) {
     state.activeChat?.messages?.flatMap((message) => message.attachments || []).find((item) => item.id === value || item.name === value) ||
     null
   );
+}
+
+function resolveAvailableAttachment(attachmentId) {
+  const attachment = resolveAttachment(attachmentId);
+  return attachment && !isDeletedAttachment(attachment) ? attachment : null;
+}
+
+function isDeletedAttachment(attachment = {}) {
+  return Boolean(attachment?.deletedAt || attachment?.sendMode === 'deleted');
 }
 
 function updateAttachmentEverywhere(updatedAttachment) {
@@ -6115,7 +6131,9 @@ function captureSettingsDraftFromForm() {
     networkEnabled: form.get('networkEnabled') === 'on',
     authPassword: form.get('authPassword') || '',
   };
-  state.settingsDraft.persistentMemory = form.get('persistentMemory') || state.settingsDraft.persistentMemory || '';
+  state.settingsDraft.persistentMemory = form.has('persistentMemory')
+    ? String(form.get('persistentMemory') ?? '')
+    : state.settingsDraft.persistentMemory || '';
 }
 
 function updateDirtyIndicators() {

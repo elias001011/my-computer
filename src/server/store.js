@@ -880,16 +880,25 @@ export async function deleteAttachment(id, attachmentId) {
     const attachments = await readJson(attachmentsPath, []);
     const target = attachments.find((item) => item.id === attachmentId);
     if (!target) return null;
-    await fs.rm(assertAttachmentPath(id, target.path), { force: true });
+    const filePath = assertAttachmentPath(id, target.path);
+    let data = null;
+    try {
+      data = await fs.readFile(filePath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    await fs.rm(filePath, { force: true });
     await writeJson(
       attachmentsPath,
       attachments.filter((item) => item.id !== attachmentId),
       0o600,
     );
-    return { ...target, deletedAt };
+    return { ...target, deletedAt, deletionData: data };
   });
   if (!attachment) return;
-  await redactDeletedAttachmentReferencesInMessages(id, attachment);
+  const redactionPlan = createAttachmentRedactionPlan(attachment, attachment.deletionData);
+  await redactDeletedAttachmentReferencesInMessages(id, attachment, redactionPlan);
+  await redactDeletedAttachmentContextFiles(id, redactionPlan);
   await touchChat(id);
   await appendEvent({ type: 'chat.attachment.deleted', chatId: id, details: { name: attachment.name } });
 }
@@ -2088,26 +2097,44 @@ async function updateAttachmentReferencesInMessages(id, attachment) {
   });
 }
 
-async function redactDeletedAttachmentReferencesInMessages(id, attachment) {
+async function redactDeletedAttachmentReferencesInMessages(id, attachment, redactionPlan) {
   const messagesPath = path.join(getChatDir(id), 'messages.json');
   const redacted = sanitizeDeletedAttachmentSnapshot(attachment);
   await withFileLock(messagesPath, async () => {
     const messages = await readJson(messagesPath, []);
     let changed = false;
     const next = messages.map((message) => {
-      if (!Array.isArray(message.attachments)) return message;
+      let nextMessage = redactAttachmentData(message, redactionPlan);
+      if (!Array.isArray(nextMessage.attachments)) {
+        if (nextMessage !== message) changed = true;
+        return nextMessage;
+      }
       let messageChanged = false;
-      const attachments = message.attachments.map((item) => {
+      const attachments = nextMessage.attachments.map((item) => {
         if (item.id !== attachment.id) return item;
         messageChanged = true;
         return redacted;
       });
-      if (!messageChanged) return message;
+      if (!messageChanged) {
+        if (nextMessage !== message) changed = true;
+        return nextMessage;
+      }
       changed = true;
-      return { ...message, attachments };
+      return { ...nextMessage, attachments };
     });
     if (changed) await writeJson(messagesPath, next, 0o600);
   });
+}
+
+async function redactDeletedAttachmentContextFiles(id, redactionPlan) {
+  const metadata = await readChatMetadata(id);
+  for (const filePath of [metadata.paths.context, metadata.paths.contextWindow].filter(Boolean)) {
+    await withFileLock(filePath, async () => {
+      const current = await readText(filePath, '');
+      const next = redactAttachmentString(current, redactionPlan);
+      if (next !== current) await fs.writeFile(filePath, next, { mode: 0o600 });
+    });
+  }
 }
 
 function sanitizeMessagesForAvailableAttachments(messages = [], attachments = []) {
@@ -2136,6 +2163,83 @@ function sanitizeDeletedAttachmentSnapshot(attachment = {}) {
     extractionNote: 'Anexo removido pelo usuário. Conteúdo e caminho local foram apagados.',
     deletedAt: attachment.deletedAt || new Date().toISOString(),
   };
+}
+
+function createAttachmentRedactionPlan(attachment = {}, data = null) {
+  const marker = `[conteúdo removido do anexo "${attachment.name || attachment.id || 'arquivo'}"]`;
+  const pathMarker = '[caminho removido de anexo apagado]';
+  const rawText = data ? data.toString('utf8').replace(/\u0000/g, '') : '';
+  const extractedFromRaw = rawText ? extractAttachmentText(data, { name: attachment.name || '', mimeType: attachment.mimeType || '' }).text : '';
+  const values = [
+    rawText,
+    rawText.replace(/\r\n/g, '\n').trim(),
+    extractedFromRaw,
+    attachment.extractedText,
+    attachment.previewText,
+  ];
+  for (const value of [rawText, extractedFromRaw, attachment.extractedText, attachment.previewText]) {
+    const text = String(value || '').replace(/\r\n/g, '\n');
+    values.push(truncate(text.trim(), 160000), truncate(text.trim(), 60000), truncate(text.trim(), 12000));
+    for (const line of text.split('\n')) {
+      const cleanLine = line.trim();
+      if (cleanLine.length >= 8) values.push(cleanLine);
+    }
+  }
+  const contentNeedles = uniqueRedactionNeedles(values, { max: 2500 });
+  const pathNeedles = uniqueRedactionNeedles([attachment.path, attachment.path ? path.basename(attachment.path) : ''], { minLength: 8, max: 10 });
+  return { marker, pathMarker, contentNeedles, pathNeedles };
+}
+
+function uniqueRedactionNeedles(values = [], options = {}) {
+  const minLength = Number(options.minLength || 8);
+  const max = Number(options.max || 1000);
+  const seen = new Set();
+  const needles = [];
+  for (const value of values) {
+    const text = String(value || '');
+    const variants = [text, text.replace(/\r\n/g, '\n'), text.replace(/\n\.\.\.\[truncated\]$/, '')];
+    for (const variant of variants) {
+      const needle = variant.trim();
+      if (needle.length < minLength || seen.has(needle)) continue;
+      seen.add(needle);
+      needles.push(needle);
+      if (needles.length >= max) return needles.sort((a, b) => b.length - a.length);
+    }
+  }
+  return needles.sort((a, b) => b.length - a.length);
+}
+
+function redactAttachmentData(value, redactionPlan) {
+  if (typeof value === 'string') return redactAttachmentString(value, redactionPlan);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const redacted = redactAttachmentData(item, redactionPlan);
+      if (redacted !== item) changed = true;
+      return redacted;
+    });
+    return changed ? next : value;
+  }
+  if (!value || typeof value !== 'object') return value;
+  let changed = false;
+  const next = {};
+  for (const [key, item] of Object.entries(value)) {
+    const redacted = redactAttachmentData(item, redactionPlan);
+    if (redacted !== item) changed = true;
+    next[key] = redacted;
+  }
+  return changed ? next : value;
+}
+
+function redactAttachmentString(value, redactionPlan = {}) {
+  let text = String(value || '');
+  const replaceAll = (needle, marker) => {
+    if (!needle || !text.includes(needle)) return;
+    text = text.split(needle).join(marker);
+  };
+  for (const needle of redactionPlan.contentNeedles || []) replaceAll(needle, redactionPlan.marker || '[conteúdo de anexo removido]');
+  for (const needle of redactionPlan.pathNeedles || []) replaceAll(needle, redactionPlan.pathMarker || '[caminho de anexo removido]');
+  return text;
 }
 
 function classifyAttachment(mimeType, name) {
