@@ -591,7 +591,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       }
     }
 
-    const toolOutputsRequested = approvalToolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
+    const toolOutputsRequested = toolCalls.some((toolCall) => shouldReturnToolOutput(toolCall));
     if (!toolOutputsRequested) {
       const hasToolErrors = toolUses.some((toolUse) => toolUseHasExecutionFailure(toolUse));
       const finalStatus = hasToolErrors ? 'incomplete' : 'sent';
@@ -1116,6 +1116,26 @@ async function resetStaleRunningToolApproval(chatId, message) {
   const pendingState = message.pendingToolApproval || {};
   const decisions = { ...(pendingState.decisions || {}) };
   const approvalIds = new Set((pendingState.approvalToolCalls || pendingState.toolCalls || []).map((toolCall) => toolCall.id));
+  const hasUnknownExecutedSideEffect = (message.toolUses || []).some(
+    (toolUse) => approvalIds.has(toolUse.id) && toolUse.status === 'approved_pending_execution',
+  );
+  if (hasUnknownExecutedSideEffect) {
+    await updateMessage(chatId, message.id, {
+      status: 'incomplete',
+      content:
+        'A execução aprovada foi interrompida depois da aprovação. Para evitar repetir comandos ou edições, revise o estado atual e use Continuar em vez de aprovar novamente.',
+      pendingToolApproval: null,
+      continuationAvailable: true,
+      error: 'Execução aprovada interrompida; rerun automático bloqueado por segurança.',
+      interruptedAt: new Date().toISOString(),
+    });
+    await appendEvent({
+      type: 'tool.approval.running_stale_marked_incomplete',
+      chatId,
+      details: { messageId: message.id, staleMs: getRunningToolStaleMs(), reason: 'approved_execution_unknown' },
+    });
+    return;
+  }
   const toolUses = (message.toolUses || []).map((toolUse) => {
     if (toolUse.status === 'denied') {
       decisions[toolUse.id] = 'deny';
@@ -2149,9 +2169,10 @@ function extractSyntheticToolCalls(content = '', tools = {}) {
   }
 
   const inlinePattern =
-    /\b(run_terminal_command|web_search|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
-  for (const match of text.matchAll(inlinePattern)) {
-    candidates.push({ name: match[1], body: match[2] });
+    /^(run_terminal_command|web_search|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat)\s*\(\s*(\{[\s\S]*\})\s*\)$/i;
+  const inline = text.trim().match(inlinePattern);
+  if (inline) {
+    candidates.push({ name: inline[1], body: inline[2] });
   }
 
   return candidates
@@ -2240,7 +2261,7 @@ function extractFakeWebSearchInput(content = '') {
   const text = String(content || '');
   const tagged = text.match(/<web_search>\s*([\s\S]*?)\s*<\/web_search>/i);
   if (tagged) return extractJsonObject(tagged[1]);
-  const inline = text.match(/\bweb_search\b\s*=?\s*(\{[\s\S]*?\})(?:\s*$|\s*<\/|\s*\n)/i);
+  const inline = text.trim().match(/^web_search\s*=?\s*(\{[\s\S]*\})$/i);
   if (inline) return extractJsonObject(inline[1]);
   return null;
 }
@@ -2359,8 +2380,7 @@ function toolRequiresApproval(toolCall, config = {}) {
     return true;
   }
   if (name === 'chat_document') {
-    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
-    return input.action === 'replace' || input.action === 'write';
+    return true;
   }
   if (name === 'web_search') {
     const searchMode = getSearchMode(config.tools);
@@ -2413,15 +2433,22 @@ function shouldReturnToolOutput(toolCall) {
 }
 
 function appendToolResultForModel(messages, toolCall, toolUse) {
-  if (!shouldReturnToolOutput(toolCall)) return false;
-  const outputLimit = ['persistent_memory_user', 'chat_document'].includes(toolUse.name) ? 30000 : 12000;
+  const returnOutput = shouldReturnToolOutput(toolCall);
+  const outputLimit = ['persistent_memory_user', 'chat_document'].includes(toolUse.name) ? 70000 : 12000;
+  const result = returnOutput
+    ? toolUse.result
+    : {
+        action: toolUse.result?.action || 'completed',
+        outputOmitted: true,
+        reason: 'returnOutput was false; detailed output was intentionally omitted by the app.',
+      };
   messages.push({
     role: 'tool',
     tool_call_id: toolCall.id,
     name: toolUse.name,
-    content: truncate(JSON.stringify(toolUse.result), outputLimit),
+    content: truncate(JSON.stringify(result), outputLimit),
   });
-  return true;
+  return returnOutput;
 }
 
 function renderToolFailureMessage(toolUse) {

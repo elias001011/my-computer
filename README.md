@@ -231,7 +231,7 @@ Additional files can be sent with every prompt, or only exposed as an index. Whe
 
 Files attached in a chat are copied into the My Computer runtime. The original file outside the app is not modified.
 
-Text-like attachments such as Markdown, plain text, HTML, JSON, YAML, CSV, code, and logs can be opened from the chat viewer and edited manually. When the `chat_document` tool is enabled, the AI can also list, read, replace snippets, or rewrite those chat documents. Write operations require tool approval unless `Always allow any tool` is enabled.
+Text-like attachments such as Markdown, plain text, HTML, JSON, YAML, CSV, code, and logs can be opened from the chat viewer and edited manually. When the `chat_document` tool is enabled, the AI can also list, read, replace snippets, or rewrite those chat documents. The tool requires approval unless `Always allow any tool` is enabled, because reads can expose attachment contents to the selected provider.
 
 This is separate from persistent memory: editable chat documents stay attached to the conversation, while additional memory files are durable context that can be used across chats in the active section.
 

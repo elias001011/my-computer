@@ -137,6 +137,7 @@ Para saídas longas ou tarefas demoradas:
 - `persistent_memory_user` e `edit_persistent_memory_user` trabalham em arquivos de memória durável adicionados pelo usuário na seção de memória.
 - `chat_document` trabalha em anexos de texto do chat atual, como `.md`, `.txt`, `.html`, `.json`, `.yaml`, código e logs.
 - A edição de anexo altera só a cópia salva em `attachments/` dentro do runtime do chat; o arquivo original enviado de fora não é modificado.
+- Quando `Sempre permitir qualquer tool` está desligado, qualquer uso de `chat_document` pede aprovação, inclusive leitura/listagem.
 
 ### Exemplo mental
 

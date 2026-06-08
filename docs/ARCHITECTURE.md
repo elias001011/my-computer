@@ -149,6 +149,7 @@ Para saídas longas ou execuções demoradas:
 - Texto, markdown, json, csv, html e código podem passar por extração local.
 - Anexos texto também podem ser lidos/editados pela tool `chat_document`, sempre na cópia salva dentro do runtime do chat.
 - `chat_document read` retorna conteúdo cru paginado; `replace` troca um trecho exato; `write` substitui o documento inteiro.
+- Todas as ações de `chat_document` exigem aprovação quando tools automáticas estão desligadas, porque até `list/read` podem revelar conteúdo de anexos ao provider.
 - Edições por `chat_document` atualizam o arquivo, `attachments.json`, previews extraídos e referências do anexo nas mensagens.
 - Imagens só entram como multimodal quando o modelo suporta.
 - Vídeos e áudios ficam como referência com preview local no MVP.

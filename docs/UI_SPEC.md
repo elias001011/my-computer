@@ -171,7 +171,7 @@ A UI só mostra o que faz sentido para o provider/modelo ativo. Parâmetros que 
 - Anexos texto do chat têm `Abrir/editar`, que carrega o arquivo cru salvo no runtime. Edições da IA por `chat_document` aparecem como `Documento atualizado`, com `Ver diff` e `Ver arquivo`.
 - `persistent_memory_user list` pode ocorrer sem aprovação; `persistent_memory_user read` pede aprovação quando tools automáticas estão desligadas.
 - Leituras grandes de `persistent_memory_user` retornam `truncated`, `nextOffset` e faixa lida para a IA continuar com `offset`.
-- `chat_document list/read` pode ocorrer sem aprovação; `chat_document replace/write` pede aprovação quando tools automáticas estão desligadas.
+- `chat_document list/read/replace/write` pede aprovação quando tools automáticas estão desligadas, porque listar/ler anexos pode expor conteúdo privado ao provider ativo.
 
 ## Rede local e updates
 

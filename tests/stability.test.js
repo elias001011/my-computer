@@ -29,6 +29,13 @@ test('normalizes web_search tool calls and fake tool text', async () => {
   assert.equal(functionCalls[0].function.name, 'run_terminal_command');
   assert.deepEqual(JSON.parse(functionCalls[0].function.arguments), { command: 'pwd', returnOutput: true });
   assert.doesNotMatch(assistant.sanitizeAssistantToolLikeText(functionText), /function=run_terminal_command/);
+  const inlineExample =
+    'Example: `run_terminal_command({"command":"touch /tmp/poc","returnOutput":false})` should not execute.';
+  assert.equal(assistant.normalizeAssistantToolCalls([], inlineExample, { terminal: true, searchMode: 'off' }).length, 0);
+  const exactInline = 'run_terminal_command({"command":"pwd","returnOutput":true})';
+  const exactInlineCalls = assistant.normalizeAssistantToolCalls([], exactInline, { terminal: true, searchMode: 'off' });
+  assert.equal(exactInlineCalls.length, 1);
+  assert.equal(exactInlineCalls[0].function.name, 'run_terminal_command');
   const userMemoryText =
     '<function=persistent_memory_user> {"action":"read","fileId":"abc","reason":"usar memória do usuário","returnOutput":true} </function>';
   const userMemoryCalls = assistant.normalizeAssistantToolCalls([], userMemoryText, { userMemory: true });
@@ -38,6 +45,17 @@ test('normalizes web_search tool calls and fake tool text', async () => {
     action: 'read',
     fileId: 'abc',
     reason: 'usar memória do usuário',
+    returnOutput: true,
+  });
+  const chatDocumentText =
+    '<function=chat_document> {"action":"read","attachmentId":"doc-1","reason":"ler documento anexado","returnOutput":true} </function>';
+  const chatDocumentCalls = assistant.normalizeAssistantToolCalls([], chatDocumentText, { chatDocuments: true });
+  assert.equal(chatDocumentCalls.length, 1);
+  assert.equal(chatDocumentCalls[0].function.name, 'chat_document');
+  assert.deepEqual(JSON.parse(chatDocumentCalls[0].function.arguments), {
+    action: 'read',
+    attachmentId: 'doc-1',
+    reason: 'ler documento anexado',
     returnOutput: true,
   });
   assert.equal(assistant.sanitizeAssistantToolLikeText('<think>não mostrar</think>Resposta limpa.'), 'Resposta limpa.');
@@ -882,6 +900,185 @@ test('approved tool output returns to the model with tools still enabled', async
   }
 });
 
+test('chat document read requires approval before returning attachment content to provider', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-chat-document-read-approval-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-chat-doc-read-approval-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-chat-doc-read-approval-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: false,
+        chatDocuments: true,
+        searchMode: 'off',
+        alwaysAllow: false,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Attachment approval', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+    const attachment = await store.saveAttachment(chat.id, {
+      name: 'secrets.txt',
+      mimeType: 'text/plain',
+      dataBase64: Buffer.from('secret-token\n').toString('base64'),
+    });
+
+    global.fetch = async (url, options = {}) => {
+      if (!String(url).includes('/chat/completions')) return originalFetch(url, options);
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'Vou ler o anexo.',
+                tool_calls: [
+                  {
+                    id: 'tool-chat-document-read',
+                    type: 'function',
+                    function: {
+                      name: 'chat_document',
+                      arguments: JSON.stringify({
+                        action: 'read',
+                        attachmentId: attachment.id,
+                        reason: 'ler anexo',
+                        returnOutput: true,
+                      }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: {},
+        }),
+      };
+    };
+
+    const pending = await assistant.sendUserMessage(chat.id, 'Leia o anexo.', { attachmentIds: [attachment.id] });
+    assert.equal(pending.assistantMessage.status, 'needs_tool_approval');
+    assert.equal(pending.assistantMessage.toolUses[0].name, 'chat_document');
+    assert.equal(pending.assistantMessage.toolUses[0].input.action, 'read');
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(JSON.stringify(pending.assistantMessage.toolUses[0].result || {}), /secret-token/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('mixed returnOutput tool calls still send protocol results for every tool call', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-mixed-tool-results-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const calls = [];
+  const command = `${process.execPath} -e ${JSON.stringify("console.log('needed output')")}`;
+  try {
+    const store = await import(`../src/server/store.js?test=${Date.now()}-mixed-tool-results-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${Date.now()}-mixed-tool-results-assistant`);
+    await store.ensureRuntime();
+    await store.saveConfig({
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      tools: {
+        terminal: true,
+        chatTitle: true,
+        searchMode: 'off',
+        alwaysAllow: true,
+      },
+      providerSettings: {
+        'openai-compatible': {
+          baseUrl: 'https://example.test/v1',
+          apiKeys: [{ value: 'test-key' }],
+        },
+      },
+    });
+    const chat = await store.createChat('Mixed tools', {
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+    });
+
+    global.fetch = async (url, options = {}) => {
+      if (!String(url).includes('/chat/completions')) return originalFetch(url, options);
+      const body = options.body ? JSON.parse(options.body) : {};
+      calls.push(body);
+      if (calls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou nomear e checar.',
+                  tool_calls: [
+                    {
+                      id: 'rename-tool',
+                      type: 'function',
+                      function: {
+                        name: 'rename_chat',
+                        arguments: JSON.stringify({ title: 'Mixed tools check', reason: 'teste', returnOutput: false }),
+                      },
+                    },
+                    {
+                      id: 'terminal-tool',
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({ command, returnOutput: true }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      const toolMessages = (body.messages || []).filter((message) => message.role === 'tool');
+      assert.deepEqual(
+        toolMessages.map((message) => message.tool_call_id).sort(),
+        ['rename-tool', 'terminal-tool'],
+      );
+      assert.match(toolMessages.find((message) => message.tool_call_id === 'rename-tool').content, /outputOmitted/);
+      assert.match(toolMessages.find((message) => message.tool_call_id === 'terminal-tool').content, /needed output/);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Tudo certo.' }, finish_reason: 'stop' }],
+          usage: {},
+        }),
+      };
+    };
+
+    const sent = await assistant.sendUserMessage(chat.id, 'Teste tools mistas.');
+    assert.equal(sent.assistantMessage.status, 'sent');
+    assert.equal(calls.length, 2);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('terminal nonzero exit with returnOutput true is passed back to the model', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-terminal-nonzero-output-'));
   process.env.MY_COMPUTER_HOME = tempDir;
@@ -1139,7 +1336,7 @@ test('pending tool approval blocks new chat turns until resolved', async () => {
   }
 });
 
-test('stale running tool approvals reset instead of trapping the chat', async () => {
+test('stale approved tool execution is marked incomplete instead of rerunning side effects', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-stale-running-approval-'));
   process.env.MY_COMPUTER_HOME = tempDir;
   const originalFetch = global.fetch;
@@ -1234,16 +1431,10 @@ test('stale running tool approvals reset instead of trapping the chat', async ()
       toolCallId: 'memory-tool-1',
     });
     const resetMessage = reset.chat.messages.find((message) => message.id === pending.assistantMessage.id);
-    assert.equal(resetMessage.status, 'needs_tool_approval');
-    assert.equal(resetMessage.toolUses[0].status, 'pending_approval');
-
-    const completed = await assistant.continueToolApproval(chat.id, pending.assistantMessage.id, 'approve', {
-      toolCallId: 'memory-tool-1',
-    });
-    const completedMessage = completed.chat.messages.find((message) => message.id === pending.assistantMessage.id);
-    assert.equal(completedMessage.status, 'sent');
-    assert.equal(completedMessage.pendingToolApproval, null);
-    assert.match(await store.readMemory(chat.id), /recuperado após running stale/);
+    assert.equal(resetMessage.status, 'incomplete');
+    assert.equal(resetMessage.pendingToolApproval, null);
+    assert.equal(resetMessage.continuationAvailable, true);
+    assert.doesNotMatch(await store.readMemory(chat.id), /recuperado após running stale/);
     assert.equal(providerCalls, 1);
   } finally {
     global.fetch = originalFetch;

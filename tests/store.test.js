@@ -235,6 +235,15 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(pdf.sendMode, 'reference');
   assert.match(pdf.extractionNote, /PDF salvo/);
 
+  const removedAttachment = await store.saveAttachment(chat.id, {
+    name: 'remove-me.md',
+    mimeType: 'text/markdown',
+    dataBase64: Buffer.from('# Remove me\n').toString('base64'),
+  });
+  assert.equal((await store.listAttachments(chat.id)).length, 4);
+  await store.deleteAttachment(chat.id, removedAttachment.id);
+  assert.equal((await store.listAttachments(chat.id)).some((item) => item.id === removedAttachment.id), false);
+
   await assert.rejects(
     () =>
       store.saveAttachment(chat.id, {
@@ -259,6 +268,7 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.deepEqual(exported.config.routing.modelFallbacks, [{ provider: 'groq', model: 'openai/gpt-oss-120b' }]);
   assert.equal(exported.chats[0].metadata.modelSettings.maxTokens, 1000);
   assert.equal(exported.chats[0].attachments.length, 3);
+  assert.equal(exported.chats[0].attachments.some((item) => item.name === 'remove-me.md'), false);
   assert.equal(exported.persistentMemoryUserFiles.length, 1);
 
   await store.saveConfig({

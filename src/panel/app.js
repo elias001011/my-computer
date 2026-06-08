@@ -628,6 +628,7 @@ function translateDynamicUiValue(value) {
     [/^Renomeando seção\.\.\.$/, 'Renaming section...'],
     [/^Apagando seção\.\.\.$/, 'Deleting section...'],
     [/^Removendo arquivo de memória\.\.\.$/, 'Removing memory file...'],
+    [/^Removendo anexo\.\.\.$/, 'Removing attachment...'],
     [/^Carregando arquivo de memória\.\.\.$/, 'Loading memory file...'],
     [/^Salvando arquivo de memória\.\.\.$/, 'Saving memory file...'],
     [/^Salvando documento\.\.\.$/, 'Saving document...'],
@@ -664,6 +665,7 @@ function translateDynamicUiValue(value) {
     [/^Seção criada: (.+)$/, (_match, section) => `Section created: ${section}`],
     [/^Arquivo "(.+)" salvo\.$/, (_match, file) => `File "${file}" saved.`],
     [/^Documento "(.+)" salvo\.$/, (_match, file) => `Document "${file}" saved.`],
+    [/^Anexo "(.+)" removido\.$/, (_match, file) => `Attachment "${file}" removed.`],
     [/^Documento atualizado: (.+)$/, (_match, file) => `Document updated: ${file}`],
     [/^(.+) · ([^·]+) · ([^·]+) · cópia salva no My Computer$/, (_match, size, mimeType, kind) => `${size} · ${mimeType.trim()} · ${uiText(kind.trim())} · copy saved in My Computer`],
     [/^(\d+) chat\(s\) excluído\(s\)\.$/, (_match, count) => `${count} chat(s) deleted.`],
@@ -679,6 +681,7 @@ function translateDynamicUiValue(value) {
     [/^Apagar a seção "(.+)" e todos os seus chats, configurações e memórias\?$/, (_match, section) => `Delete section "${section}" and all its chats, settings, and memories?`],
     [/^Remover "(.+)" dos arquivos de memória persistente\?$/, (_match, file) => `Remove "${file}" from persistent memory files?`],
     [/^Descartar alterações não salvas neste documento\?$/, 'Discard unsaved changes in this document?'],
+    [/^Descartar alterações não salvas nos parâmetros do modelo\?$/, 'Discard unsaved model parameter changes?'],
     [/^Apagar o chat "(.+)"\?$/, (_match, title) => `Delete chat "${displayChatTitle(title)}"?`],
     [/^Excluir todos os (\d+) chat\(s\) desta seção\? Isso apaga mensagens, anexos, memória e contexto dos chats\. Faça um backup antes se quiser preservar algo\.$/, (_match, count) => `Delete all ${count} chat(s) in this section? This deletes chat messages, attachments, memory, and context. Make a backup first if you want to preserve anything.`],
     [/^(\d+) saída\(s\) · (\d+) tool\(s\)$/, (_match, outputs, tools) => `${outputs} output(s) · ${tools} tool(s)`],
@@ -2645,10 +2648,12 @@ function renderToolApprovalPanel(message) {
       <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Permitir</button>
       <button type="button" class="danger-button deny-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Negar</button>
       ${renderUserMemoryToolButtons(toolUse)}
+      ${renderChatDocumentToolButtons(toolUse)}
     `
     : `
       <button type="button" class="primary approve-tool" data-message-id="${escapeAttr(message.id)}" data-tool-call-id="${escapeAttr(toolUse.id)}" ${disabled}>Verificar execução</button>
       ${renderUserMemoryToolButtons(toolUse)}
+      ${renderChatDocumentToolButtons(toolUse)}
     `;
   return `
     <div class="tool-approval-panel ${isPending ? 'needs-decision' : 'running'}">
@@ -3234,10 +3239,11 @@ function getChatDocumentEditDiffData(toolUse = {}) {
   if (toolUse.name !== 'chat_document') return null;
   const input = toolUse.input || {};
   const result = toolUse.result || {};
-  if (!['replace', 'write'].includes(result.action || input.action)) return null;
+  const action = result.action || input.action;
+  if (!['replace', 'write'].includes(action)) return null;
   const file = getChatDocumentToolFile(toolUse);
-  const oldText = result.action === 'replace' ? input.oldText : result.previousContent ?? '';
-  const newText = result.action === 'replace' ? input.newText : input.content ?? result.content ?? '';
+  const oldText = action === 'replace' ? input.oldText : result.previousContent ?? '';
+  const newText = action === 'replace' ? input.newText : input.content ?? result.content ?? '';
   if (!String(oldText) && !String(newText)) return null;
   return {
     toolUseId: toolUse.id,
@@ -4659,6 +4665,7 @@ async function uploadSelectedFiles(event) {
 async function openAttachmentViewer(attachmentId) {
   const attachment = resolveAttachment(attachmentId);
   if (!attachment) return;
+  state.attachmentDiff = null;
   state.attachmentViewer = {
     ...attachment,
     viewerLoading: isEditableAttachment(attachment),
@@ -4708,10 +4715,16 @@ async function saveAttachmentViewer(event) {
   const attachment = state.attachmentViewer;
   const textarea = document.querySelector('#attachment-viewer-input');
   if (!attachment || !textarea || state.busy || !state.activeChat?.id) return;
+  const nextContent = textarea.value;
+  state.attachmentViewer = {
+    ...attachment,
+    content: nextContent,
+    viewerLoading: false,
+  };
   await runAction('Salvando documento...', async () => {
     const data = await api(`/api/chats/${encodeURIComponent(state.activeChat.id)}/attachments/${encodeURIComponent(attachment.id)}/text`, {
       method: 'PUT',
-      body: { content: textarea.value },
+      body: { content: nextContent },
     });
     state.activeChat = data.chat || state.activeChat;
     state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
@@ -4900,9 +4913,23 @@ function isSupportedUpload(file) {
   return getSupportedUploadAccept().split(',').includes(extension) || ['application/json', 'application/xml', 'application/x-yaml'].includes(mimeType);
 }
 
-function removePendingAttachment(attachmentId) {
-  state.pendingAttachments = state.pendingAttachments.filter((attachment) => attachment.id !== attachmentId);
-  renderPreservingVisualState();
+async function removePendingAttachment(attachmentId) {
+  const attachment = state.pendingAttachments.find((item) => item.id === attachmentId);
+  if (!attachment) return;
+  if (!state.activeChat?.id) {
+    state.pendingAttachments = state.pendingAttachments.filter((item) => item.id !== attachmentId);
+    renderPreservingVisualState();
+    return;
+  }
+  await runAction('Removendo anexo...', async () => {
+    const data = await api(`/api/chats/${encodeURIComponent(state.activeChat.id)}/attachments/${encodeURIComponent(attachmentId)}`, {
+      method: 'DELETE',
+    });
+    state.pendingAttachments = state.pendingAttachments.filter((item) => item.id !== attachmentId);
+    state.activeChat = data.chat || state.activeChat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    state.status = `Anexo "${attachment.name}" removido.`;
+  });
 }
 
 function pasteAttachmentText(attachmentId) {
@@ -5691,6 +5718,11 @@ function openModelSettings() {
 }
 
 function closeModelSettings() {
+  if (state.modelSettingsDirty) {
+    const confirmed = confirmUi('Descartar alterações não salvas nos parâmetros do modelo?');
+    if (!confirmed) return;
+    state.modelSettingsDirty = false;
+  }
   state.modelSettingsOpen = false;
   renderPreservingVisualState();
 }
@@ -5767,6 +5799,7 @@ async function saveModelSettings(event, overrideSettings = null, options = {}) {
 
 function readModelSettingsForm() {
   const form = document.querySelector('#model-settings-form');
+  if (!form) return { ...(state.activeChat?.modelSettings || {}) };
   const data = new FormData(form);
   const settings = {};
   for (const name of ['temperature', 'topP', 'maxTokens', 'seed', 'presencePenalty', 'frequencyPenalty']) {
@@ -6532,7 +6565,17 @@ function updateStatusUi() {
 function captureOpenDrafts() {
   if (state.settingsOpen) captureSettingsDraftFromForm();
   if (state.chatSettingsDirty) captureChatSettingsDraftFromForm();
+  captureAttachmentViewerDraft();
   saveComposerDraft();
+}
+
+function captureAttachmentViewerDraft() {
+  const textarea = document.querySelector('#attachment-viewer-input');
+  if (!state.attachmentViewer || !textarea || state.attachmentViewer.viewerLoading) return;
+  state.attachmentViewer = {
+    ...state.attachmentViewer,
+    content: textarea.value,
+  };
 }
 
 function captureVisualState() {
