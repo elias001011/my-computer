@@ -719,14 +719,24 @@ function toOllamaRequestMessages(messages = []) {
 function extractOllamaToolCalls(message = {}, tools = []) {
   const nativeCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   if (nativeCalls.length) {
-    return nativeCalls.map((call, index) => ({
-      id: call.id || `call_${Date.now()}_${index}`,
-      type: 'function',
-      function: {
-        name: call.function?.name,
-        arguments: JSON.stringify(call.function?.arguments || {}),
-      },
-    }));
+    return nativeCalls.map((call, index) => {
+      const args = call.function?.arguments || {};
+      // MC lets the model opt out of seeing a tool's result via returnOutput:false
+      // (for fire-and-forget actions). Small local models routinely misjudge this —
+      // e.g. qwen3.5:4b sets it false on run_terminal_command even when the user
+      // is plainly asking for the command's result — leaving the model blind to
+      // its own output and the user stuck with a bare "Ação executada.". Force it
+      // true for Ollama, except rename_chat which never needs a result anyway.
+      const forcedArgs = call.function?.name === 'rename_chat' ? args : { ...args, returnOutput: true };
+      return {
+        id: call.id || `call_${Date.now()}_${index}`,
+        type: 'function',
+        function: {
+          name: call.function?.name,
+          arguments: JSON.stringify(forcedArgs),
+        },
+      };
+    });
   }
   return parseOllamaToolCalls(message.content, tools);
 }
