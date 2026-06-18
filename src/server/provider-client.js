@@ -656,7 +656,53 @@ function removeToolCallsFromContent(content = '', toolCalls = []) {
   return content.replace(/<tool_call>\s*[\s\S]*?<\/tool_call>/g, '').trim();
 }
 
+function ensureToolCallArgumentsObject(args) {
+  if (args && typeof args === 'object') return args;
+  if (typeof args === 'string') {
+    try {
+      return JSON.parse(args || '{}');
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
 
+// Ollama's native /api/chat rejects tool_calls[].function.arguments when it's a
+// JSON-encoded string (the OpenAI convention MC uses internally) with
+// "Value looks like object, but can't find closing '}' symbol" — it needs the raw object.
+function toOllamaRequestMessages(messages = []) {
+  return messages.map((message) => {
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls) || !message.tool_calls.length) {
+      return message;
+    }
+    return {
+      ...message,
+      tool_calls: message.tool_calls.map((call) => ({
+        ...call,
+        function: {
+          ...call.function,
+          arguments: ensureToolCallArgumentsObject(call.function?.arguments),
+        },
+      })),
+    };
+  });
+}
+
+function extractOllamaToolCalls(message = {}, tools = []) {
+  const nativeCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  if (nativeCalls.length) {
+    return nativeCalls.map((call, index) => ({
+      id: call.id || `call_${Date.now()}_${index}`,
+      type: 'function',
+      function: {
+        name: call.function?.name,
+        arguments: JSON.stringify(call.function?.arguments || {}),
+      },
+    }));
+  }
+  return parseOllamaToolCalls(message.content, tools);
+}
 
 async function callOllamaChat({
   provider,
@@ -671,9 +717,10 @@ async function callOllamaChat({
 }) {
   const body = {
     model,
-    messages,
+    messages: toOllamaRequestMessages(messages),
     stream: false,
   };
+  if (tools?.length) body.tools = tools;
   applyOpenAICompatibleModelSettings(body, provider, modelSettings, { temperature, maxTokens: maxTokens || 4096 });
 
   const bodyStr = JSON.stringify(body);
@@ -701,7 +748,7 @@ async function callOllamaChat({
     throw error;
   }
 
-  const toolCalls = parseOllamaToolCalls(message.content, tools);
+  const toolCalls = extractOllamaToolCalls(message, tools);
   const cleanedContent = removeToolCallsFromContent(message.content, toolCalls);
 
   return {
@@ -1244,7 +1291,6 @@ function getChatCompletionsUrl(baseUrl, provider = null) {
   }
   if (clean.endsWith('/chat/completions')) return clean;
   return `${clean}/chat/completions`;
-}/chat/completions`;
 }
 
 function getOllamaApiBaseUrl(openAIBaseUrl) {
