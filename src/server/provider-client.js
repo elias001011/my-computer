@@ -668,17 +668,44 @@ function ensureToolCallArgumentsObject(args) {
   return {};
 }
 
+// Ollama's native /api/chat requires `content` to be a string, plus a sibling
+// `images: [base64, ...]` array — it rejects MC's internal OpenAI-style content
+// array (`[{type:'image_url', image_url:{url:'data:...;base64,...'}}]`) outright
+// with "json: cannot unmarshal array into Go struct field ChatRequest.messages.content
+// of type string". Split text/image blocks into Ollama's shape here.
+function toOllamaContentAndImages(content) {
+  if (!Array.isArray(content)) return { content: content == null ? '' : String(content), images: [] };
+  const textParts = [];
+  const images = [];
+  for (const block of content) {
+    if (block?.type === 'text') {
+      textParts.push(String(block.text || ''));
+    } else if (block?.type === 'image_url') {
+      const url = block.image_url?.url || '';
+      const match = /^data:[^;]+;base64,(.+)$/.exec(url);
+      if (match) images.push(match[1]);
+    }
+  }
+  return { content: textParts.join('\n'), images };
+}
+
 // Ollama's native /api/chat rejects tool_calls[].function.arguments when it's a
 // JSON-encoded string (the OpenAI convention MC uses internally) with
 // "Value looks like object, but can't find closing '}' symbol" — it needs the raw object.
 function toOllamaRequestMessages(messages = []) {
   return messages.map((message) => {
-    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls) || !message.tool_calls.length) {
-      return message;
+    let result = message;
+    if (Array.isArray(message.content)) {
+      const { content, images } = toOllamaContentAndImages(message.content);
+      result = { ...result, content };
+      if (images.length) result.images = images;
+    }
+    if (result.role !== 'assistant' || !Array.isArray(result.tool_calls) || !result.tool_calls.length) {
+      return result;
     }
     return {
-      ...message,
-      tool_calls: message.tool_calls.map((call) => ({
+      ...result,
+      tool_calls: result.tool_calls.map((call) => ({
         ...call,
         function: {
           ...call.function,
