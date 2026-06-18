@@ -746,6 +746,10 @@ async function callOllamaChat({
     model,
     messages: toOllamaRequestMessages(messages),
     stream: false,
+    // Thinking models (qwen3.5, gemma4, ...) default to verbose chain-of-thought
+    // that can take 40x longer on CPU-only inference for no quality gain on
+    // everyday requests. Off by default; modelSettings.think opts back in.
+    think: modelSettings.think ?? false,
   };
   if (tools?.length) body.tools = tools;
   applyOpenAICompatibleModelSettings(body, provider, modelSettings, { temperature, maxTokens: maxTokens || 4096 });
