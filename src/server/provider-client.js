@@ -763,6 +763,19 @@ async function callOllamaChat({
   };
   if (tools?.length) body.tools = tools;
   applyOpenAICompatibleModelSettings(body, provider, modelSettings, { temperature, maxTokens: maxTokens || 4096 });
+  // applyOpenAICompatibleModelSettings sets body.max_tokens, which Ollama's native
+  // /api/chat silently ignores (confirmed: requests still ran to natural completion
+  // regardless of its value). Ollama also defaults num_ctx to a measly 4096 even for
+  // models with much larger trained context, so multi-tool-round conversations (system
+  // prompt + tool defs + several tool results) routinely fill the window before the
+  // model gets to write its final answer, surfacing as done_reason:"length" with no
+  // text — the bug behind responses cutting off to "Ação executada." or nothing at all.
+  // Ollama only honors these via the options sub-object.
+  body.options = {
+    num_predict: Number(modelSettings.maxTokens || maxTokens || 4096),
+    num_ctx: Number(modelSettings.numCtx || 8192),
+  };
+  delete body.max_tokens;
 
   const bodyStr = JSON.stringify(body);
 
