@@ -71,6 +71,17 @@ export async function callProviderChat({
               async (apiKey, selectedModel) => {
                 if (provider.id === 'ollama') {
                   await ensureOllamaModel(selectedModel, runtime.baseUrl, signal);
+                  return callOllamaChat({
+                    provider,
+                    runtime,
+                    model: selectedModel,
+                    messages,
+                    tools,
+                    temperature,
+                    maxTokens,
+                    modelSettings,
+                    signal,
+                  });
                 }
                 return callOpenAICompatibleChat({
                   provider,
@@ -596,6 +607,112 @@ async function postJson(url, body, headers, provider, options = {}) {
   return data;
 }
 
+
+function parseOllamaToolCalls(content = '', tools = []) {
+  const toolCalls = [];
+  const toolCallRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+
+  let match;
+  while ((match = toolCallRegex.exec(content)) !== null) {
+    try {
+      let block = match[1].trim();
+      block = block.replace(/<\|"\|>/g, '"');
+
+      let toolName = null;
+      let toolArgs = {};
+
+      if (block.startsWith('{')) {
+        const json = JSON.parse(block);
+        toolName = json.name;
+        toolArgs = json.arguments || {};
+      } else {
+        const parts = block.split(/\s+/);
+        toolName = parts[0];
+        if (parts.length > 1) {
+          const jsonStr = parts.slice(1).join(' ');
+          toolArgs = JSON.parse(jsonStr);
+        }
+      }
+
+      if (toolName) {
+        toolCalls.push({
+          id: `call_${Date.now()}_${Math.random()}`,
+          type: 'function',
+          function: {
+            name: toolName,
+            arguments: JSON.stringify(toolArgs || {}),
+          },
+        });
+      }
+    } catch {
+      // Invalid format, skip
+    }
+  }
+  return toolCalls;
+}
+
+function removeToolCallsFromContent(content = '', toolCalls = []) {
+  if (!toolCalls.length) return content;
+  return content.replace(/<tool_call>\s*[\s\S]*?<\/tool_call>/g, '').trim();
+}
+
+
+
+async function callOllamaChat({
+  provider,
+  runtime,
+  model,
+  messages,
+  tools,
+  temperature,
+  maxTokens,
+  modelSettings = {},
+  signal = null,
+}) {
+  const body = {
+    model,
+    messages,
+    stream: false,
+  };
+  applyOpenAICompatibleModelSettings(body, provider, modelSettings, { temperature, maxTokens: maxTokens || 4096 });
+
+  const bodyStr = JSON.stringify(body);
+
+  const { response, data } = await fetchJsonWithTimeout(getChatCompletionsUrl(runtime.baseUrl, provider), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: bodyStr,
+    signal,
+  }, provider);
+
+  if (!response.ok) {
+    const message = data?.error?.message || `${provider.label} retornou HTTP ${response.status}.`;
+    const error = new Error(String(message));
+    error.statusCode = response.status;
+    error.details = data;
+    throw error;
+  }
+
+  const message = data?.message;
+  if (!message) {
+    const error = new Error(`${provider.label} retornou uma resposta vazia.`);
+    error.statusCode = 502;
+    error.details = data;
+    throw error;
+  }
+
+  const toolCalls = parseOllamaToolCalls(message.content, tools);
+  const cleanedContent = removeToolCallsFromContent(message.content, toolCalls);
+
+  return {
+    role: message.role || 'assistant',
+    content: cleanedContent,
+    tool_calls: toolCalls,
+    finishReason: data?.done_reason || null,
+    usage: data.usage || null,
+  };
+}
+
 async function callOpenAICompatibleChat({
   provider,
   runtime,
@@ -1119,10 +1236,15 @@ function normalizeApiKeys(apiKeys) {
   ];
 }
 
-function getChatCompletionsUrl(baseUrl) {
+function getChatCompletionsUrl(baseUrl, provider = null) {
   const clean = stripTrailingSlash(baseUrl);
+  if (provider?.id === 'ollama') {
+    if (clean.endsWith('/api/chat')) return clean;
+    return `${clean}/api/chat`;
+  }
   if (clean.endsWith('/chat/completions')) return clean;
   return `${clean}/chat/completions`;
+}/chat/completions`;
 }
 
 function getOllamaApiBaseUrl(openAIBaseUrl) {
