@@ -534,6 +534,7 @@ async function bootstrap() {
 function applyBootstrapData(data = {}) {
   Object.assign(state, data);
   state.userMemoryFiles = data.userMemoryFiles || state.userMemoryFiles || [];
+  state.scheduledTasks = data.scheduledTasks || state.scheduledTasks || [];
   state.profiles = data.profiles || state.profiles || [];
   state.activeProfile = data.activeProfile || state.activeProfile || null;
   state.rootRuntimeHome = data.rootRuntimeHome || state.rootRuntimeHome || '';
@@ -1558,6 +1559,18 @@ function renderSettingsModal() {
               </div>
             </section>
 
+            <section class="modal-section settings-panel ${activeSection === 'scheduledTasks' ? 'active' : ''}" data-section="scheduledTasks">
+              <h3>Tarefas agendadas</h3>
+              <p class="help-text">Executa um prompt fixo automaticamente, num horário ou intervalo, com provider/modelo e tools próprios. Como ninguém fica presente pra aprovar nada, cada tarefa só pode usar as tools marcadas explicitamente na lista abaixo.</p>
+              <div class="scheduled-task-list">
+                ${renderScheduledTaskRows()}
+              </div>
+              <div class="button-row">
+                <button type="button" id="create-scheduled-task" ${state.busy ? 'disabled' : ''}>Criar tarefa</button>
+              </div>
+              ${state.scheduledTaskEditorId ? renderScheduledTaskEditor() : ''}
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'network' ? 'active' : ''}" data-section="network">
               <h3>Rede local</h3>
               <div class="notice-card">
@@ -1639,6 +1652,7 @@ function renderSettingsNav(activeSection) {
     ['memory', 'Memória'],
     ['tools', 'Tools'],
     ['context', 'Contexto'],
+    ['scheduledTasks', 'Tarefas agendadas'],
     ['network', 'Rede'],
     ['updates', 'Atualizações'],
     ['backup', 'Backup'],
@@ -1689,6 +1703,155 @@ function renderProfileRows() {
       `,
     )
     .join('');
+}
+
+const SCHEDULED_TASK_TOOL_LABELS = {
+  run_terminal_command: 'Terminal',
+  web_search: 'Busca web',
+  memory_chat: 'Memória do chat',
+  persistent_memory: 'Memória persistente global',
+  persistent_memory_user: 'Memória de arquivos do usuário',
+  edit_persistent_memory_user: 'Editar arquivos de memória do usuário',
+  chat_document: 'Documentos do chat',
+  compact_context: 'Compactar contexto',
+  rename_chat: 'Renomear chat',
+};
+
+function describeScheduledTaskSchedule(schedule = {}) {
+  if (schedule.type === 'interval') {
+    return `A cada ${schedule.everyHours}h`;
+  }
+  const hour = String(schedule.hour ?? 9).padStart(2, '0');
+  const minute = String(schedule.minute ?? 0).padStart(2, '0');
+  return `Diariamente às ${hour}:${minute} (${schedule.timezone || 'UTC'})`;
+}
+
+function renderScheduledTaskRows() {
+  const tasks = state.scheduledTasks || [];
+  if (!tasks.length) return '<p class="help-text">Nenhuma tarefa agendada ainda.</p>';
+  return tasks
+    .map((task) => {
+      const nextRun = task.nextRunAt ? new Date(task.nextRunAt).toLocaleString() : '—';
+      const lastRun = task.lastRunAt ? `${new Date(task.lastRunAt).toLocaleString()} (${task.lastRunStatus || '—'})` : 'Nunca executou';
+      return `
+        <div class="profile-row">
+          <div>
+            <strong>${escapeHtml(task.name)}</strong>
+            <small>${escapeHtml(describeScheduledTaskSchedule(task.schedule))} · ${task.enabled ? 'Ativa' : 'Desativada'}</small>
+            <small>Próxima execução: ${escapeHtml(nextRun)} · Última: ${escapeHtml(lastRun)}</small>
+          </div>
+          <div class="profile-row-actions">
+            <button type="button" class="run-scheduled-task" data-task-id="${escapeAttr(task.id)}" ${state.busy ? 'disabled' : ''}>Executar agora</button>
+            <button type="button" class="edit-scheduled-task" data-task-id="${escapeAttr(task.id)}" ${state.busy ? 'disabled' : ''}>Editar</button>
+            <button type="button" class="delete-scheduled-task danger-button" data-task-id="${escapeAttr(task.id)}" ${state.busy ? 'disabled' : ''}>Apagar</button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function renderScheduledTaskEditor() {
+  const editingId = state.scheduledTaskEditorId;
+  const isNew = editingId === 'new';
+  const task = isNew ? null : (state.scheduledTasks || []).find((item) => item.id === editingId);
+  if (!isNew && !task) return '';
+  const provider = task?.provider || state.config?.provider || 'groq';
+  const model = task?.model || state.config?.model || '';
+  const schedule = task?.schedule || { type: 'daily', hour: 9, minute: 0, timezone: 'UTC' };
+  const allowedTools = new Set(task?.allowedTools || []);
+  return `
+    <div class="scheduled-task-editor notice-card">
+      <h4>${isNew ? 'Nova tarefa agendada' : 'Editar tarefa'}</h4>
+      <div class="setup-grid">
+        <label>
+          Nome
+          <input id="sched-task-name" value="${escapeAttr(task?.name || '')}" placeholder="Ex.: Resumo diário" />
+        </label>
+        <label class="toggle-row switch-row">
+          <input type="checkbox" id="sched-task-enabled" ${task?.enabled !== false ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span><strong>Ativa</strong></span>
+        </label>
+      </div>
+      <label>
+        Prompt enviado a cada execução
+        <textarea id="sched-task-prompt" rows="4" placeholder="O que a IA deve fazer nesta execução?">${escapeHtml(task?.prompt || '')}</textarea>
+      </label>
+      <div class="setup-grid">
+        <label>
+          Provider
+          <select id="sched-task-provider">${renderProviderOptions(provider)}</select>
+        </label>
+        <label>
+          Modelo
+          <select id="sched-task-model">${renderModelOptions(provider, model)}</select>
+        </label>
+      </div>
+      <label>
+        Tipo de agendamento
+        <select id="sched-task-schedule-type">
+          <option value="daily" ${schedule.type !== 'interval' ? 'selected' : ''}>Diário</option>
+          <option value="interval" ${schedule.type === 'interval' ? 'selected' : ''}>Intervalo</option>
+        </select>
+      </label>
+      <div class="setup-grid" id="sched-task-daily-fields" style="${schedule.type === 'interval' ? 'display:none' : ''}">
+        <label>
+          Hora (0-23)
+          <input id="sched-task-hour" type="number" min="0" max="23" value="${escapeAttr(schedule.hour ?? 9)}" />
+        </label>
+        <label>
+          Minuto (0-59)
+          <input id="sched-task-minute" type="number" min="0" max="59" value="${escapeAttr(schedule.minute ?? 0)}" />
+        </label>
+        <label>
+          Timezone (IANA)
+          <input id="sched-task-timezone" value="${escapeAttr(schedule.timezone || 'UTC')}" placeholder="Ex.: America/Sao_Paulo" />
+        </label>
+      </div>
+      <div class="setup-grid" id="sched-task-interval-fields" style="${schedule.type === 'interval' ? '' : 'display:none'}">
+        <label>
+          A cada quantas horas
+          <input id="sched-task-every-hours" type="number" min="0.1" step="0.5" value="${escapeAttr(schedule.everyHours ?? 6)}" />
+        </label>
+      </div>
+      <div class="toggle-list">
+        <label class="toggle-row switch-row">
+          <input type="checkbox" id="sched-task-reuse-chat" ${task?.reuseChat !== false ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span>
+            <strong>Reusar o mesmo chat</strong>
+            <small>Quando desligado, cria um chat novo a cada execução.</small>
+          </span>
+        </label>
+        <label class="toggle-row switch-row">
+          <input type="checkbox" id="sched-task-skip-memory" ${task?.skipMemoryInPrompt !== false ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span>
+            <strong>Não incluir memórias nesta tarefa</strong>
+            <small>Pula a memória persistente global e os arquivos de memória do usuário no prompt, pra economizar tokens. O histórico do chat reusado continua normal.</small>
+          </span>
+        </label>
+      </div>
+      <fieldset class="scheduled-task-tools">
+        <legend>Tools permitidas (sem aprovação manual, já que ninguém estará presente)</legend>
+        ${Object.entries(SCHEDULED_TASK_TOOL_LABELS)
+          .map(
+            ([name, label]) => `
+              <label class="toggle-row">
+                <input type="checkbox" class="sched-task-tool-checkbox" value="${escapeAttr(name)}" ${allowedTools.has(name) ? 'checked' : ''} />
+                ${escapeHtml(label)}
+              </label>
+            `,
+          )
+          .join('')}
+      </fieldset>
+      <div class="button-row">
+        <button type="button" id="save-scheduled-task" ${state.busy ? 'disabled' : ''}>${isNew ? 'Criar' : 'Salvar'}</button>
+        <button type="button" id="cancel-scheduled-task-edit">Cancelar</button>
+      </div>
+    </div>
+  `;
 }
 
 const SETUP_STEPS = ['provider', 'profile', 'tools', 'network'];
@@ -1778,7 +1941,7 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
   if (form.has('alwaysAllowTools') || form.has('searchEnabled') || form.has('searchMode')) {
     const offlineMode = isOfflineMode(draft);
     const searchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draft.tools) : 'off';
-    const safeSearchMode = offlineMode && ['native', 'both'].includes(searchMode) ? 'off' : searchMode;
+    const safeSearchMode = offlineMode && searchMode === 'both' ? 'off' : searchMode;
     const userMemoryRead = form.has('userMemoryReadTool') ? form.get('userMemoryReadTool') === 'on' : draft.tools?.userMemory !== false;
     const userMemoryEdit = userMemoryRead && form.get('userMemoryEditTool') === 'on';
     draft.tools = {
@@ -1808,9 +1971,8 @@ function captureSetupDraftFromForm(formElement = document.querySelector('#setup-
 
 function renderSearchModeOptions(selectedMode) {
   const options = [
-    ['native', 'Web nativa', 'Busca interna do provider, sem confirmação local.'],
     ['terminal', 'Terminal', 'Usa terminal local e pede permissão quando necessário.'],
-    ['both', 'Ambos', 'Tenta web nativa primeiro e cai no terminal se a busca falhar ou vier vazia.'],
+    ['both', 'Ambos', 'Tenta web nativa primeiro (quando o provider suporta) e cai no terminal se a busca falhar ou vier vazia.'],
   ];
   const filtered = isOfflineMode(state.settingsDraft?.config || state.setupDraft || state.config)
     ? options.filter(([value]) => value === 'terminal')
@@ -1832,9 +1994,9 @@ function renderSearchModeOptions(selectedMode) {
 
 function renderSearchModeControl(selectedMode, options = {}) {
   const offlineMode = options.offlineMode === true;
-  const safeSelectedMode = offlineMode && ['native', 'both'].includes(selectedMode) ? 'off' : selectedMode;
+  const safeSelectedMode = offlineMode && selectedMode === 'both' ? 'off' : selectedMode;
   const enabled = safeSelectedMode !== 'off';
-  const mode = enabled && safeSelectedMode !== 'off' ? safeSelectedMode : offlineMode ? 'terminal' : 'native';
+  const mode = enabled && safeSelectedMode !== 'off' ? safeSelectedMode : offlineMode ? 'terminal' : 'both';
   const prefix = options.setup ? 'setup' : 'settings';
   return `
     <label class="toggle-row switch-row">
@@ -3770,10 +3932,10 @@ function modelSupportsImages(providerId, model) {
 
 function getSearchMode(tools = {}) {
   const mode = String(tools.searchMode || '').trim();
-  if (['off', 'native', 'terminal', 'both'].includes(mode)) return mode;
+  if (mode === 'off' || mode === 'terminal' || mode === 'both') return mode;
   if (tools.webSearch === false) return 'off';
   if (tools.searchTerminal === true) return 'terminal';
-  return 'native';
+  return 'both';
 }
 
 function isOfflineMode(config = {}) {
@@ -3782,7 +3944,7 @@ function isOfflineMode(config = {}) {
 
 function normalizeOfflineToolsForClient(tools = {}) {
   const mode = getSearchMode(tools);
-  const searchMode = ['native', 'both'].includes(mode) ? 'off' : mode;
+  const searchMode = mode === 'both' ? 'off' : mode;
   return {
     ...(tools || {}),
     searchMode,
@@ -4282,6 +4444,23 @@ function bindAppEvents() {
     document.querySelectorAll('.delete-profile').forEach((button) => {
       button.addEventListener('click', () => deleteProfileFromButton(button.dataset.profileId));
     });
+    document.querySelector('#create-scheduled-task')?.addEventListener('click', () => openScheduledTaskEditor('new'));
+    document.querySelectorAll('.edit-scheduled-task').forEach((button) => {
+      button.addEventListener('click', () => openScheduledTaskEditor(button.dataset.taskId));
+    });
+    document.querySelectorAll('.delete-scheduled-task').forEach((button) => {
+      button.addEventListener('click', () => deleteScheduledTaskFromButton(button.dataset.taskId));
+    });
+    document.querySelectorAll('.run-scheduled-task').forEach((button) => {
+      button.addEventListener('click', () => runScheduledTaskNowFromButton(button.dataset.taskId));
+    });
+    document.querySelector('#save-scheduled-task')?.addEventListener('click', saveScheduledTaskFromEditor);
+    document.querySelector('#cancel-scheduled-task-edit')?.addEventListener('click', closeScheduledTaskEditor);
+    document.querySelector('#sched-task-schedule-type')?.addEventListener('change', toggleScheduledTaskScheduleFields);
+    document.querySelector('#sched-task-provider')?.addEventListener('change', (event) => {
+      const select = document.getElementById('sched-task-model');
+      if (select) select.innerHTML = renderModelOptions(event.target.value, '');
+    });
     document.querySelector('#user-memory-file-input')?.addEventListener('change', uploadUserMemoryFiles);
     document.querySelectorAll('.remove-user-memory-file').forEach((button) => {
       button.addEventListener('click', () => deleteUserMemoryFile(button.dataset.fileId));
@@ -4662,6 +4841,88 @@ async function deleteProfileFromButton(profileId) {
     state.settingsOpen = false;
     state.settingsDraft = null;
     state.settingsDirty = false;
+  });
+}
+
+function openScheduledTaskEditor(id) {
+  if (state.busy) return;
+  state.scheduledTaskEditorId = id;
+  renderPreservingVisualState();
+}
+
+function closeScheduledTaskEditor() {
+  state.scheduledTaskEditorId = null;
+  renderPreservingVisualState();
+}
+
+function toggleScheduledTaskScheduleFields() {
+  const type = document.getElementById('sched-task-schedule-type')?.value;
+  const daily = document.getElementById('sched-task-daily-fields');
+  const interval = document.getElementById('sched-task-interval-fields');
+  if (daily) daily.style.display = type === 'interval' ? 'none' : '';
+  if (interval) interval.style.display = type === 'interval' ? '' : 'none';
+}
+
+function readScheduledTaskFormValues() {
+  const scheduleType = document.getElementById('sched-task-schedule-type')?.value === 'interval' ? 'interval' : 'daily';
+  const schedule =
+    scheduleType === 'interval'
+      ? { type: 'interval', everyHours: Number(document.getElementById('sched-task-every-hours')?.value || 6) }
+      : {
+          type: 'daily',
+          hour: Number(document.getElementById('sched-task-hour')?.value || 9),
+          minute: Number(document.getElementById('sched-task-minute')?.value || 0),
+          timezone: document.getElementById('sched-task-timezone')?.value || 'UTC',
+        };
+  const allowedTools = Array.from(document.querySelectorAll('.sched-task-tool-checkbox:checked')).map((el) => el.value);
+  return {
+    name: document.getElementById('sched-task-name')?.value || 'Tarefa agendada',
+    enabled: document.getElementById('sched-task-enabled')?.checked !== false,
+    prompt: document.getElementById('sched-task-prompt')?.value || '',
+    provider: document.getElementById('sched-task-provider')?.value,
+    model: document.getElementById('sched-task-model')?.value,
+    schedule,
+    allowedTools,
+    reuseChat: document.getElementById('sched-task-reuse-chat')?.checked !== false,
+    skipMemoryInPrompt: document.getElementById('sched-task-skip-memory')?.checked !== false,
+  };
+}
+
+async function saveScheduledTaskFromEditor() {
+  if (state.busy) return;
+  const editingId = state.scheduledTaskEditorId;
+  if (!editingId) return;
+  const payload = readScheduledTaskFormValues();
+  await runAction(editingId === 'new' ? 'Criando tarefa agendada...' : 'Salvando tarefa agendada...', async () => {
+    const data =
+      editingId === 'new'
+        ? await api('/api/scheduled-tasks', { method: 'POST', body: payload })
+        : await api(`/api/scheduled-tasks/${encodeURIComponent(editingId)}`, { method: 'PUT', body: payload });
+    state.scheduledTasks = data.scheduledTasks || state.scheduledTasks;
+    state.scheduledTaskEditorId = null;
+    state.status = 'Tarefa agendada salva.';
+  });
+}
+
+async function deleteScheduledTaskFromButton(taskId) {
+  if (state.busy) return;
+  const task = (state.scheduledTasks || []).find((item) => item.id === taskId);
+  if (!task) return;
+  const confirmed = confirmUi(`Apagar a tarefa agendada "${task.name}"?`);
+  if (!confirmed) return;
+  await runAction('Apagando tarefa agendada...', async () => {
+    const data = await api(`/api/scheduled-tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    state.scheduledTasks = data.scheduledTasks || state.scheduledTasks;
+    if (state.scheduledTaskEditorId === taskId) state.scheduledTaskEditorId = null;
+  });
+}
+
+async function runScheduledTaskNowFromButton(taskId) {
+  if (state.busy) return;
+  await runAction('Executando tarefa agora...', async () => {
+    const data = await api(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/run`, { method: 'POST' });
+    state.scheduledTasks = data.scheduledTasks || state.scheduledTasks;
+    state.status = data.started === false ? 'Tarefa já estava em execução.' : 'Tarefa executada agora.';
   });
 }
 
@@ -6025,7 +6286,7 @@ async function saveGeneralSettings(event, options = {}) {
     const tools = {
       terminal: form.get('tool_terminal') === 'on',
       deepInvestigation: form.get('tool_deepInvestigation') === 'on',
-      searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || (offlineMode ? 'terminal' : 'native') : 'off',
+      searchMode: form.get('searchEnabled') === 'on' ? form.get('searchMode') || (offlineMode ? 'terminal' : 'both') : 'off',
       chatMemory: form.get('tool_chatMemory') === 'on',
       persistentMemory: form.get('tool_persistentMemory') === 'on',
       chatDocuments: form.get('tool_chatDocuments') === 'on',
@@ -6194,7 +6455,7 @@ function captureSettingsDraftFromForm() {
     uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draftConfig.appearance?.uiLanguage),
   };
   const rawSearchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
-  const searchMode = offlineMode && ['native', 'both'].includes(rawSearchMode) ? 'off' : rawSearchMode;
+  const searchMode = offlineMode && rawSearchMode === 'both' ? 'off' : rawSearchMode;
   const userMemoryRead = form.get('tool_userMemory') === 'on';
   const userMemoryEdit = userMemoryRead && form.get('tool_userMemoryEdit') === 'on';
   draftConfig.tools = {

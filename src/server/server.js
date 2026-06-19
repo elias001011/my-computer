@@ -8,21 +8,25 @@ import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } 
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
 import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
+import { runScheduledTaskNow, startScheduler } from './scheduler.js';
 import {
   appendEvent,
   activateProfile,
   createChat,
   createProfile,
+  createScheduledTask,
   deleteAllChats,
   deleteChat,
   deleteAttachment,
   deleteProfile,
+  deleteScheduledTask,
   deleteUserMemoryFile,
   ensureRuntime,
   exportRuntimeData,
   getRuntimeInfo,
   importRuntimeData,
   listChats,
+  listScheduledTasks,
   listUserMemoryFilesWithHints,
   loadConfig,
   readAttachmentFile,
@@ -38,6 +42,7 @@ import {
   saveConfig,
   updateProfile,
   updateChatMetadata,
+  updateScheduledTask,
   withProfileScope,
   writeAttachmentTextContent,
   writeUserMemoryFileContent,
@@ -79,6 +84,7 @@ export async function startServer({ port = Number(process.env.PORT || 8787), hos
   };
   const { server, actualPort } = await listen(handler, actualHost, port);
   currentLaunch = { port: actualPort, requestedHost: host, actualHost };
+  startScheduler();
   const url = `http://${actualHost === '0.0.0.0' ? '127.0.0.1' : actualHost}:${actualPort}`;
   return { server, url, runtimeHome: runtimeInfo.runtimeHome, networkStatus: getNetworkStatus(config) };
 }
@@ -119,6 +125,11 @@ async function handleApiScoped(request, response, url) {
 
   if (parts[1] === 'profiles') {
     await handleProfilesApi(request, response, parts);
+    return;
+  }
+
+  if (parts[1] === 'scheduled-tasks') {
+    await handleScheduledTasksApi(request, response, parts);
     return;
   }
 
@@ -509,6 +520,44 @@ async function handleProfilesApi(request, response, parts) {
   sendJson(response, 404, { error: 'Endpoint de seção não encontrado.' });
 }
 
+async function handleScheduledTasksApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const taskId = parts[2];
+
+  if (method === 'GET' && !taskId) {
+    sendJson(response, 200, { scheduledTasks: await listScheduledTasks() });
+    return;
+  }
+
+  if (method === 'POST' && !taskId) {
+    const body = await readBody(request);
+    const task = await createScheduledTask(body);
+    sendJson(response, 201, { scheduledTask: task, scheduledTasks: await listScheduledTasks() });
+    return;
+  }
+
+  if (method === 'PUT' && taskId) {
+    const body = await readBody(request);
+    const task = await updateScheduledTask(taskId, body);
+    sendJson(response, 200, { scheduledTask: task, scheduledTasks: await listScheduledTasks() });
+    return;
+  }
+
+  if (method === 'DELETE' && taskId) {
+    await deleteScheduledTask(taskId);
+    sendJson(response, 200, { scheduledTasks: await listScheduledTasks() });
+    return;
+  }
+
+  if (method === 'POST' && taskId && parts[3] === 'run') {
+    const result = await runScheduledTaskNow(taskId);
+    sendJson(response, 200, { ...result, scheduledTasks: await listScheduledTasks() });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de tarefa agendada não encontrado.' });
+}
+
 async function handleUserMemoryApi(request, response, parts) {
   const method = request.method || 'GET';
   const fileId = parts[2];
@@ -567,6 +616,7 @@ async function buildBootstrapPayload() {
     activeChatEvents: activeChat ? await readChatEvents(activeChat.id) : [],
     persistentMemory: await readPersistentMemory(),
     userMemoryFiles: await listUserMemoryFilesWithHints(),
+    scheduledTasks: await listScheduledTasks(),
     runtimeHome: runtimeInfo.runtimeHome,
     rootRuntimeHome: runtimeInfo.rootRuntimeHome,
     profiles: runtimeInfo.profiles,

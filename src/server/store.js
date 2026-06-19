@@ -42,7 +42,7 @@ export const defaultConfig = Object.freeze({
     chatTitle: true,
     webSearch: true,
     searchTerminal: false,
-    searchMode: 'native',
+    searchMode: 'both',
     alwaysAllow: false,
     terminalMode: 'standard',
     deepInvestigation: false,
@@ -104,6 +104,7 @@ export async function ensureRuntime() {
     '# Memória persistente\n\nUse este arquivo para informações duráveis entre todos os chats.\n',
   );
   await ensureJsonFile(paths.userMemoryIndexPath, []);
+  await ensureJsonFile(paths.scheduledTasksPath, []);
 
   try {
     await fs.access(paths.configPath);
@@ -672,6 +673,255 @@ export async function replaceTextInUserMemoryFile(identifier, oldText, newText) 
       content,
       path: filePath,
     };
+  });
+}
+
+export async function searchUserMemoryFiles(keyword, options = {}) {
+  const needle = String(keyword || '').trim().toLowerCase();
+  if (!needle) return [];
+  const maxMatches = clampInteger(options.maxMatches, 1, 50, 20);
+  const contextChars = clampInteger(options.contextChars, 20, 1000, 200);
+  const files = await listUserMemoryFiles();
+  const matches = [];
+  for (const file of files) {
+    if (matches.length >= maxMatches) break;
+    let content;
+    try {
+      content = (await readUserMemoryFile(file.id)).content;
+    } catch {
+      continue;
+    }
+    const haystack = content.toLowerCase();
+    let index = haystack.indexOf(needle);
+    while (index !== -1 && matches.length < maxMatches) {
+      matches.push({
+        fileId: file.id,
+        fileName: file.name,
+        offset: index,
+        snippet: content.slice(Math.max(0, index - contextChars), index + needle.length + contextChars),
+      });
+      index = haystack.indexOf(needle, index + needle.length);
+    }
+  }
+  return matches;
+}
+
+// Tool names a scheduled task is allowed to pick from. Kept as a local list
+// (rather than importing tools.js) since store.js only needs the name set,
+// not the definitions, and tools.js does not import store.js.
+const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
+  'run_terminal_command',
+  'web_search',
+  'memory_chat',
+  'persistent_memory',
+  'persistent_memory_user',
+  'edit_persistent_memory_user',
+  'chat_document',
+  'compact_context',
+  'rename_chat',
+];
+const SCHEDULED_TASK_LEASE_STALE_MS = 10 * 60 * 1000;
+
+function normalizeScheduleConfig(schedule = {}) {
+  if (schedule.type === 'interval') {
+    return { type: 'interval', everyHours: numberInRange(schedule.everyHours, 0.1, 24 * 30) || 6 };
+  }
+  return {
+    type: 'daily',
+    hour: clampInteger(schedule.hour, 0, 23, 9),
+    minute: clampInteger(schedule.minute, 0, 59, 0),
+    timezone: String(schedule.timezone || 'UTC').trim() || 'UTC',
+  };
+}
+
+function getTimezoneOffsetMinutes(timezone, date) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(date)
+      .reduce((acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+      }, {});
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    return Math.round((asUtc - date.getTime()) / 60000);
+  } catch {
+    return 0;
+  }
+}
+
+function nextDailyOccurrence(hour, minute, timezone, fromDate) {
+  const offsetMinutes = getTimezoneOffsetMinutes(timezone, fromDate);
+  const localNow = new Date(fromDate.getTime() + offsetMinutes * 60000);
+  const candidateLocal = new Date(
+    Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate(), hour, minute, 0, 0),
+  );
+  let candidateUtc = new Date(candidateLocal.getTime() - offsetMinutes * 60000);
+  if (candidateUtc.getTime() <= fromDate.getTime()) {
+    candidateUtc = new Date(candidateUtc.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return candidateUtc;
+}
+
+export function computeNextRunAt(schedule, fromDate = new Date()) {
+  const normalized = normalizeScheduleConfig(schedule);
+  if (normalized.type === 'interval') {
+    return new Date(fromDate.getTime() + normalized.everyHours * 60 * 60 * 1000).toISOString();
+  }
+  return nextDailyOccurrence(normalized.hour, normalized.minute, normalized.timezone, fromDate).toISOString();
+}
+
+function normalizeScheduledTask(task = {}, existing = null) {
+  const now = new Date().toISOString();
+  const allowedTools = Array.isArray(task.allowedTools)
+    ? task.allowedTools.filter((name) => KNOWN_SCHEDULED_TASK_TOOL_NAMES.includes(name))
+    : existing?.allowedTools || [];
+  const schedule = normalizeScheduleConfig(task.schedule || existing?.schedule || {});
+  return {
+    id: existing?.id || crypto.randomUUID(),
+    name: String(task.name ?? existing?.name ?? 'Tarefa agendada').trim().slice(0, 200) || 'Tarefa agendada',
+    enabled: task.enabled === undefined ? existing?.enabled ?? true : task.enabled !== false,
+    prompt: String(task.prompt ?? existing?.prompt ?? '').trim(),
+    provider: task.provider !== undefined ? normalizeProviderId(task.provider) : existing?.provider,
+    model: task.model !== undefined ? String(task.model || '').trim() : existing?.model,
+    allowedTools,
+    reuseChat: task.reuseChat === undefined ? existing?.reuseChat ?? true : task.reuseChat !== false,
+    chatId: task.chatId !== undefined ? task.chatId : existing?.chatId || null,
+    skipMemoryInPrompt:
+      task.skipMemoryInPrompt === undefined ? existing?.skipMemoryInPrompt ?? true : task.skipMemoryInPrompt !== false,
+    schedule,
+    nextRunAt: existing?.nextRunAt || computeNextRunAt(schedule),
+    lastRunAt: existing?.lastRunAt || null,
+    lastRunStatus: existing?.lastRunStatus || null,
+    lastRunError: existing?.lastRunError || null,
+    runningSince: existing?.runningSince || null,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export async function listScheduledTasks() {
+  await ensureRuntime();
+  const tasks = await readJson(getActivePaths().scheduledTasksPath, []);
+  return Array.isArray(tasks) ? tasks : [];
+}
+
+export async function getScheduledTask(id) {
+  const tasks = await listScheduledTasks();
+  const task = tasks.find((item) => item.id === id);
+  if (!task) {
+    const error = new Error('Tarefa agendada não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return task;
+}
+
+export async function createScheduledTask(input = {}) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  return withFileLock(paths.scheduledTasksPath, async () => {
+    const tasks = await readJson(paths.scheduledTasksPath, []);
+    const task = normalizeScheduledTask(input);
+    await writeJson(paths.scheduledTasksPath, [...tasks, task], 0o600);
+    await appendEvent({ type: 'scheduledTask.created', details: { id: task.id, name: task.name } });
+    return task;
+  });
+}
+
+export async function updateScheduledTask(id, patch = {}) {
+  const paths = getActivePaths();
+  return withFileLock(paths.scheduledTasksPath, async () => {
+    const tasks = await readJson(paths.scheduledTasksPath, []);
+    let updated = null;
+    const next = tasks.map((task) => {
+      if (task.id !== id) return task;
+      const scheduleChanged = Boolean(patch.schedule) && JSON.stringify(patch.schedule) !== JSON.stringify(task.schedule);
+      updated = normalizeScheduledTask({ ...task, ...patch }, task);
+      if (scheduleChanged) updated.nextRunAt = computeNextRunAt(updated.schedule);
+      return updated;
+    });
+    if (!updated) {
+      const error = new Error('Tarefa agendada não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+    await writeJson(paths.scheduledTasksPath, next, 0o600);
+    await appendEvent({ type: 'scheduledTask.updated', details: { id } });
+    return updated;
+  });
+}
+
+export async function deleteScheduledTask(id) {
+  const paths = getActivePaths();
+  return withFileLock(paths.scheduledTasksPath, async () => {
+    const tasks = await readJson(paths.scheduledTasksPath, []);
+    const next = tasks.filter((task) => task.id !== id);
+    if (next.length === tasks.length) {
+      const error = new Error('Tarefa agendada não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+    await writeJson(paths.scheduledTasksPath, next, 0o600);
+    await appendEvent({ type: 'scheduledTask.deleted', details: { id } });
+    return { id };
+  });
+}
+
+// Atomic lease: returns the task with `runningSince` set if it was free (or
+// the previous lease was stale, e.g. the process crashed mid-run), or null
+// if another tick/process already holds a fresh lease.
+export async function claimScheduledTaskRun(id) {
+  const paths = getActivePaths();
+  return withFileLock(paths.scheduledTasksPath, async () => {
+    const tasks = await readJson(paths.scheduledTasksPath, []);
+    const task = tasks.find((item) => item.id === id);
+    if (!task) return null;
+    if (task.runningSince) {
+      const age = Date.now() - new Date(task.runningSince).getTime();
+      if (age < SCHEDULED_TASK_LEASE_STALE_MS) return null;
+    }
+    const claimed = { ...task, runningSince: new Date().toISOString() };
+    await writeJson(paths.scheduledTasksPath, tasks.map((item) => (item.id === id ? claimed : item)), 0o600);
+    return claimed;
+  });
+}
+
+export async function releaseScheduledTaskRun(id, { status, error = null, nextRunAt } = {}) {
+  const paths = getActivePaths();
+  return withFileLock(paths.scheduledTasksPath, async () => {
+    const tasks = await readJson(paths.scheduledTasksPath, []);
+    let updated = null;
+    const next = tasks.map((task) => {
+      if (task.id !== id) return task;
+      updated = {
+        ...task,
+        runningSince: null,
+        lastRunAt: new Date().toISOString(),
+        lastRunStatus: status || 'unknown',
+        lastRunError: error,
+        nextRunAt: nextRunAt || task.nextRunAt,
+        updatedAt: new Date().toISOString(),
+      };
+      return updated;
+    });
+    if (updated) await writeJson(paths.scheduledTasksPath, next, 0o600);
+    return updated;
   });
 }
 
@@ -1557,6 +1807,7 @@ function buildProfilePaths(profileId = 'default') {
     persistentMemoryPath: path.join(profileRuntimeHome, 'persistent-memory.md'),
     userMemoryDir: path.join(profileRuntimeHome, 'persistent-memory-user'),
     userMemoryIndexPath: path.join(profileRuntimeHome, 'persistent-memory-user.json'),
+    scheduledTasksPath: path.join(profileRuntimeHome, 'scheduledTasks.json'),
   };
 }
 
@@ -1735,7 +1986,7 @@ function normalizeChatFolder(folder) {
 
 function normalizeTools(tools = {}, options = {}) {
   const searchMode = normalizeSearchMode(tools.searchMode, tools);
-  const safeSearchMode = options.offlineMode && ['native', 'both'].includes(searchMode) ? 'off' : searchMode;
+  const safeSearchMode = options.offlineMode && searchMode === 'both' ? 'off' : searchMode;
   return {
     terminal: tools.terminal !== false,
     chatMemory: tools.chatMemory !== false,
@@ -1773,13 +2024,16 @@ function mergeToolsSettings(current = {}, patch = {}) {
   };
 }
 
+// 'native'-only is intentionally not a passthrough value anymore: any legacy
+// config saved with searchMode 'native' (or anything else unrecognized)
+// silently migrates to 'both' the next time the config is normalized.
 function normalizeSearchMode(value, legacyTools = {}) {
   const mode = String(value || '').trim();
   if (mode === 'terminal' || mode === 'both') return mode;
   if (legacyTools.webSearch === false) return 'off';
   if (legacyTools.searchTerminal === true) return 'terminal';
-  if (['off', 'native', 'terminal', 'both'].includes(mode)) return mode;
-  return 'native';
+  if (mode === 'off') return mode;
+  return 'both';
 }
 
 function normalizeContextSettings(context = {}) {

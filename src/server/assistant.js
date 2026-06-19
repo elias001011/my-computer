@@ -16,6 +16,7 @@ import {
   readUserMemoryFile,
   replaceTextInAttachment,
   replaceTextInUserMemoryFile,
+  searchUserMemoryFiles,
   loadConfig,
   readAttachmentFile,
   saveContextSnapshot,
@@ -92,6 +93,7 @@ export async function stopChatRun(chatId, options = {}) {
 
 async function sendUserMessageLocked(chatId, content, options = {}) {
   const operationSignal = options.signal;
+  const scheduledTaskContext = options.scheduledTaskContext || null;
   const config = await loadConfig();
   throwIfStopped(operationSignal);
   const trimmed = String(content || '').trim();
@@ -122,13 +124,13 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     });
   }
   const chat = await readChat(chatId);
-  const persistentMemory = await readPersistentMemory();
+  const persistentMemory = scheduledTaskContext?.skipMemory ? null : await readPersistentMemory();
   const runtimeInfo = await getRuntimeInfo();
   const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo, { modelSettings: chat.modelSettings || {} });
-  const userMemoryContext = await buildUserMemoryPromptContext(effectiveConfig);
+  const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
   const toolUses = [];
   const executionTrace = [];
-  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
+  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext);
   let providerUsed = effectiveConfig.provider;
   let modelUsed = effectiveConfig.model;
   const continuationGroupId = getMessageContinuationGroupId(userMessage);
@@ -145,6 +147,8 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     const workingMessages = await buildProviderMessages(chat, effectiveConfig, persistentMemory, {
       strictImageSupportForMessageId: userMessage.id,
       userMemoryContext,
+      skipMemory: scheduledTaskContext?.skipMemory === true,
+      scheduledTaskContext,
     });
     if (continuationMode === 'continue') {
       workingMessages.push({
@@ -195,6 +199,48 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         content: sanitizeAssistantToolLikeText(assistantMessage.content || ''),
         tool_calls: toolCalls,
       });
+
+      if (scheduledTaskContext) {
+        // Unattended run: no user is present to approve anything. A tool either
+        // sits in the task's own allowlist (treated as pre-approved) or it is
+        // denied outright -- it never reaches the interactive approval pause.
+        for (const toolCall of toolCalls) {
+          throwIfStopped(operationSignal);
+          const toolUse = isToolAllowedForScheduledTask(toolCall, scheduledTaskContext)
+            ? await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal })
+            : createScheduledTaskDeniedToolUse(toolCall);
+          throwIfStopped(operationSignal);
+          toolUses.push(toolUse);
+          executionTrace.push(createToolTraceEntry(toolUse));
+          appendToolResultForModel(workingMessages, toolCall, toolUse);
+          if (toolUseHasExecutionFailure(toolUse)) {
+            const failedContent = cleanAssistantContent(assistantMessage.content || '');
+            assistantOutcome = {
+              status: 'incomplete',
+              content: renderToolFailureMessage(toolUse),
+              thinking: failedContent.thinking,
+              finishReason: assistantMessage.finishReason || null,
+              continuationAvailable: true,
+              error: toolUse.result?.error || describeToolFailure(toolUse),
+            };
+            break;
+          }
+        }
+        if (assistantOutcome) break;
+        if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
+          const actionContent = cleanAssistantContent(assistantMessage.content || '');
+          assistantOutcome = {
+            status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
+            content: actionContent.content || 'Ação executada.',
+            thinking: actionContent.thinking,
+            finishReason: assistantMessage.finishReason || null,
+            continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
+            error: null,
+          };
+          break;
+        }
+        continue;
+      }
 
       const approvalToolCalls = toolCalls.filter((toolCall) => toolRequiresApproval(toolCall, selectedConfig));
       if (approvalToolCalls.length) {
@@ -1691,8 +1737,35 @@ export function buildContextWindowMarkdown(chat, config, persistentMemory = '') 
 }
 
 async function buildProviderMessages(chat, config, persistentMemory, options = {}) {
-  const systemPrompt = buildSystemPrompt(chat, config, persistentMemory, options.userMemoryContext || null);
+  const systemPrompt = buildSystemPrompt(chat, config, persistentMemory, options.userMemoryContext || null, {
+    skipMemory: options.skipMemory === true,
+    scheduledTaskContext: options.scheduledTaskContext || null,
+  });
   return [{ role: 'system', content: systemPrompt }, ...(await selectRecentMessages(chat, config, options))];
+}
+
+// Masks the tool-related config flags that drive the system prompt's
+// narrative instructions (e.g. "call run_terminal_command...") so a scheduled
+// task's prompt never tells the model to use a tool that was filtered out of
+// the actual function-calling schema by buildEnabledToolDefinitions.
+function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
+  if (!scheduledTaskContext) return tools;
+  const allowed = new Set(scheduledTaskContext.allowedTools || []);
+  const searchMode = allowed.has('web_search') ? getSearchMode(tools) : 'off';
+  return {
+    ...tools,
+    terminal: tools.terminal !== false && allowed.has('run_terminal_command'),
+    chatMemory: tools.chatMemory !== false && allowed.has('memory_chat'),
+    persistentMemory: tools.persistentMemory !== false && allowed.has('persistent_memory'),
+    userMemory: tools.userMemory !== false && allowed.has('persistent_memory_user'),
+    userMemoryEdit: tools.userMemoryEdit === true && allowed.has('edit_persistent_memory_user'),
+    chatDocuments: tools.chatDocuments !== false && allowed.has('chat_document'),
+    autoCompact: tools.autoCompact !== false && allowed.has('compact_context'),
+    chatTitle: tools.chatTitle !== false && allowed.has('rename_chat'),
+    searchMode,
+    webSearch: searchMode !== 'off',
+    searchTerminal: searchMode === 'terminal' || searchMode === 'both',
+  };
 }
 
 function buildEffectiveConfig(config, chat = {}, runtimeInfo = {}, extra = {}) {
@@ -1730,7 +1803,16 @@ function buildEffectiveConfig(config, chat = {}, runtimeInfo = {}, extra = {}) {
   };
 }
 
-function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = null) {
+function buildSystemPrompt(
+  chat,
+  config,
+  persistentMemory,
+  userMemoryContext = null,
+  { skipMemory = false, scheduledTaskContext = null } = {},
+) {
+  if (scheduledTaskContext) {
+    config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext) };
+  }
   const languageInstruction =
     config.language === 'auto'
       ? 'Respond in the same language the user is using.'
@@ -1771,13 +1853,10 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
       : 'The user disabled automatic tool execution. The app may ask the user to approve a tool before it actually runs.',
     'For every tool call, set returnOutput to true only when you need the tool result to continue reasoning. Use returnOutput false for pure side effects such as rename_chat, successful memory writes, or compacting when you do not need the summary.',
     getSearchMode(config.tools) !== 'off'
-      ? `Use web_search when current, time-sensitive, source-backed, legal/medical/financial, schedule, price, documentation, or news information matters. Search mode is "${getSearchMode(config.tools)}": native means provider-side search, terminal means the web_search tool runs a terminal-backed public DuckDuckGo query, and both means native first with that web_search terminal fallback when native search fails or returns no results. Terminal search mode does not mean you should call run_terminal_command. Do not use web_search for purely local app state, files, or memories; use the local tools for those. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used. If web_search fails, is rate-limited, or returns no public results, do not switch to run_terminal_command, grep, find, rg, or local filesystem searches unless the user explicitly asked to search local files. Instead, say the web search failed or found no reliable public sources and ask for another query/provider if needed.`
+      ? `Use web_search when current, time-sensitive, source-backed, legal/medical/financial, schedule, price, documentation, or news information matters. Search mode is "${getSearchMode(config.tools)}": terminal means the web_search tool runs a terminal-backed public DuckDuckGo query, and both means provider-side native search first with that web_search terminal fallback when native search fails or returns no results. Terminal search mode does not mean you should call run_terminal_command. Do not use web_search for purely local app state, files, or memories; use the local tools for those. If web_search returns sources, include a final "Fontes" section with the URLs and briefly say which search method was used. If web_search fails, is rate-limited, or returns no public results, do not switch to run_terminal_command, grep, find, rg, or local filesystem searches unless the user explicitly asked to search local files. Instead, say the web search failed or found no reliable public sources and ask for another query/provider if needed.`
       : 'Web search is disabled by user settings.',
     config.privacy?.offlineMode && getSearchMode(config.tools) !== 'off'
       ? 'Offline search privacy rule: if web_search is enabled, use only terminal-backed search and write neutral, generic queries. Never include user text verbatim, names, secrets, local paths, code snippets, private project names, memory contents, chat details, or terminal output in a web search query. If a useful query would reveal private context, ask the user to approve or provide a sanitized query.'
-      : '',
-    getSearchMode(config.tools) === 'native'
-      ? 'Terminal-backed search is disabled; web_search will not execute local terminal commands in this mode.'
       : '',
     config.tools?.chatMemory
       ? 'When stable user preferences, decisions, file paths, facts, or TODOs appear inside this chat, use memory_chat to read or update the current chat memory.'
@@ -1820,10 +1899,10 @@ function buildSystemPrompt(chat, config, persistentMemory, userMemoryContext = n
     'Always use the persistent memory, chat memory, and compacted context below as durable context.',
     '',
     '<persistent_memory_md>',
-    persistentMemory || 'Sem memória persistente.',
+    skipMemory ? 'Memória persistente não incluída nesta execução agendada (otimização de tokens).' : persistentMemory || 'Sem memória persistente.',
     '</persistent_memory_md>',
     '',
-    renderUserMemoryPromptSection(userMemoryContext, config),
+    skipMemory ? '' : renderUserMemoryPromptSection(userMemoryContext, config),
     '',
     '<chat_memory_md>',
     chat.memory || 'Sem memória de chat.',
@@ -2104,8 +2183,8 @@ async function executeCompactContextToolCall(chatId, toolCallId, input, config =
   };
 }
 
-function buildEnabledToolDefinitions(tools = {}) {
-  return [
+function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
+  const definitions = [
     tools.terminal !== false ? terminalToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
@@ -2116,6 +2195,9 @@ function buildEnabledToolDefinitions(tools = {}) {
     tools.autoCompact !== false ? compactContextToolDefinition : null,
     tools.chatTitle !== false ? renameChatToolDefinition : null,
   ].filter(Boolean);
+  if (!scheduledTaskContext) return definitions;
+  const allowed = new Set(scheduledTaskContext.allowedTools || []);
+  return definitions.filter((definition) => allowed.has(definition.function?.name));
 }
 
 export function normalizeAssistantToolCalls(toolCalls = [], content = '', tools = {}) {
@@ -2265,7 +2347,7 @@ function normalizeToolInput(name, input = {}) {
   if (returnOutput !== undefined) normalizedInput.returnOutput = returnOutput;
   if (name === 'web_search') return normalizeWebSearchInput(normalizedInput);
   if (name === 'persistent_memory_user') {
-    normalizedInput.action = ['list', 'read'].includes(String(normalizedInput.action || '').trim())
+    normalizedInput.action = ['list', 'read', 'search'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
       : 'list';
     if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 2_000_000, 0);
@@ -2424,6 +2506,22 @@ function toolRequiresApproval(toolCall, config = {}) {
     if (searchMode === 'terminal' || searchMode === 'both') return true;
   }
   return false;
+}
+
+function isToolAllowedForScheduledTask(toolCall, scheduledTaskContext) {
+  return (scheduledTaskContext.allowedTools || []).includes(toolCall.function?.name);
+}
+
+function createScheduledTaskDeniedToolUse(toolCall) {
+  return {
+    id: toolCall.id,
+    name: toolCall.function?.name || 'unknown_tool',
+    input: normalizeToolInput(toolCall.function?.name, parseToolArguments(toolCall.function?.arguments)),
+    status: 'denied',
+    approvalRequired: false,
+    result: { action: 'denied_scheduled_task', reason: 'Tool não permitida para esta tarefa agendada.' },
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function createDeniedToolUse(toolCall) {
@@ -2770,6 +2868,33 @@ async function executePersistentMemoryUserToolCall(chatId, toolCallId, input) {
     };
   }
 
+  if (action === 'search') {
+    const keyword = String(input.keyword || '').trim();
+    if (!keyword) {
+      return {
+        id: toolCallId,
+        name: 'persistent_memory_user',
+        input,
+        status: 'failed',
+        result: { action, error: 'keyword is required for action search' },
+        createdAt: new Date().toISOString(),
+      };
+    }
+    const matches = await searchUserMemoryFiles(keyword);
+    await appendEvent({
+      type: 'tool.persistent_memory_user.search',
+      chatId,
+      details: { reason: input.reason, keyword, matchCount: matches.length },
+    });
+    return {
+      id: toolCallId,
+      name: 'persistent_memory_user',
+      input,
+      result: { action, keyword, matches },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   if (action !== 'read') {
     return {
       id: toolCallId,
@@ -2778,7 +2903,7 @@ async function executePersistentMemoryUserToolCall(chatId, toolCallId, input) {
       status: 'failed',
       result: {
         action,
-        error: 'action must be list or read',
+        error: 'action must be list, read, or search',
       },
       createdAt: new Date().toISOString(),
     };

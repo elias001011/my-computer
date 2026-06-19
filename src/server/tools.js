@@ -140,14 +140,15 @@ export const persistentMemoryUserToolDefinition = {
   function: {
     name: 'persistent_memory_user',
     description:
-      'List or read user-added persistent memory files. Use this instead of terminal when the user memory file index suggests a file may contain durable context for the current answer.',
+      'List, read, or keyword-search user-added persistent memory files. Use this instead of terminal when the user memory file index suggests a file may contain durable context for the current answer. Prefer search over read when you only need to locate a specific fact across files without reading whole files.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'read'],
-          description: 'list returns the file index. read returns one compatible text file by fileId or fileName.',
+          enum: ['list', 'read', 'search'],
+          description:
+            'list returns the file index. read returns one compatible text file by fileId or fileName. search returns short snippets across all files containing keyword, with the file each snippet came from.',
         },
         fileId: {
           type: 'string',
@@ -156,6 +157,10 @@ export const persistentMemoryUserToolDefinition = {
         fileName: {
           type: 'string',
           description: 'Name of the file to read when fileId is not available.',
+        },
+        keyword: {
+          type: 'string',
+          description: 'Keyword or phrase to search for across user memory files. Required for action search.',
         },
         offset: {
           type: 'number',
@@ -167,7 +172,7 @@ export const persistentMemoryUserToolDefinition = {
         },
         reason: {
           type: 'string',
-          description: 'Short reason for reading user persistent memory files.',
+          description: 'Short reason for reading or searching user persistent memory files.',
         },
         returnOutput: {
           anyOf: [{ type: 'boolean' }, { type: 'string' }],

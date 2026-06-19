@@ -1635,6 +1635,24 @@ pre {
   word-break: break-all;
 }
 
+.scheduled-task-editor {
+  margin-top: 12px;
+}
+
+.scheduled-task-tools {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.scheduled-task-tools legend {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 0 6px;
+}
+
 .checklist {
   margin: 0;
   padding-left: 18px;
