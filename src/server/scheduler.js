@@ -1,10 +1,12 @@
 import { sendUserMessage } from './assistant.js';
+import { sendEmail } from './email.js';
 import {
   appendEvent,
   claimScheduledTaskRun,
   computeNextRunAt,
   createChat,
   listScheduledTasks,
+  loadConfig,
   releaseScheduledTaskRun,
   updateScheduledTask,
 } from './store.js';
@@ -73,11 +75,31 @@ async function executeTask(taskId) {
     status = 'error';
     errorMessage = String(error?.message || error);
     await appendEvent({ type: 'scheduledTask.run.failed', details: { id: claimed.id, name: claimed.name, error: errorMessage } });
+    await notifyScheduledTaskFailure(claimed, errorMessage);
   } finally {
     await releaseScheduledTaskRun(claimed.id, {
       status,
       error: errorMessage,
       nextRunAt: computeNextRunAt(claimed.schedule),
     });
+  }
+}
+
+// Best-effort notification: a failure here must never mask or interrupt the
+// real task-failure handling above, so every error is swallowed and only logged.
+async function notifyScheduledTaskFailure(task, errorMessage) {
+  try {
+    const config = await loadConfig();
+    const email = config.email || {};
+    if (!email.enabled || !email.notifyOnScheduledTaskFailure) return;
+    if (!email.resendApiKey || !email.destinationEmail) return;
+    await sendEmail({
+      apiKey: email.resendApiKey,
+      to: email.destinationEmail,
+      subject: `Tarefa agendada falhou: ${task.name}`,
+      text: `A tarefa agendada "${task.name}" falhou.\n\nErro: ${errorMessage}`,
+    });
+  } catch (notifyError) {
+    console.error('[scheduler] falha ao enviar notificação de email:', notifyError.message || notifyError);
   }
 }

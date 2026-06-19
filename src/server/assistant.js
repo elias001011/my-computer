@@ -38,9 +38,11 @@ import {
   renameChatToolDefinition,
   runTerminalCommand,
   runWebSearch,
+  sendEmailToolDefinition,
   terminalToolDefinition,
   webSearchToolDefinition,
 } from './tools.js';
+import { sendEmail } from './email.js';
 
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
@@ -130,7 +132,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
   const toolUses = [];
   const executionTrace = [];
-  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext);
+  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext, effectiveConfig.email);
   let providerUsed = effectiveConfig.provider;
   let modelUsed = effectiveConfig.model;
   const continuationGroupId = getMessageContinuationGroupId(userMessage);
@@ -1748,7 +1750,7 @@ async function buildProviderMessages(chat, config, persistentMemory, options = {
 // narrative instructions (e.g. "call run_terminal_command...") so a scheduled
 // task's prompt never tells the model to use a tool that was filtered out of
 // the actual function-calling schema by buildEnabledToolDefinitions.
-function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
+function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext, emailSettings = null) {
   if (!scheduledTaskContext) return tools;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
   const searchMode = allowed.has('web_search') ? getSearchMode(tools) : 'off';
@@ -1762,6 +1764,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
     chatDocuments: tools.chatDocuments !== false && allowed.has('chat_document'),
     autoCompact: tools.autoCompact !== false && allowed.has('compact_context'),
     chatTitle: tools.chatTitle !== false && allowed.has('rename_chat'),
+    sendEmail: allowed.has('send_email') && isEmailConfigured(emailSettings),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',
@@ -1811,7 +1814,7 @@ function buildSystemPrompt(
   { skipMemory = false, scheduledTaskContext = null } = {},
 ) {
   if (scheduledTaskContext) {
-    config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext) };
+    config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext, config.email) };
   }
   const languageInstruction =
     config.language === 'auto'
@@ -1882,6 +1885,9 @@ function buildSystemPrompt(
     config.tools?.chatTitle
       ? 'If the chat title is generic, call rename_chat after the first user message with a short descriptive title. For rename_chat, normally set returnOutput false.'
       : 'Chat title editing through tools is disabled by user settings.',
+    config.tools?.sendEmail
+      ? 'The send_email tool is available for this scheduled task. It always sends to the single destination address configured by the user in Email settings -- there is no recipient parameter and you cannot choose or override the destination. Use it only when the task prompt asks for an emailed result.'
+      : '',
     config.tools?.chatMemory
       ? 'For memory_chat write operations, send the full edited Markdown memory file, using the current memory below as the base.'
       : '',
@@ -2066,6 +2072,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executeWebSearchToolCall(chatId, toolCall.id, normalizeWebSearchInput(input), config);
   }
 
+  if (name === 'send_email') {
+    return executeSendEmailToolCall(chatId, toolCall.id, input, config);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -2171,6 +2181,55 @@ async function executeRenameChatToolCall(chatId, toolCallId, input) {
   };
 }
 
+async function executeSendEmailToolCall(chatId, toolCallId, input, config = {}) {
+  const email = config.email || {};
+  if (!isEmailConfigured(email)) {
+    return {
+      id: toolCallId,
+      name: 'send_email',
+      input,
+      result: { error: 'Envio de email não está configurado (chave do Resend ou email de destino faltando).' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const subject = String(input.subject || '').trim();
+  const body = String(input.body || '').trim();
+  try {
+    const sent = await sendEmail({
+      apiKey: email.resendApiKey,
+      to: email.destinationEmail,
+      subject,
+      text: body,
+    });
+    await appendEvent({
+      type: 'tool.send_email.sent',
+      chatId,
+      details: { subject: truncate(subject, 200), bodyPreview: truncate(body, 500) },
+    });
+    return {
+      id: toolCallId,
+      name: 'send_email',
+      input,
+      result: { action: 'sent', id: sent.id },
+      createdAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    await appendEvent({
+      type: 'tool.send_email.failed',
+      chatId,
+      details: { subject: truncate(subject, 200), error: error.message },
+    });
+    return {
+      id: toolCallId,
+      name: 'send_email',
+      input,
+      result: { error: `Falha ao enviar email: ${error.message}` },
+      createdAt: new Date().toISOString(),
+    };
+  }
+}
+
 async function executeCompactContextToolCall(chatId, toolCallId, input, config = {}) {
   const compacted = await compactChat(chatId, { signal: config.signal });
   await appendEvent({
@@ -2190,7 +2249,7 @@ async function executeCompactContextToolCall(chatId, toolCallId, input, config =
   };
 }
 
-function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
+function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null, emailSettings = null) {
   const definitions = [
     tools.terminal !== false ? terminalToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
@@ -2204,7 +2263,18 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
   ].filter(Boolean);
   if (!scheduledTaskContext) return definitions;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
-  return definitions.filter((definition) => allowed.has(definition.function?.name));
+  const filtered = definitions.filter((definition) => allowed.has(definition.function?.name));
+  // send_email only ever exists inside scheduled tasks, never in the base/interactive list above,
+  // and only when Resend is actually configured -- otherwise the model would see a tool that
+  // can't possibly work.
+  if (allowed.has('send_email') && isEmailConfigured(emailSettings)) {
+    filtered.push(sendEmailToolDefinition);
+  }
+  return filtered;
+}
+
+function isEmailConfigured(emailSettings) {
+  return Boolean(emailSettings?.enabled && emailSettings?.resendApiKey && emailSettings?.destinationEmail);
 }
 
 export function normalizeAssistantToolCalls(toolCalls = [], content = '', tools = {}) {
@@ -2334,6 +2404,7 @@ function normalizeSyntheticToolName(name = '') {
     'chat_document',
     'compact_context',
     'rename_chat',
+    'send_email',
   ].includes(value)
     ? value
     : '';
@@ -2342,7 +2413,7 @@ function normalizeSyntheticToolName(name = '') {
 function recoverMalformedToolCall(name, args) {
   const trimmedName = String(name || '').trim();
   const trimmedArgs = String(args || '').trim();
-  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
+  const directTool = trimmedName.match(/^(web_search|run_terminal_command|memory_chat|persistent_memory|persistent_memory_user|edit_persistent_memory_user|chat_document|compact_context|rename_chat|send_email)(?:\s*=?\s*|\s+)(\{[\s\S]*\})$/);
   if (directTool) return { name: directTool[1], arguments: directTool[2] };
   if (trimmedName === 'web_search' || trimmedName.endsWith('.web_search')) return { name: 'web_search', arguments: trimmedArgs };
   return { name: trimmedName, arguments: trimmedArgs };
@@ -2353,6 +2424,10 @@ function normalizeToolInput(name, input = {}) {
   const returnOutput = normalizeBooleanLike(normalizedInput.returnOutput);
   if (returnOutput !== undefined) normalizedInput.returnOutput = returnOutput;
   if (name === 'web_search') return normalizeWebSearchInput(normalizedInput);
+  if (name === 'send_email') {
+    normalizedInput.subject = String(normalizedInput.subject || '').trim().slice(0, 200);
+    normalizedInput.body = String(normalizedInput.body || '').trim().slice(0, 20000);
+  }
   if (name === 'persistent_memory_user') {
     normalizedInput.action = ['list', 'read', 'search'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()

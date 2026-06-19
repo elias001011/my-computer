@@ -1617,6 +1617,49 @@ function renderSettingsModal() {
               ${state.scheduledTaskEditorId ? renderScheduledTaskEditor() : ''}
             </section>
 
+            <section class="modal-section settings-panel ${activeSection === 'email' ? 'active' : ''}" data-section="email">
+              <h3>Email</h3>
+              <p class="help-text">Envio de email via Resend, só envio por enquanto (sem receber/responder ainda). O destino é sempre o endereço configurado abaixo — nunca um endereço escolhido pela IA.</p>
+              <div class="toggle-list">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="emailEnabled" ${draftConfig.email?.enabled ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Ativar envio de email</strong>
+                    <small>Sem isso ligado, a tool send_email não fica disponível em nenhuma tarefa agendada, mesmo que marcada na allowlist.</small>
+                  </span>
+                </label>
+              </div>
+              <div class="setup-grid">
+                <label>
+                  Chave de API do Resend
+                  <input name="emailResendApiKey" type="password" value="${escapeAttr(draftConfig.email?.resendApiKey || '')}" placeholder="re_..." />
+                </label>
+                <label>
+                  Email de destino
+                  <input name="emailDestination" type="email" value="${escapeAttr(draftConfig.email?.destinationEmail || '')}" placeholder="voce@exemplo.com" />
+                </label>
+              </div>
+              <div class="toggle-list">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="emailNotifyOnScheduledTaskFailure" ${draftConfig.email?.notifyOnScheduledTaskFailure !== false ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Notificar por email quando uma tarefa agendada falhar</strong>
+                    <small>Usa o evento de falha que o app já registra hoje; não depende de nenhuma tool, dispara mesmo se a tarefa não tiver send_email na allowlist.</small>
+                  </span>
+                </label>
+              </div>
+              <div class="button-row">
+                <button type="button" id="send-test-email" ${state.busy ? 'disabled' : ''}>Enviar email de teste</button>
+              </div>
+              <div class="explain-list">
+                <p><strong>Por que enviar não expõe nada à rede:</strong> é uma chamada de saída do MC pra API do Resend, igual qualquer chamada de provider de IA. Funciona idêntico local ou na VPS, sem domínio público.</p>
+                <p><strong>Endereço de envio:</strong> sem verificar um domínio próprio, o Resend exige usar o endereço sandbox dele (<code>onboarding@resend.dev</code>) como remetente — é uma limitação da plataforma, não uma configuração.</p>
+                <p><strong>Destino fixo:</strong> a tool send_email não tem parâmetro de destinatário — a IA nunca escolhe pra onde mandar, só o assunto e o corpo. Só existe dentro de tarefas agendadas que marcarem "Enviar email" na allowlist própria da tarefa.</p>
+              </div>
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'network' ? 'active' : ''}" data-section="network">
               <h3>Rede local</h3>
               <div class="notice-card">
@@ -1699,6 +1742,7 @@ function renderSettingsNav(activeSection) {
     ['tools', 'Tools'],
     ['context', 'Contexto'],
     ['scheduledTasks', 'Tarefas agendadas'],
+    ['email', 'Email'],
     ['network', 'Rede'],
     ['updates', 'Atualizações'],
     ['backup', 'Backup'],
@@ -1761,6 +1805,7 @@ const SCHEDULED_TASK_TOOL_LABELS = {
   chat_document: 'Documentos do chat',
   compact_context: 'Compactar contexto',
   rename_chat: 'Renomear chat',
+  send_email: 'Enviar email',
 };
 
 const SCHEDULED_TASK_WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -4550,6 +4595,7 @@ function bindAppEvents() {
     });
     document.querySelector('#save-scheduled-task')?.addEventListener('click', saveScheduledTaskFromEditor);
     document.querySelector('#cancel-scheduled-task-edit')?.addEventListener('click', closeScheduledTaskEditor);
+    document.querySelector('#send-test-email')?.addEventListener('click', sendTestEmail);
     document.querySelector('#sched-task-schedule-type')?.addEventListener('change', toggleScheduledTaskScheduleFields);
     document.querySelector('#sched-task-provider')?.addEventListener('change', (event) => {
       const select = document.getElementById('sched-task-model');
@@ -5036,6 +5082,16 @@ async function runScheduledTaskNowFromButton(taskId) {
     const data = await api(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/run`, { method: 'POST' });
     state.scheduledTasks = data.scheduledTasks || state.scheduledTasks;
     state.status = data.started === false ? 'Tarefa já estava em execução.' : 'Tarefa executada agora.';
+  });
+}
+
+async function sendTestEmail() {
+  if (state.busy) return;
+  const resendApiKey = document.querySelector('[name="emailResendApiKey"]')?.value || '';
+  const destinationEmail = document.querySelector('[name="emailDestination"]')?.value || '';
+  await runAction('Enviando email de teste...', async () => {
+    await api('/api/email/test', { method: 'POST', body: { resendApiKey, destinationEmail } });
+    state.status = 'Email de teste enviado.';
   });
 }
 
@@ -6447,6 +6503,12 @@ async function saveGeneralSettings(event, options = {}) {
           historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
           historyBudgetChars: Number(form.get('historyBudgetChars')),
         },
+        email: {
+          enabled: form.get('emailEnabled') === 'on',
+          resendApiKey: form.get('emailResendApiKey'),
+          destinationEmail: form.get('emailDestination'),
+          notifyOnScheduledTaskFailure: form.get('emailNotifyOnScheduledTaskFailure') === 'on',
+        },
         routing: {
           ...(offlineMode
             ? normalizeOfflineRoutingForClient()
@@ -6601,6 +6663,12 @@ function captureSettingsDraftFromForm() {
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
     historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
     historyBudgetChars: Number(form.get('historyBudgetChars') || 28000),
+  };
+  draftConfig.email = {
+    enabled: form.get('emailEnabled') === 'on',
+    resendApiKey: form.get('emailResendApiKey') || '',
+    destinationEmail: form.get('emailDestination') || '',
+    notifyOnScheduledTaskFailure: form.get('emailNotifyOnScheduledTaskFailure') === 'on',
   };
   draftConfig.routing = offlineMode
     ? normalizeOfflineRoutingForClient()

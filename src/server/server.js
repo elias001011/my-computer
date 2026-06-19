@@ -9,6 +9,7 @@ import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
 import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
 import { runScheduledTaskNow, startScheduler } from './scheduler.js';
+import { sendEmail } from './email.js';
 import {
   appendEvent,
   activateProfile,
@@ -133,6 +134,11 @@ async function handleApiScoped(request, response, url) {
     return;
   }
 
+  if (method === 'POST' && parts[1] === 'email' && parts[2] === 'test') {
+    await handleEmailTestApi(request, response);
+    return;
+  }
+
   if (method === 'PUT' && parts[1] === 'config') {
     const body = await readBody(request);
     if (body.server?.networkEnabled === true && !String(body.server?.authPassword || '').trim()) {
@@ -153,6 +159,7 @@ async function handleApiScoped(request, response, url) {
       userMemory: body.userMemory,
       privacy: body.privacy,
       context: body.context,
+      email: body.email,
       routing: body.routing,
       server: body.server,
       providerSettings: body.providerSettings,
@@ -556,6 +563,29 @@ async function handleScheduledTasksApi(request, response, parts) {
   }
 
   sendJson(response, 404, { error: 'Endpoint de tarefa agendada não encontrado.' });
+}
+
+async function handleEmailTestApi(request, response) {
+  const body = await readBody(request);
+  const config = await loadConfig();
+  const email = config.email || {};
+  const apiKey = String(body.resendApiKey || email.resendApiKey || '').trim();
+  const destinationEmail = String(body.destinationEmail || email.destinationEmail || '').trim();
+  if (!apiKey || !destinationEmail) {
+    sendJson(response, 400, { error: 'Configure a chave do Resend e o email de destino antes de testar.' });
+    return;
+  }
+  try {
+    const sent = await sendEmail({
+      apiKey,
+      to: destinationEmail,
+      subject: 'My Computer - email de teste',
+      text: 'Se você recebeu este email, o envio via Resend está configurado corretamente.',
+    });
+    sendJson(response, 200, { sent: true, id: sent.id });
+  } catch (error) {
+    sendJson(response, 502, { sent: false, error: error.message });
+  }
 }
 
 async function handleUserMemoryApi(request, response, parts) {

@@ -71,6 +71,12 @@ export const defaultConfig = Object.freeze({
     historyBudgetEnabled: true,
     historyBudgetChars: 28000,
   },
+  email: {
+    enabled: false,
+    resendApiKey: '',
+    destinationEmail: '',
+    notifyOnScheduledTaskFailure: true,
+  },
   server: {
     networkEnabled: false,
     authPassword: '',
@@ -171,6 +177,10 @@ export async function saveConfig(patch = {}) {
         ...current.context,
         ...(patch.context || {}),
       }),
+      email: normalizeEmailSettings({
+        ...current.email,
+        ...(patch.email || {}),
+      }),
       routing: normalizeRoutingSettings({
         ...current.routing,
         ...(patch.routing || {}),
@@ -230,6 +240,7 @@ export function sanitizeConfig(config) {
     userMemory: normalizeUserMemorySettings(config.userMemory),
     privacy,
     context: normalizeContextSettings(config.context),
+    email: normalizeEmailSettings(config.email),
     routing: normalizeRoutingSettings(config.routing),
     server: normalizeServerSettings(config.server),
     providerSettings,
@@ -721,6 +732,7 @@ const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'chat_document',
   'compact_context',
   'rename_chat',
+  'send_email',
 ];
 const SCHEDULED_TASK_LEASE_STALE_MS = 10 * 60 * 1000;
 
@@ -2119,6 +2131,15 @@ function normalizeContextSettings(context = {}) {
   };
 }
 
+function normalizeEmailSettings(email = {}) {
+  return {
+    enabled: email.enabled === true,
+    resendApiKey: String(email.resendApiKey || '').trim(),
+    destinationEmail: String(email.destinationEmail || '').trim(),
+    notifyOnScheduledTaskFailure: email.notifyOnScheduledTaskFailure !== false,
+  };
+}
+
 function normalizeUserMemorySettings(userMemory = {}) {
   return {
     sendFilesToPrompt: userMemory.sendFilesToPrompt === true,
@@ -2252,6 +2273,7 @@ function normalizeConfig(config = {}) {
     userMemory: normalizeUserMemorySettings(config.userMemory || defaultConfig.userMemory),
     privacy,
     context: normalizeContextSettings(config.context || defaultConfig.context),
+    email: normalizeEmailSettings(config.email || defaultConfig.email),
     routing: normalizeRoutingSettings(config.routing || defaultConfig.routing, { offlineMode: privacy.offlineMode }),
     server: normalizeServerSettings(config.server || defaultConfig.server),
     providerSettings,

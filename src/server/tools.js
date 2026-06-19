@@ -336,6 +336,35 @@ export const renameChatToolDefinition = {
   },
 };
 
+export const sendEmailToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'send_email',
+    description:
+      'Send an email. The destination address is fixed by the user in the Email settings and cannot be chosen or overridden here -- this tool never accepts a recipient. Only available inside scheduled tasks that explicitly allow it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        subject: {
+          type: 'string',
+          description: 'Short email subject line.',
+        },
+        body: {
+          type: 'string',
+          description: 'Plain-text email body.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description:
+            'Whether the app should send the send result back to the model. Strings like "true" or "false" are accepted for compatibility.',
+        },
+      },
+      required: ['subject', 'body'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export async function runTerminalCommand(command, options = {}) {
   const requestedTimeoutMs = Number(options.timeoutSeconds ? options.timeoutSeconds * 1000 : options.timeoutMs);
   const timeoutMs = Math.min(
