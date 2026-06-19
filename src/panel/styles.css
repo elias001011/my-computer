@@ -1653,6 +1653,49 @@ pre {
   padding: 0 0 6px;
 }
 
+.status-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-elevated);
+  color: var(--muted);
+}
+
+.status-pill.active {
+  border-color: var(--accent);
+  background: var(--surface-accent-soft);
+  color: var(--accent-dark);
+}
+
+.weekday-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.weekday-chip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 4px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  background: var(--surface-elevated);
+}
+
+.weekday-chip input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
 .checklist {
   margin: 0;
   padding-left: 18px;

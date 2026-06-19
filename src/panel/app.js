@@ -1473,6 +1473,17 @@ function renderSettingsModal() {
                   </span>
                 </label>
                 ${!userMemoryReadEnabled ? '<p class="help-text">Leitura/listagem desligada: edição também fica indisponível, porque a IA não tem como localizar arquivos nem confirmar trechos atuais.</p>' : ''}
+              </div>
+              <div class="settings-subpanel">
+                <h4>As 4 camadas de memória, em ordem do que entra sempre completo</h4>
+                <div class="explain-list">
+                  <p><strong>Memória persistente global</strong> (este editor acima): texto completo, sempre, em todos os chats desta seção/perfil.</p>
+                  <p><strong>Memória de arquivos do usuário</strong> (lista abaixo): por padrão só o índice (nome/resumo) entra no prompt; conteúdo completo entra sempre se "Enviar os arquivos a todo prompt" estiver ligado, ou só quando a IA pede via tool <code>persistent_memory_user</code> (inclui a ação <code>search</code>, que busca um trecho sem precisar ler o arquivo inteiro).</p>
+                  <p><strong>Memória do chat</strong> (memory.md de cada chat): texto completo, sempre, só naquele chat — editável pela IA via <code>memory_chat</code> se a tool estiver ligada na seção Tools.</p>
+                  <p><strong>Contexto compactado</strong> (context.md de cada chat): texto completo quando existir, gerado por compactação manual ou automática (seção Contexto) — resume histórico antigo que já saiu do orçamento de mensagens enviado.</p>
+                </div>
+              </div>
+              <div class="settings-subpanel">
                 <div class="button-row">
                   <label class="file-button">
                     Adicionar arquivos
@@ -1527,6 +1538,14 @@ function renderSettingsModal() {
                 ].join('\n'))}</pre>
               </div>
               <p class="help-text">O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.</p>
+              <div class="settings-subpanel">
+                <h4>Como o app decide o que a IA pode usar</h4>
+                <div class="explain-list">
+                  <p><strong>Duas camadas, sempre sincronizadas:</strong> a função (definição que o provider recebe e pode chamar de fato) e o texto narrativo do prompt (instruções em linguagem natural dizendo quando/como usar cada tool). Cada toggle aqui liga/desliga as duas ao mesmo tempo — uma tool nunca fica só "narrada" sem existir de verdade (isso já causou alucinação de uso de tool em tarefas agendadas com allowlist restrita, corrigido mascarando o texto narrativo também).</p>
+                  <p><strong>"Sempre permitir qualquer tool":</strong> pula a aprovação manual de toda tool, incluindo o terminal — não é por tool, é global. Com isso desligado, cada chamada de tool aparece para você aprovar ou negar antes de executar (exceto em tarefas agendadas, que usam a allowlist própria da tarefa em vez de aprovação humana, já que ninguém fica presente).</p>
+                  <p><strong>Busca web "Ambos":</strong> tenta a busca nativa do provider primeiro; se falhar ou vier vazia, cai automaticamente para a busca via terminal (DuckDuckGo), sem você precisar perceber a troca — o resultado final indica qual método foi usado.</p>
+                </div>
+              </div>
             </section>
 
             <section class="modal-section settings-panel ${activeSection === 'context' ? 'active' : ''}" data-section="context">
@@ -1551,11 +1570,38 @@ function renderSettingsModal() {
                   <input name="autoCompactMinMessages" type="number" min="2" max="80" step="1" value="${escapeAttr(draftConfig.context?.autoCompactMinMessages || 12)}" />
                 </label>
               </div>
+              <div class="settings-subpanel">
+                <h4>Histórico de mensagens enviado à IA</h4>
+                <p class="help-text">A cada mensagem, o app reenvia parte do histórico desse chat para o modelo "lembrar" da conversa — o provider não guarda estado entre chamadas, então sem isso cada mensagem chegaria sem contexto nenhum.</p>
+                <div class="toggle-list">
+                  <label class="toggle-row switch-row">
+                    <input type="checkbox" name="historyBudgetEnabled" id="history-budget-toggle" ${draftConfig.context?.historyBudgetEnabled !== false ? 'checked' : ''} />
+                    <span class="switch" aria-hidden="true"></span>
+                    <span>
+                      <strong>Enviar histórico de mensagens anteriores</strong>
+                      <small>Quando desligado, só a sua mensagem atual é enviada (sem as anteriores deste chat); memória do chat, memória persistente/de usuário e contexto compactado continuam normais.</small>
+                    </span>
+                  </label>
+                </div>
+                <label>
+                  Limite de histórico enviado
+                  <input name="historyBudgetChars" id="history-budget-chars" type="number" min="2000" max="120000" step="1000" value="${escapeAttr(draftConfig.context?.historyBudgetChars || 28000)}" ${draftConfig.context?.historyBudgetEnabled === false ? 'disabled' : ''} />
+                </label>
+                <p class="help-text">Em caracteres, não tokens reais (o app não usa um tokenizer; ~4 caracteres ≈ 1 token é uma aproximação comum, mas varia por modelo). Mensagens mais antigas vão sendo descartadas primeiro até caber no limite; a mensagem atual nunca é cortada por esse limite.</p>
+              </div>
               <div class="explain-list">
                 <p><strong>Janela interna do modelo:</strong> limite real do modelo/provider em uso. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.</p>
                 <p><strong>Salvar snapshot:</strong> salva uma fotografia Markdown do estado atual em context-snapshots e atualiza context-window.md. Não muda o prompt futuro por si só.</p>
                 <p><strong>Compactar contexto:</strong> pede ao modelo para resumir histórico, memória e decisões em context.md. Esse arquivo entra no prompt das próximas mensagens.</p>
                 <p><strong>compact_context:</strong> tool opcional para a própria IA atualizar context.md quando perceber que a conversa está longa.</p>
+              </div>
+              <div class="settings-subpanel">
+                <h4>O que entra no prompt, sempre ou condicionalmente</h4>
+                <div class="explain-list">
+                  <p><strong>Sempre:</strong> instruções fixas do app (papel do MC, idioma, nível técnico, runtime atual), memória persistente global, índice/conteúdo da memória de usuário conforme os toggles da seção Memória, memória do chat atual, contexto compactado (se existir), e o texto narrativo de cada tool conforme os toggles da seção Tools.</p>
+                  <p><strong>Condicional:</strong> histórico bruto de mensagens anteriores deste chat — controlado pelo toggle "Enviar histórico" acima. Em tarefa agendada, memória persistente e de usuário podem ser puladas pelo toggle "Não incluir memórias" da própria tarefa (sem afetar o histórico do chat reusado).</p>
+                  <p><strong>Nunca sem você pedir:</strong> conteúdo de arquivos de memória de usuário que não estejam marcados para ir completos no prompt — a IA só os lê via tool quando precisa.</p>
+                </div>
               </div>
             </section>
 
@@ -1717,13 +1763,31 @@ const SCHEDULED_TASK_TOOL_LABELS = {
   rename_chat: 'Renomear chat',
 };
 
+const SCHEDULED_TASK_WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+const SCHEDULED_TASK_TIMEZONES = (() => {
+  try {
+    return Intl.supportedValuesOf('timeZone');
+  } catch {
+    return ['UTC', 'America/Sao_Paulo', 'America/New_York', 'Europe/Lisbon', 'Europe/London', 'Asia/Tokyo'];
+  }
+})();
+
 function describeScheduledTaskSchedule(schedule = {}) {
+  const hour = String(schedule.hour ?? 9).padStart(2, '0');
+  const minute = String(schedule.minute ?? 0).padStart(2, '0');
+  const time = `${hour}:${minute} (${schedule.timezone || 'UTC'})`;
   if (schedule.type === 'interval') {
     return `A cada ${schedule.everyHours}h`;
   }
-  const hour = String(schedule.hour ?? 9).padStart(2, '0');
-  const minute = String(schedule.minute ?? 0).padStart(2, '0');
-  return `Diariamente às ${hour}:${minute} (${schedule.timezone || 'UTC'})`;
+  if (schedule.type === 'weekly') {
+    const days = (schedule.daysOfWeek || []).map((day) => SCHEDULED_TASK_WEEKDAY_LABELS[day]).join(', ') || '—';
+    return `Toda(s) ${days} às ${time}`;
+  }
+  if (schedule.type === 'monthly') {
+    return `Todo dia ${schedule.dayOfMonth ?? 1} às ${time}`;
+  }
+  return `Diariamente às ${time}`;
 }
 
 function renderScheduledTaskRows() {
@@ -1737,7 +1801,8 @@ function renderScheduledTaskRows() {
         <div class="profile-row">
           <div>
             <strong>${escapeHtml(task.name)}</strong>
-            <small>${escapeHtml(describeScheduledTaskSchedule(task.schedule))} · ${task.enabled ? 'Ativa' : 'Desativada'}</small>
+            <span class="status-pill ${task.enabled ? 'active' : 'inactive'}">${task.enabled ? 'Ativa' : 'Desativada'}</span>
+            <small>${escapeHtml(describeScheduledTaskSchedule(task.schedule))}</small>
             <small>Próxima execução: ${escapeHtml(nextRun)} · Última: ${escapeHtml(lastRun)}</small>
           </div>
           <div class="profile-row-actions">
@@ -1759,21 +1824,18 @@ function renderScheduledTaskEditor() {
   const provider = task?.provider || state.config?.provider || 'groq';
   const model = task?.model || state.config?.model || '';
   const schedule = task?.schedule || { type: 'daily', hour: 9, minute: 0, timezone: 'UTC' };
+  const scheduleType = schedule.type || 'daily';
   const allowedTools = new Set(task?.allowedTools || []);
+  const selectedWeekdays = new Set(schedule.daysOfWeek || [1]);
+  const timeValue = `${String(schedule.hour ?? 9).padStart(2, '0')}:${String(schedule.minute ?? 0).padStart(2, '0')}`;
+  const timeFieldsVisible = scheduleType !== 'interval';
   return `
     <div class="scheduled-task-editor notice-card">
       <h4>${isNew ? 'Nova tarefa agendada' : 'Editar tarefa'}</h4>
-      <div class="setup-grid">
-        <label>
-          Nome
-          <input id="sched-task-name" value="${escapeAttr(task?.name || '')}" placeholder="Ex.: Resumo diário" />
-        </label>
-        <label class="toggle-row switch-row">
-          <input type="checkbox" id="sched-task-enabled" ${task?.enabled !== false ? 'checked' : ''} />
-          <span class="switch" aria-hidden="true"></span>
-          <span><strong>Ativa</strong></span>
-        </label>
-      </div>
+      <label>
+        Nome
+        <input id="sched-task-name" value="${escapeAttr(task?.name || '')}" placeholder="Ex.: Resumo diário" />
+      </label>
       <label>
         Prompt enviado a cada execução
         <textarea id="sched-task-prompt" rows="4" placeholder="O que a IA deve fazer nesta execução?">${escapeHtml(task?.prompt || '')}</textarea>
@@ -1791,31 +1853,58 @@ function renderScheduledTaskEditor() {
       <label>
         Tipo de agendamento
         <select id="sched-task-schedule-type">
-          <option value="daily" ${schedule.type !== 'interval' ? 'selected' : ''}>Diário</option>
-          <option value="interval" ${schedule.type === 'interval' ? 'selected' : ''}>Intervalo</option>
+          <option value="daily" ${scheduleType === 'daily' ? 'selected' : ''}>Diário</option>
+          <option value="weekly" ${scheduleType === 'weekly' ? 'selected' : ''}>Semanal</option>
+          <option value="monthly" ${scheduleType === 'monthly' ? 'selected' : ''}>Mensal</option>
+          <option value="interval" ${scheduleType === 'interval' ? 'selected' : ''}>Intervalo</option>
         </select>
       </label>
-      <div class="setup-grid" id="sched-task-daily-fields" style="${schedule.type === 'interval' ? 'display:none' : ''}">
+      <div class="setup-grid" id="sched-task-time-fields" style="${timeFieldsVisible ? '' : 'display:none'}">
         <label>
-          Hora (0-23)
-          <input id="sched-task-hour" type="number" min="0" max="23" value="${escapeAttr(schedule.hour ?? 9)}" />
+          Horário
+          <input id="sched-task-time" type="time" value="${escapeAttr(timeValue)}" />
         </label>
         <label>
-          Minuto (0-59)
-          <input id="sched-task-minute" type="number" min="0" max="59" value="${escapeAttr(schedule.minute ?? 0)}" />
-        </label>
-        <label>
-          Timezone (IANA)
-          <input id="sched-task-timezone" value="${escapeAttr(schedule.timezone || 'UTC')}" placeholder="Ex.: America/Sao_Paulo" />
+          Fuso horário
+          <input id="sched-task-timezone" list="sched-task-tz-options" value="${escapeAttr(schedule.timezone || 'UTC')}" placeholder="Ex.: America/Sao_Paulo" />
+          <datalist id="sched-task-tz-options">
+            ${SCHEDULED_TASK_TIMEZONES.map((tz) => `<option value="${escapeAttr(tz)}"></option>`).join('')}
+          </datalist>
         </label>
       </div>
-      <div class="setup-grid" id="sched-task-interval-fields" style="${schedule.type === 'interval' ? '' : 'display:none'}">
+      <div class="weekday-chip-grid" id="sched-task-weekday-fields" style="${scheduleType === 'weekly' ? '' : 'display:none'}">
+        ${SCHEDULED_TASK_WEEKDAY_LABELS.map(
+          (label, day) => `
+            <label class="weekday-chip">
+              <input type="checkbox" class="sched-task-weekday-checkbox" value="${day}" ${selectedWeekdays.has(day) ? 'checked' : ''} />
+              ${label}
+            </label>
+          `,
+        ).join('')}
+      </div>
+      <div class="setup-grid" id="sched-task-month-fields" style="${scheduleType === 'monthly' ? '' : 'display:none'}">
+        <label>
+          Dia do mês
+          <select id="sched-task-day-of-month">
+            ${Array.from({ length: 31 }, (_, index) => index + 1)
+              .map((day) => `<option value="${day}" ${(schedule.dayOfMonth ?? 1) === day ? 'selected' : ''}>${day}</option>`)
+              .join('')}
+          </select>
+          <small>Se o mês não tiver esse dia, a tarefa roda no último dia do mês.</small>
+        </label>
+      </div>
+      <div class="setup-grid" id="sched-task-interval-fields" style="${scheduleType === 'interval' ? '' : 'display:none'}">
         <label>
           A cada quantas horas
           <input id="sched-task-every-hours" type="number" min="0.1" step="0.5" value="${escapeAttr(schedule.everyHours ?? 6)}" />
         </label>
       </div>
       <div class="toggle-list">
+        <label class="toggle-row switch-row">
+          <input type="checkbox" id="sched-task-enabled" ${task?.enabled !== false ? 'checked' : ''} />
+          <span class="switch" aria-hidden="true"></span>
+          <span><strong>Ativa</strong></span>
+        </label>
         <label class="toggle-row switch-row">
           <input type="checkbox" id="sched-task-reuse-chat" ${task?.reuseChat !== false ? 'checked' : ''} />
           <span class="switch" aria-hidden="true"></span>
@@ -1829,7 +1918,7 @@ function renderScheduledTaskEditor() {
           <span class="switch" aria-hidden="true"></span>
           <span>
             <strong>Não incluir memórias nesta tarefa</strong>
-            <small>Pula a memória persistente global e os arquivos de memória do usuário no prompt, pra economizar tokens. O histórico do chat reusado continua normal.</small>
+            <small>Pula a memória persistente global e os arquivos de memória do usuário no prompt, pra economizar tokens. O histórico do chat reusado (se "Reusar o mesmo chat" estiver ligado) e a memória desse chat continuam normais.</small>
           </span>
         </label>
       </div>
@@ -4429,6 +4518,11 @@ function bindAppEvents() {
       state.settingsDirty = true;
       renderPreservingVisualState();
     });
+    document.querySelector('#history-budget-toggle')?.addEventListener('change', () => {
+      captureSettingsDraftFromForm();
+      state.settingsDirty = true;
+      renderPreservingVisualState();
+    });
     document.querySelector('#api-provider-input').addEventListener('change', changeApiProviderDraft);
     document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
     document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
@@ -4857,23 +4951,42 @@ function closeScheduledTaskEditor() {
 
 function toggleScheduledTaskScheduleFields() {
   const type = document.getElementById('sched-task-schedule-type')?.value;
-  const daily = document.getElementById('sched-task-daily-fields');
+  const time = document.getElementById('sched-task-time-fields');
+  const weekday = document.getElementById('sched-task-weekday-fields');
+  const month = document.getElementById('sched-task-month-fields');
   const interval = document.getElementById('sched-task-interval-fields');
-  if (daily) daily.style.display = type === 'interval' ? 'none' : '';
+  if (time) time.style.display = type === 'interval' ? 'none' : '';
+  if (weekday) weekday.style.display = type === 'weekly' ? '' : 'none';
+  if (month) month.style.display = type === 'monthly' ? '' : 'none';
   if (interval) interval.style.display = type === 'interval' ? '' : 'none';
 }
 
 function readScheduledTaskFormValues() {
-  const scheduleType = document.getElementById('sched-task-schedule-type')?.value === 'interval' ? 'interval' : 'daily';
-  const schedule =
-    scheduleType === 'interval'
-      ? { type: 'interval', everyHours: Number(document.getElementById('sched-task-every-hours')?.value || 6) }
-      : {
-          type: 'daily',
-          hour: Number(document.getElementById('sched-task-hour')?.value || 9),
-          minute: Number(document.getElementById('sched-task-minute')?.value || 0),
-          timezone: document.getElementById('sched-task-timezone')?.value || 'UTC',
-        };
+  const scheduleType = document.getElementById('sched-task-schedule-type')?.value || 'daily';
+  const [hour, minute] = (document.getElementById('sched-task-time')?.value || '09:00').split(':').map(Number);
+  const timezone = document.getElementById('sched-task-timezone')?.value || 'UTC';
+  let schedule;
+  if (scheduleType === 'interval') {
+    schedule = { type: 'interval', everyHours: Number(document.getElementById('sched-task-every-hours')?.value || 6) };
+  } else if (scheduleType === 'weekly') {
+    schedule = {
+      type: 'weekly',
+      daysOfWeek: Array.from(document.querySelectorAll('.sched-task-weekday-checkbox:checked')).map((el) => Number(el.value)),
+      hour,
+      minute,
+      timezone,
+    };
+  } else if (scheduleType === 'monthly') {
+    schedule = {
+      type: 'monthly',
+      dayOfMonth: Number(document.getElementById('sched-task-day-of-month')?.value || 1),
+      hour,
+      minute,
+      timezone,
+    };
+  } else {
+    schedule = { type: 'daily', hour, minute, timezone };
+  }
   const allowedTools = Array.from(document.querySelectorAll('.sched-task-tool-checkbox:checked')).map((el) => el.value);
   return {
     name: document.getElementById('sched-task-name')?.value || 'Tarefa agendada',
@@ -6331,6 +6444,8 @@ async function saveGeneralSettings(event, options = {}) {
           autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
           autoCompactChars: Number(form.get('autoCompactChars')),
           autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
+          historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
+          historyBudgetChars: Number(form.get('historyBudgetChars')),
         },
         routing: {
           ...(offlineMode
@@ -6484,6 +6599,8 @@ function captureSettingsDraftFromForm() {
     autoCompactEnabled: form.get('autoCompactEnabled') === 'on',
     autoCompactChars: Number(form.get('autoCompactChars') || 24000),
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
+    historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
+    historyBudgetChars: Number(form.get('historyBudgetChars') || 28000),
   };
   draftConfig.routing = offlineMode
     ? normalizeOfflineRoutingForClient()

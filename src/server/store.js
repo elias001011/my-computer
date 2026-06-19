@@ -68,6 +68,8 @@ export const defaultConfig = Object.freeze({
     autoCompactEnabled: false,
     autoCompactChars: 24000,
     autoCompactMinMessages: 12,
+    historyBudgetEnabled: true,
+    historyBudgetChars: 28000,
   },
   server: {
     networkEnabled: false,
@@ -722,15 +724,50 @@ const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
 ];
 const SCHEDULED_TASK_LEASE_STALE_MS = 10 * 60 * 1000;
 
+const VALID_SCHEDULE_TIMEZONES = (() => {
+  try {
+    return new Set(Intl.supportedValuesOf('timeZone'));
+  } catch {
+    return null; // older runtime without supportedValuesOf: skip validation, trust the input
+  }
+})();
+
+function normalizeScheduleTimezone(timezone) {
+  const value = String(timezone || 'UTC').trim() || 'UTC';
+  if (VALID_SCHEDULE_TIMEZONES && !VALID_SCHEDULE_TIMEZONES.has(value)) return 'UTC';
+  return value;
+}
+
 function normalizeScheduleConfig(schedule = {}) {
   if (schedule.type === 'interval') {
     return { type: 'interval', everyHours: numberInRange(schedule.everyHours, 0.1, 24 * 30) || 6 };
+  }
+  if (schedule.type === 'weekly') {
+    const daysOfWeek = Array.isArray(schedule.daysOfWeek)
+      ? [...new Set(schedule.daysOfWeek.map((day) => clampInteger(day, 0, 6, null)).filter((day) => day !== null))].sort()
+      : [];
+    return {
+      type: 'weekly',
+      daysOfWeek: daysOfWeek.length ? daysOfWeek : [1],
+      hour: clampInteger(schedule.hour, 0, 23, 9),
+      minute: clampInteger(schedule.minute, 0, 59, 0),
+      timezone: normalizeScheduleTimezone(schedule.timezone),
+    };
+  }
+  if (schedule.type === 'monthly') {
+    return {
+      type: 'monthly',
+      dayOfMonth: clampInteger(schedule.dayOfMonth, 1, 31, 1),
+      hour: clampInteger(schedule.hour, 0, 23, 9),
+      minute: clampInteger(schedule.minute, 0, 59, 0),
+      timezone: normalizeScheduleTimezone(schedule.timezone),
+    };
   }
   return {
     type: 'daily',
     hour: clampInteger(schedule.hour, 0, 23, 9),
     minute: clampInteger(schedule.minute, 0, 59, 0),
-    timezone: String(schedule.timezone || 'UTC').trim() || 'UTC',
+    timezone: normalizeScheduleTimezone(schedule.timezone),
   };
 }
 
@@ -778,10 +815,46 @@ function nextDailyOccurrence(hour, minute, timezone, fromDate) {
   return candidateUtc;
 }
 
+function nextWeeklyOccurrence(daysOfWeek, hour, minute, timezone, fromDate) {
+  for (let daysAhead = 0; daysAhead < 8; daysAhead += 1) {
+    const probeUtc = new Date(fromDate.getTime() + daysAhead * 24 * 60 * 60 * 1000);
+    const offsetMinutes = getTimezoneOffsetMinutes(timezone, probeUtc);
+    const localProbe = new Date(probeUtc.getTime() + offsetMinutes * 60000);
+    if (!daysOfWeek.includes(localProbe.getUTCDay())) continue;
+    const candidateLocal = new Date(
+      Date.UTC(localProbe.getUTCFullYear(), localProbe.getUTCMonth(), localProbe.getUTCDate(), hour, minute, 0, 0),
+    );
+    const candidateUtc = new Date(candidateLocal.getTime() - offsetMinutes * 60000);
+    if (candidateUtc.getTime() > fromDate.getTime()) return candidateUtc;
+  }
+  return new Date(fromDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+}
+
+function nextMonthlyOccurrence(dayOfMonth, hour, minute, timezone, fromDate) {
+  const offsetMinutes = getTimezoneOffsetMinutes(timezone, fromDate);
+  const localNow = new Date(fromDate.getTime() + offsetMinutes * 60000);
+  for (let monthsAhead = 0; monthsAhead <= 1; monthsAhead += 1) {
+    const targetYear = localNow.getUTCFullYear();
+    const targetMonth = localNow.getUTCMonth() + monthsAhead;
+    const daysInMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(dayOfMonth, daysInMonth);
+    const candidateLocal = new Date(Date.UTC(targetYear, targetMonth, clampedDay, hour, minute, 0, 0));
+    const candidateUtc = new Date(candidateLocal.getTime() - offsetMinutes * 60000);
+    if (candidateUtc.getTime() > fromDate.getTime()) return candidateUtc;
+  }
+  return new Date(fromDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+}
+
 export function computeNextRunAt(schedule, fromDate = new Date()) {
   const normalized = normalizeScheduleConfig(schedule);
   if (normalized.type === 'interval') {
     return new Date(fromDate.getTime() + normalized.everyHours * 60 * 60 * 1000).toISOString();
+  }
+  if (normalized.type === 'weekly') {
+    return nextWeeklyOccurrence(normalized.daysOfWeek, normalized.hour, normalized.minute, normalized.timezone, fromDate).toISOString();
+  }
+  if (normalized.type === 'monthly') {
+    return nextMonthlyOccurrence(normalized.dayOfMonth, normalized.hour, normalized.minute, normalized.timezone, fromDate).toISOString();
   }
   return nextDailyOccurrence(normalized.hour, normalized.minute, normalized.timezone, fromDate).toISOString();
 }
@@ -2041,6 +2114,8 @@ function normalizeContextSettings(context = {}) {
     autoCompactEnabled: context.autoCompactEnabled === true,
     autoCompactChars: clampInteger(context.autoCompactChars, 8000, 120000, 24000),
     autoCompactMinMessages: clampInteger(context.autoCompactMinMessages, 2, 80, 12),
+    historyBudgetEnabled: context.historyBudgetEnabled !== false,
+    historyBudgetChars: clampInteger(context.historyBudgetChars, 2000, 120000, 28000),
   };
 }
 

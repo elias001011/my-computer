@@ -1990,9 +1990,16 @@ function renderUserMemoryPromptSection(userMemoryContext, config = {}) {
   return lines.join('\n');
 }
 
+function getHistoryBudgetChars(config) {
+  if (config.context?.historyBudgetEnabled === false) return 0;
+  const configured = Number(config.context?.historyBudgetChars);
+  return Number.isFinite(configured) && configured > 0 ? configured : MAX_CONTEXT_CHARS;
+}
+
 async function selectRecentMessages(chat, config, options = {}) {
   const selected = [];
   let total = 0;
+  const budget = getHistoryBudgetChars(config);
 
   for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
     const message = chat.messages[index];
@@ -2000,7 +2007,7 @@ async function selectRecentMessages(chat, config, options = {}) {
     if (message.status === 'failed' || message.status === 'incomplete') continue;
     const rendered = await renderProviderMessage(chat, message, config, options);
     const size = estimateMessageSize(rendered.content) + 20;
-    if (selected.length && total + size > MAX_CONTEXT_CHARS) break;
+    if (selected.length && total + size > budget) break;
     selected.unshift(rendered);
     total += size;
   }
