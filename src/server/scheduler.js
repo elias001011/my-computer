@@ -32,7 +32,9 @@ async function tick() {
     if (!task.nextRunAt || new Date(task.nextRunAt).getTime() > now) continue;
     if (runningTaskIds.has(task.id)) continue;
     runningTaskIds.add(task.id);
-    executeTask(task.id).finally(() => runningTaskIds.delete(task.id));
+    executeTask(task.id)
+      .catch((error) => console.error(`[scheduler] tarefa ${task.id} falhou de forma inesperada:`, error.message || error))
+      .finally(() => runningTaskIds.delete(task.id));
   }
 }
 
