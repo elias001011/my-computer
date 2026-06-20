@@ -21,7 +21,11 @@ export function startScheduler() {
   if (started) return;
   started = true;
   runTick();
-  setInterval(runTick, TICK_INTERVAL_MS);
+  // unref so this timer alone never keeps the process alive -- matters for tests/tools that
+  // spin up a real server in a short-lived process and expect it to exit after server.close().
+  // In normal long-running usage the HTTP server's own open socket already keeps Node alive,
+  // so this changes nothing about when the scheduler actually ticks.
+  setInterval(runTick, TICK_INTERVAL_MS).unref();
 }
 
 function runTick() {

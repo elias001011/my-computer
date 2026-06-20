@@ -1590,6 +1590,16 @@ function renderSettingsModal() {
                 </label>
                 <p class="help-text">Em caracteres, não tokens reais (o app não usa um tokenizer; ~4 caracteres ≈ 1 token é uma aproximação comum, mas varia por modelo). Mensagens mais antigas vão sendo descartadas primeiro até caber no limite; a mensagem atual nunca é cortada por esse limite.</p>
               </div>
+              <div class="toggle-list">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="includeCurrentDateTime" ${draftConfig.context?.includeCurrentDateTime !== false ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Incluir data e hora atual no prompt</strong>
+                    <small>Sem isso, o modelo só sabe a data pelo treinamento dele e pode confundir passado/futuro. Vai no prompt de sistema (junto com chat normal e tarefas agendadas), nunca dentro de um resultado de tool.</small>
+                  </span>
+                </label>
+              </div>
               <div class="explain-list">
                 <p><strong>Janela interna do modelo:</strong> limite real do modelo/provider em uso. O app ainda aproxima por caracteres, então um modelo menor pode rejeitar chamadas se o prompt ficar grande demais.</p>
                 <p><strong>Salvar snapshot:</strong> salva uma fotografia Markdown do estado atual em context-snapshots e atualiza context-window.md. Não muda o prompt futuro por si só.</p>
@@ -1600,7 +1610,7 @@ function renderSettingsModal() {
                 <h4>O que entra no prompt, sempre ou condicionalmente</h4>
                 <div class="explain-list">
                   <p><strong>Sempre:</strong> instruções fixas do app (papel do MC, idioma, nível técnico, runtime atual), memória persistente global, índice/conteúdo da memória de usuário conforme os toggles da seção Memória, memória do chat atual, contexto compactado (se existir), e o texto narrativo de cada tool conforme os toggles da seção Tools.</p>
-                  <p><strong>Condicional:</strong> histórico bruto de mensagens anteriores deste chat — controlado pelo toggle "Enviar histórico" acima. Em tarefa agendada, memória persistente e de usuário podem ser puladas pelo toggle "Não incluir memórias" da própria tarefa (sem afetar o histórico do chat reusado).</p>
+                  <p><strong>Condicional:</strong> histórico bruto de mensagens anteriores deste chat — controlado pelo toggle "Enviar histórico" acima; data e hora atual — controlado pelo toggle "Incluir data e hora atual" acima, vale pra chat normal e tarefa agendada igual. Em tarefa agendada, memória persistente e de usuário podem ser puladas pelo toggle "Não incluir memórias" da própria tarefa (sem afetar o histórico do chat reusado).</p>
                   <p><strong>Nunca sem você pedir:</strong> conteúdo de arquivos de memória de usuário que não estejam marcados para ir completos no prompt — a IA só os lê via tool quando precisa.</p>
                 </div>
               </div>
@@ -6525,6 +6535,7 @@ async function saveGeneralSettings(event, options = {}) {
           autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
           historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
           historyBudgetChars: Number(form.get('historyBudgetChars')),
+          includeCurrentDateTime: form.get('includeCurrentDateTime') === 'on',
         },
         email: {
           enabled: form.get('emailEnabled') === 'on',
@@ -6686,6 +6697,7 @@ function captureSettingsDraftFromForm() {
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
     historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
     historyBudgetChars: Number(form.get('historyBudgetChars') || 28000),
+    includeCurrentDateTime: form.get('includeCurrentDateTime') === 'on',
   };
   draftConfig.email = {
     enabled: form.get('emailEnabled') === 'on',

@@ -7,6 +7,7 @@ import {
   createMessage,
   buildUserMemoryPromptContext,
   getRuntimeInfo,
+  getServerLocalTimezone,
   listUserMemoryFilesWithHints,
   readChat,
   readContextSummary,
@@ -1802,18 +1803,33 @@ function buildSystemPrompt(
       ? 'Respond in the same language the user is using.'
       : `Respond in this language unless the user explicitly asks otherwise: ${config.language}.`;
 
+  // Lives in the system prompt, never in a tool result message -- applies to both regular
+  // chat turns and scheduled-task runs (both are user-originated content, just one is typed
+  // live and the other configured ahead of time), gated by config.context, default on.
+  const currentDateTimeInstruction =
+    config.context?.includeCurrentDateTime !== false
+      ? (() => {
+          const now = new Date();
+          const timezone = getServerLocalTimezone();
+          const formatted = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: timezone }).format(now);
+          return `Current date and time right now: ${formatted} (${timezone}); ISO UTC: ${now.toISOString()}. Use this as ground truth for "today", "yesterday", "this year", any relative date, and whether an event is in the past or future -- never guess the current date from your training cutoff.`;
+        })()
+      : '';
+
   return [
     'You are My Computer, a self-hosted AI assistant integrated with this local app, not a generic chatbot.',
     'Use the app state, durable memories, user-added memory files, tools, provider settings, and current chat metadata as first-class context.',
     config.userNickname ? `Call the user by this preferred name when natural: ${config.userNickname}.` : '',
     languageInstruction,
+    currentDateTimeInstruction,
     buildTechnicalLevelInstruction(config),
     `Available tools: ${describeEnabledTools(config.tools).join(', ') || 'none'}.`,
     config.activeProfile?.name ? `Active isolated section/profile: ${config.activeProfile.name} (${config.activeProfile.id}).` : '',
     config.privacy?.offlineMode
       ? 'Offline privacy mode is enabled for this section. Do not use cloud AI providers, native provider web search, provider-side tools, provider rotation, or any workflow that sends user prompts, memories, files, paths, code, terminal output, or personal/project details to an external AI service. The only chat provider allowed is local Ollama.'
       : '',
-    'Final answer formatting: write clean Markdown. Start with the direct answer, then use short sections, bullets, numbered steps, tables, or fenced code blocks only when they make the answer easier to scan. Avoid dumping raw logs unless the user asked for them.',
+    'Final answer formatting: write clean Markdown and match structure to length. A short answer (one fact, one paragraph, a quick list) gets zero headers -- only add ## headers, multiple subheadings, or tables when the answer is genuinely long and they actually aid scanning. Do not decorate headers or bullets with emoji unless the user used them first. Avoid dumping raw logs unless the user asked for them.',
+    'Never state a specific score, date, statistic, name, or other factual detail with confidence unless a tool result (web_search, terminal, etc.) you actually received confirms it. If a search failed, returned nothing relevant, or is ambiguous/outdated, say that plainly instead of inventing a plausible-looking answer.',
     'If you cannot finish cleanly, do not pretend the answer is complete. Stop with the best partial state you have; the UI will keep that attempt and expose a Continue action.',
     config.tools?.terminal
       ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Do not use terminal commands as a substitute for public web search: grep, find, rg, ls, cat, browser caches, local files, and /home searches inspect the user machine, not the internet. Do not run broad recursive searches across /home, the user profile, or filesystem root unless the user explicitly asked for a local-file search and gave a narrow scope; ask for a path or use a targeted command instead. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'

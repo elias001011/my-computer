@@ -2152,6 +2152,7 @@ function normalizeContextSettings(context = {}) {
     autoCompactMinMessages: clampInteger(context.autoCompactMinMessages, 2, 80, 12),
     historyBudgetEnabled: context.historyBudgetEnabled !== false,
     historyBudgetChars: clampInteger(context.historyBudgetChars, 2000, 120000, 28000),
+    includeCurrentDateTime: context.includeCurrentDateTime !== false,
   };
 }
 
