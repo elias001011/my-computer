@@ -341,7 +341,7 @@ export const sendEmailToolDefinition = {
   function: {
     name: 'send_email',
     description:
-      'Send an email. The destination address is fixed by the user in the Email settings and cannot be chosen or overridden here -- this tool never accepts a recipient. Only available inside scheduled tasks that explicitly allow it.',
+      'Send an email. The destination address is fixed by the user in the Email settings and cannot be chosen or overridden here -- this tool never accepts a recipient.',
     parameters: {
       type: 'object',
       properties: {

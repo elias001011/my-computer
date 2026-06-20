@@ -132,7 +132,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
   const toolUses = [];
   const executionTrace = [];
-  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext, effectiveConfig.email);
+  const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext);
   let providerUsed = effectiveConfig.provider;
   let modelUsed = effectiveConfig.model;
   const continuationGroupId = getMessageContinuationGroupId(userMessage);
@@ -209,14 +209,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         for (const toolCall of toolCalls) {
           throwIfStopped(operationSignal);
           const toolUse = isToolAllowedForScheduledTask(toolCall, scheduledTaskContext)
-            ? await executeToolCallSafely(chatId, toolCall, {
-                ...selectedConfig,
-                // isToolEnabled() below reads config.tools directly; tools like send_email
-                // that have no global on/off flag are gated purely by this mask (allowlist +
-                // isEmailConfigured), so execution must see the masked tools, not the raw ones.
-                tools: applyScheduledTaskToolMask(selectedConfig.tools, scheduledTaskContext, selectedConfig.email),
-                signal: operationSignal,
-              })
+            ? await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal })
             : createScheduledTaskDeniedToolUse(toolCall);
           throwIfStopped(operationSignal);
           toolUses.push(toolUse);
@@ -1757,7 +1750,7 @@ async function buildProviderMessages(chat, config, persistentMemory, options = {
 // narrative instructions (e.g. "call run_terminal_command...") so a scheduled
 // task's prompt never tells the model to use a tool that was filtered out of
 // the actual function-calling schema by buildEnabledToolDefinitions.
-function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext, emailSettings = null) {
+function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
   if (!scheduledTaskContext) return tools;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
   const searchMode = allowed.has('web_search') ? getSearchMode(tools) : 'off';
@@ -1771,7 +1764,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext, emailSetti
     chatDocuments: tools.chatDocuments !== false && allowed.has('chat_document'),
     autoCompact: tools.autoCompact !== false && allowed.has('compact_context'),
     chatTitle: tools.chatTitle !== false && allowed.has('rename_chat'),
-    sendEmail: allowed.has('send_email') && isEmailConfigured(emailSettings),
+    sendEmail: tools.sendEmail !== false && allowed.has('send_email'),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',
@@ -1798,6 +1791,10 @@ function buildEffectiveConfig(config, chat = {}, runtimeInfo = {}, extra = {}) {
       searchMode: offlineSearchMode,
       webSearch: offlineSearchMode !== 'off',
       searchTerminal: offlineSearchMode === 'terminal' || offlineSearchMode === 'both',
+      // No separate on/off setting: send_email is available whenever Email settings are
+      // actually usable (enabled + key + destination), same as how other tools are gated by
+      // their own settings instead of a redundant extra flag.
+      sendEmail: isEmailConfigured(config.email),
     },
     routing: offlineMode
       ? {
@@ -1821,7 +1818,7 @@ function buildSystemPrompt(
   { skipMemory = false, scheduledTaskContext = null } = {},
 ) {
   if (scheduledTaskContext) {
-    config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext, config.email) };
+    config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext) };
   }
   const languageInstruction =
     config.language === 'auto'
@@ -1893,8 +1890,8 @@ function buildSystemPrompt(
       ? 'If the chat title is generic, call rename_chat after the first user message with a short descriptive title. For rename_chat, normally set returnOutput false.'
       : 'Chat title editing through tools is disabled by user settings.',
     config.tools?.sendEmail
-      ? 'The send_email tool is available for this scheduled task. It always sends to the single destination address configured by the user in Email settings -- there is no recipient parameter and you cannot choose or override the destination. Use it only when the task prompt asks for an emailed result.'
-      : '',
+      ? 'The send_email tool is available. It always sends to the single destination address configured by the user in Email settings -- there is no recipient parameter and you cannot choose or override the destination. Use it when the user or the task prompt asks for an emailed result.'
+      : 'Sending email is disabled or not configured by the user.',
     config.tools?.chatMemory
       ? 'For memory_chat write operations, send the full edited Markdown memory file, using the current memory below as the base.'
       : '',
@@ -2262,7 +2259,7 @@ async function executeCompactContextToolCall(chatId, toolCallId, input, config =
   };
 }
 
-function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null, emailSettings = null) {
+function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
   const definitions = [
     tools.terminal !== false ? terminalToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
@@ -2273,17 +2270,11 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null, em
     tools.chatDocuments !== false ? chatDocumentToolDefinition : null,
     tools.autoCompact !== false ? compactContextToolDefinition : null,
     tools.chatTitle !== false ? renameChatToolDefinition : null,
+    tools.sendEmail === true ? sendEmailToolDefinition : null,
   ].filter(Boolean);
   if (!scheduledTaskContext) return definitions;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
-  const filtered = definitions.filter((definition) => allowed.has(definition.function?.name));
-  // send_email only ever exists inside scheduled tasks, never in the base/interactive list above,
-  // and only when Resend is actually configured -- otherwise the model would see a tool that
-  // can't possibly work.
-  if (allowed.has('send_email') && isEmailConfigured(emailSettings)) {
-    filtered.push(sendEmailToolDefinition);
-  }
-  return filtered;
+  return definitions.filter((definition) => allowed.has(definition.function?.name));
 }
 
 function isEmailConfigured(emailSettings) {
@@ -2600,7 +2591,7 @@ function toolRequiresApproval(toolCall, config = {}) {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action === 'read';
   }
-  if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat') {
+  if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat' || name === 'send_email') {
     return true;
   }
   if (name === 'chat_document') {

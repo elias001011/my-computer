@@ -1626,7 +1626,7 @@ function renderSettingsModal() {
                   <span class="switch" aria-hidden="true"></span>
                   <span>
                     <strong>Ativar envio de email</strong>
-                    <small>Sem isso ligado, a tool send_email não fica disponível em nenhuma tarefa agendada, mesmo que marcada na allowlist.</small>
+                    <small>Sem isso ligado (e sem chave + email de destino preenchidos), a tool send_email não fica disponível em nenhum chat nem tarefa agendada, mesmo que marcada na allowlist de uma tarefa.</small>
                   </span>
                 </label>
               </div>
@@ -1656,7 +1656,8 @@ function renderSettingsModal() {
               <div class="explain-list">
                 <p><strong>Por que enviar não expõe nada à rede:</strong> é uma chamada de saída do MC pra API do Resend, igual qualquer chamada de provider de IA. Funciona idêntico local ou na VPS, sem domínio público.</p>
                 <p><strong>Endereço de envio:</strong> sem verificar um domínio próprio, o Resend exige usar o endereço sandbox dele (<code>onboarding@resend.dev</code>) como remetente — é uma limitação da plataforma, não uma configuração.</p>
-                <p><strong>Destino fixo:</strong> a tool send_email não tem parâmetro de destinatário — a IA nunca escolhe pra onde mandar, só o assunto e o corpo. Só existe dentro de tarefas agendadas que marcarem "Enviar email" na allowlist própria da tarefa.</p>
+                <p><strong>Destino fixo:</strong> a tool send_email não tem parâmetro de destinatário — a IA nunca escolhe pra onde mandar, só o assunto e o corpo.</p>
+                <p><strong>Onde aparece:</strong> disponível em qualquer chat (com aprovação manual, a menos que "Sempre permitir qualquer tool" esteja ligado) sempre que estiver ativada e configurada acima. Em tarefa agendada, ainda precisa estar marcada na allowlist daquela tarefa, igual qualquer outra tool.</p>
               </div>
             </section>
 
