@@ -1941,7 +1941,7 @@ function renderScheduledTaskEditor() {
       <div class="setup-grid" id="sched-task-interval-fields" style="${scheduleType === 'interval' ? '' : 'display:none'}">
         <label>
           A cada quantas horas
-          <input id="sched-task-every-hours" type="number" min="0.1" step="0.5" value="${escapeAttr(schedule.everyHours ?? 6)}" />
+          <input id="sched-task-every-hours" type="number" min="0.5" step="0.5" value="${escapeAttr(schedule.everyHours ?? 6)}" />
         </label>
       </div>
       <div class="toggle-list">
