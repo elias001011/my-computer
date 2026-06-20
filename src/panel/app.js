@@ -5089,8 +5089,9 @@ async function sendTestEmail() {
   if (state.busy) return;
   const resendApiKey = document.querySelector('[name="emailResendApiKey"]')?.value || '';
   const destinationEmail = document.querySelector('[name="emailDestination"]')?.value || '';
+  const enabled = document.querySelector('[name="emailEnabled"]')?.checked === true;
   await runAction('Enviando email de teste...', async () => {
-    await api('/api/email/test', { method: 'POST', body: { resendApiKey, destinationEmail } });
+    await api('/api/email/test', { method: 'POST', body: { resendApiKey, destinationEmail, enabled } });
     state.status = 'Email de teste enviado.';
   });
 }

@@ -571,6 +571,14 @@ async function handleEmailTestApi(request, response) {
   const email = config.email || {};
   const apiKey = String(body.resendApiKey || email.resendApiKey || '').trim();
   const destinationEmail = String(body.destinationEmail || email.destinationEmail || '').trim();
+  // Mirrors isEmailConfigured() in assistant.js -- without this, the test button could succeed
+  // while "Ativar envio de email" stays off, hiding the real reason send_email never shows up
+  // as an available tool in a scheduled task.
+  const enabled = Object.hasOwn(body, 'enabled') ? Boolean(body.enabled) : email.enabled === true;
+  if (!enabled) {
+    sendJson(response, 400, { error: 'Ative "Ativar envio de email" antes de testar -- sem isso, a tool send_email também não fica disponível em nenhuma tarefa agendada.' });
+    return;
+  }
   if (!apiKey || !destinationEmail) {
     sendJson(response, 400, { error: 'Configure a chave do Resend e o email de destino antes de testar.' });
     return;
