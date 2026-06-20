@@ -1044,7 +1044,9 @@ export async function readContextSummary(id) {
 
 export async function writeContextSummary(id, content) {
   const chat = await readChat(id);
-  await fs.writeFile(chat.paths.context, String(content || ''), { mode: 0o600 });
+  // Locked on the same path redactDeletedAttachmentContextFiles() uses, so deleting an
+  // attachment mid-compaction can't lose its redaction to this write (lost-update race).
+  await withFileLock(chat.paths.context, () => fs.writeFile(chat.paths.context, String(content || ''), { mode: 0o600 }));
   await touchChat(id);
   await appendEvent({ type: 'chat.context.compacted', chatId: id });
   return readChat(id);
@@ -1052,7 +1054,9 @@ export async function writeContextSummary(id, content) {
 
 export async function saveCurrentContextWindow(id, content) {
   const chat = await readChat(id);
-  await fs.writeFile(chat.paths.contextWindow, String(content || ''), { mode: 0o600 });
+  await withFileLock(chat.paths.contextWindow, () =>
+    fs.writeFile(chat.paths.contextWindow, String(content || ''), { mode: 0o600 }),
+  );
   await touchChat(id);
   return chat.paths.contextWindow;
 }
