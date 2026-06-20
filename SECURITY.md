@@ -31,6 +31,8 @@ Helpful reports include:
 - Offline mode blocks online providers and native provider search, but terminal commands can still access the network if the user enables terminal search or asks for network commands.
 - Sections are scoped per request in the backend. They isolate runtime files, but they are not separate authentication accounts.
 - Terminal tools run as the current OS user unless the user explicitly configures sudo outside the app.
+- Scheduled tasks run unattended: each task has its own tool allowlist that replaces interactive approval entirely (a non-allowlisted tool call is denied outright, an allowlisted one runs immediately, even for tools that normally require confirmation).
+- Outbound email (`send_email`) has no recipient parameter -- the destination is always the address configured by the user, never chosen by the model -- and the tool is only ever enabled inside a scheduled task whose allowlist includes it; it is not reachable from regular chat.
 
 ## Security Review Checklist
 

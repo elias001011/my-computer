@@ -1,6 +1,6 @@
 # Architecture
 
-Atualizado em 26/05/2026.
+Atualizado em 20/06/2026.
 
 ## Visão geral
 
@@ -26,6 +26,8 @@ O objetivo é simples: abrir um painel local, conversar com um provider, usar to
 - `src/server/models.js` - catálogo de providers e modelos.
 - `src/server/store.js` - persistência local.
 - `src/server/tools.js` - definição e execução das tools.
+- `src/server/scheduler.js` - timer interno que dispara tarefas agendadas.
+- `src/server/email.js` - envio de email via API do Resend.
 - `src/server/updater.js` - update via Git.
 - `src/cli/mc.js` - CLI local para iniciar o app.
 
@@ -127,6 +129,7 @@ O app tem tools locais com aprovação por UI:
 - `chat_document`
 - `compact_context`
 - `rename_chat`
+- `send_email` - só existe dentro de tarefas agendadas que a permitirem explicitamente; nunca aparece em chat normal e não tem parâmetro de destinatário (ver "Tarefas agendadas" e "Email" abaixo).
 
 Fluxo básico:
 
@@ -145,6 +148,28 @@ Para saídas longas ou execuções demoradas:
 - a IA pode pedir `timeoutSeconds` na tool de terminal
 - o backend espera o processo terminar antes de devolver `stdout`/`stderr`
 - downloads e tarefas longas devem usar timeout maior, mas não infinito
+
+## Tarefas agendadas
+
+`src/server/scheduler.js` roda um `setInterval` dentro do próprio processo do servidor (sem dependência de cron externo ou de qualquer camada fora do MC). Cada tarefa agendada (`store.js`) guarda: prompt fixo, provider/modelo próprios, agendamento (`daily`/`weekly`/`monthly`/`interval`, com timezone IANA), uma allowlist própria de tools, e os toggles `reuseChat` e `skipMemoryInPrompt`.
+
+Pontos importantes do design:
+
+- Como não há humano presente pra aprovar nada, a allowlist da tarefa **substitui** o fluxo normal de aprovação: tool na lista executa direto, tool fora da lista é negada sem nunca pausar esperando aprovação.
+- A lista de tools oferecida ao provider (`buildEnabledToolDefinitions`) e o texto narrativo do system prompt (`applyScheduledTaskToolMask`) são sempre mascarados pela mesma allowlist, pra evitar o modelo "ver" no prompt uma tool que não foi de fato oferecida.
+- `skipMemoryInPrompt` pula só a memória persistente global e a memória de arquivos do usuário daquela chamada específica; memória do chat reusado e histórico continuam normais.
+- Uma lease persistida (`runningSince` com expiração) evita reexecução duplicada se o processo reiniciar no meio de uma tarefa; uma guarda em memória evita reentrância dentro do mesmo processo.
+- Esse design assume o modelo "self-hosted normal" (processo contínuo). Numa implantação multiusuário com processo por usuário que para no logout (como a VPS de referência deste projeto), tarefas de um usuário deslogado só disparam quando ele logar de novo — isso é uma consequência da implantação, não algo que o scheduler tente contornar.
+
+## Email
+
+`src/server/email.js` manda email via a API REST do Resend (`fetch` simples, sem SDK). Por design, hoje é **só envio**:
+
+- O destino é sempre o endereço fixo configurado em `config.email.destinationEmail` — a tool `send_email` não tem parâmetro de destinatário, então o modelo nunca pode escolher pra onde mandar.
+- Sem verificar um domínio próprio no Resend, o remetente fica travado no endereço sandbox deles (`onboarding@resend.dev`); isso é limitação da plataforma, não do app.
+- Enviar é sempre uma chamada de saída (igual qualquer chamada de provider de IA), então não expõe nada à rede nem em modo self-hosted local.
+- Uma notificação de falha de tarefa agendada (`config.email.notifyOnScheduledTaskFailure`) usa o mesmo evento que o scheduler já registra (`scheduledTask.run.failed`); o envio dessa notificação roda no seu próprio try/catch, então uma falha no Resend nunca mascara o status real da tarefa.
+- Recebimento de email (responder por email, "Inbound" do Resend ou polling IMAP) ainda não existe.
 
 ## Attachments
 
@@ -171,9 +196,11 @@ Para saídas longas ou execuções demoradas:
 
 - `memory.md` e memória específica do chat.
 - `persistent-memory.md` vale para todos os chats.
+- Arquivos adicionais de memória de usuário podem ser buscados por palavra-chave pela tool `persistent_memory_user` (ação `search`), sem precisar ler o arquivo inteiro.
 - `context.md` guarda contexto compactado.
 - `context-window.md` é a janela atual usada para explicar o estado do chat.
 - `metadata.json` guarda provider, modelo e `modelSettings` do chat.
+- O histórico bruto de mensagens enviado a cada chamada é limitado por `config.context.historyBudgetChars` (aproximação por caracteres, não um tokenizer real) e pode ser desligado por completo via `config.context.historyBudgetEnabled` — desligado, só a mensagem atual e as memórias acima são enviadas, sem nenhuma mensagem anterior do chat.
 
 ## Rede local
 

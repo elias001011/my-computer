@@ -20,6 +20,10 @@
 - Atualizador por Git local com confirmação e restart.
 - Export/import de dados locais.
 - Install/uninstall simples.
+- Tarefas agendadas (diário/semanal/mensal/intervalo) com provider/modelo, allowlist de tools e contexto reduzido próprios, executadas por um timer interno ao processo.
+- Busca em memória de arquivos de usuário por palavra-chave, sem precisar ler o arquivo inteiro.
+- Orçamento configurável de histórico bruto de mensagens por chat, com opção de desligar por completo.
+- Envio de email (Resend) só-saída, com destino fixo configurado pelo usuário; disponível como tool só dentro de tarefas agendadas, e como notificação automática de falha de tarefa.
 
 ## Phase 1 - Safety and polish
 
@@ -50,3 +54,6 @@
 - Multimodalidade mais completa.
 - Voz por etapas: primeiro transcrição de voz para texto; depois TTS; só depois realtime/voz nativa se a UX pedir baixa latência e interrupções.
 - Remote access seguro fora da rede local com autenticação, HTTPS e transporte protegido.
+- Recebimento de email (conversar com a IA por email): duas abordagens em avaliação -- webhook (Resend Inbound, exige domínio público com MX e um endpoint alcançável da internet) ou polling IMAP de uma caixa real (chamada de saída, sem expor nada, mas fora do que o Resend oferece nativamente). A primeira só faz sentido em implantações que já são públicas; a segunda é a que mantém o princípio self-hosted privado por padrão.
+- `send_email` como tool de uso livre em chat normal (hoje só existe dentro de tarefas agendadas).
+- Painel de sessões/logins ativos do app, como base para notificações do tipo "alguém acessou sua conta".

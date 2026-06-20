@@ -1,6 +1,6 @@
 # My Computer
 
-Updated on 2026-06-08.
+Updated on 2026-06-20.
 
 My Computer is a local web panel for chatting with an AI assistant and letting it use tools on your machine with explicit control. It is built for long-running work: persistent memory, isolated sections/users, file attachments, provider routing, web search, terminal tools, backups, and local models through Ollama.
 
@@ -32,6 +32,9 @@ Use `./install.sh --fresh` to move the current runtime aside and show the initia
 - Run privacy-focused offline sections backed by Ollama.
 - Export and restore runtime data.
 - Switch the panel UI between English and Brazilian Portuguese.
+- Schedule recurring tasks (daily/weekly/monthly/interval) with their own provider, model, tool allowlist, and reduced-context option, run by an internal timer.
+- Search user memory files by keyword instead of reading them whole.
+- Send outbound email (Resend) to a single fixed address you configure -- available as a tool only inside scheduled tasks, plus an automatic notification when a scheduled task fails.
 
 ## What Stays Local
 

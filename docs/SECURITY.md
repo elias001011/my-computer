@@ -1,6 +1,6 @@
 # Security
 
-Atualizado em 26/05/2026.
+Atualizado em 20/06/2026.
 
 ## Posicao do projeto
 
@@ -22,17 +22,20 @@ Atualizado em 26/05/2026.
 - Seções são resolvidas por requisição para evitar mistura entre abas.
 - O updater bloqueia aplicação quando o worktree Git está sujo.
 - O catálogo de modelos tenta bloquear chamadas claramente incompatíveis antes de chegar na API.
+- A tool `send_email` não tem parâmetro de destinatário: o destino é sempre o endereço fixo configurado pelo usuário, nunca escolhido pelo modelo.
+- `send_email` só fica habilitada (`isToolEnabled`) dentro de uma tarefa agendada cuja allowlist a inclua e com o Resend configurado; em chat normal a tool nunca está habilitada, mesmo que o modelo tente chamá-la por texto malformado.
 
 ## Riscos conhecidos
 
 - `Sempre permitir qualquer tool` faz `run_terminal_command` rodar sem confirmacao manual.
 - O terminal isolado é isolamento leve, não sandbox forte.
-- API keys ficam em texto claro no runtime local e também podem ir para export.
+- API keys (incluindo a do Resend) ficam em texto claro no runtime local e também podem ir para export.
 - Endpoint customizado compatível com OpenAI pode ver prompt, memórias e tool outputs.
 - Anexos exportados podem conter dados sensíveis.
 - Search via terminal pode vazar a query para o motor de busca usado.
 - Parâmetros técnicos errados podem quebrar chamada, elevar custo ou gerar rate limit.
 - Ollama install/remove pode pedir `sudo`.
+- Tarefas agendadas rodam sem humano presente: a allowlist de tools da própria tarefa substitui a aprovação manual normal (tool fora da lista é negada, tool dentro executa direto, mesmo as que normalmente pediriam confirmação). Configure a allowlist de cada tarefa pensando nisso.
 
 ## Como usar sudo de forma sensata
 
