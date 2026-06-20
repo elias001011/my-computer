@@ -30,8 +30,8 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   assert.equal(config.tools.deepInvestigation, false);
   assert.equal(config.tools.userMemory, true);
   assert.equal(config.tools.userMemoryEdit, false);
-  assert.equal(config.tools.searchTerminal, false);
-  assert.equal(config.tools.searchMode, 'native');
+  assert.equal(config.tools.searchTerminal, true);
+  assert.equal(config.tools.searchMode, 'both');
   assert.equal(config.userMemory.sendFilesToPrompt, false);
   assert.equal(config.userMemory.remindModelToUpdateFiles, false);
   assert.equal(config.privacy.offlineMode, false);
@@ -436,14 +436,14 @@ test('store creates runtime, chat files, memory and context snapshots', async ()
   const restoredConfig = await store.loadConfig();
   assert.equal(restoredConfig.customModels['openai-compatible'].length, 0);
   assert.deepEqual(restoredConfig.modelCapabilities['openai-compatible'], {});
-  assert.equal(restoredConfig.tools.searchMode, 'native');
+  assert.equal(restoredConfig.tools.searchMode, 'both');
   assert.equal(restoredConfig.tools.webSearch, true);
   assert.equal(restoredConfig.providerSettings['openai-compatible'].apiKeys[0].value, 'backup-key');
 
   await store.saveConfig({ tools: { searchMode: 'off', webSearch: false, searchTerminal: false } });
   await store.saveConfig({ tools: { webSearch: true, searchTerminal: false } });
   const legacyPatchConfig = await store.loadConfig();
-  assert.equal(legacyPatchConfig.tools.searchMode, 'native');
+  assert.equal(legacyPatchConfig.tools.searchMode, 'both');
   assert.equal(legacyPatchConfig.tools.webSearch, true);
 
   await store.writePersistentMemory('# Shared\n');
