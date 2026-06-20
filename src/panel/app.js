@@ -7259,6 +7259,7 @@ function renderMarkdownLite(text) {
   let paragraph = [];
   let list = null;
   let code = null;
+  let quote = null;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -7270,6 +7271,11 @@ function renderMarkdownLite(text) {
     blocks.push(`<${list.type}>${list.items.map((item) => `<li>${formatInline(item)}</li>`).join('')}</${list.type}>`);
     list = null;
   };
+  const flushQuote = () => {
+    if (!quote) return;
+    blocks.push(`<blockquote><p>${formatInline(quote.join(' '))}</p></blockquote>`);
+    quote = null;
+  };
 
   for (const line of lines) {
     const codeFence = /^```/.exec(line);
@@ -7280,6 +7286,7 @@ function renderMarkdownLite(text) {
       } else {
         flushParagraph();
         flushList();
+        flushQuote();
         code = { lines: [] };
       }
       continue;
@@ -7292,6 +7299,16 @@ function renderMarkdownLite(text) {
     if (!line.trim()) {
       flushParagraph();
       flushList();
+      flushQuote();
+      continue;
+    }
+
+    const rule = /^\s*([-*_])\s*(?:\1\s*){2,}$/.exec(line);
+    if (rule) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      blocks.push('<hr />');
       continue;
     }
 
@@ -7299,10 +7316,21 @@ function renderMarkdownLite(text) {
     if (heading) {
       flushParagraph();
       flushList();
+      flushQuote();
       const level = heading[1].length + 2;
       blocks.push(`<h${level}>${formatInline(heading[2])}</h${level}>`);
       continue;
     }
+
+    const quoteLine = /^\s*>\s?(.*)$/.exec(line);
+    if (quoteLine) {
+      flushParagraph();
+      flushList();
+      if (!quote) quote = [];
+      if (quoteLine[1].trim()) quote.push(quoteLine[1].trim());
+      continue;
+    }
+    flushQuote();
 
     const numbered = /^\s*\d+\.\s+(.+)$/.exec(line);
     const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
@@ -7321,6 +7349,7 @@ function renderMarkdownLite(text) {
   if (code) blocks.push(`<pre><code>${escapeHtml(code.lines.join('\n'))}</code></pre>`);
   flushParagraph();
   flushList();
+  flushQuote();
   return blocks.join('');
 }
 
