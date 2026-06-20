@@ -2481,6 +2481,12 @@ export function sanitizeAssistantToolLikeText(content = '') {
     .replace(/<web_search>\s*[\s\S]*?\s*<\/web_search>/gi, '[Busca web solicitada como texto; o app processou isso como tool quando possível.]')
     .replace(/\bweb_search\b\s*=?\s*\{[\s\S]*?\}(?=\s*$|\s*<\/|\s*\n)/gi, '[Busca web solicitada como texto; o app processou isso como tool quando possível.]')
     .replace(/^Tool used:\s*\w+[\s\S]*?(?:\n\s*\n|$)/gi, '')
+    // Some small/weaker models emit a different malformed pseudo-tool-call syntax
+    // (<parameter=name>value</parameter>), sometimes missing the opening wrapper tag
+    // entirely. This can't be recovered into a real tool call, so just strip the leftover
+    // markup instead of leaking it as literal text in the final answer.
+    .replace(/<parameter[^>]*>[\s\S]*?<\/parameter>/gi, '')
+    .replace(/<\/?parameter[^>]*>/gi, '')
     .trim();
 }
 
