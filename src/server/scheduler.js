@@ -9,6 +9,7 @@ import {
   loadConfig,
   readChat,
   releaseScheduledTaskRun,
+  updateChatMetadata,
   updateScheduledTask,
 } from './store.js';
 
@@ -60,11 +61,13 @@ async function executeTask(taskId) {
   let errorMessage = null;
   try {
     let chatId = claimed.reuseChat ? claimed.chatId : null;
+    let chatExists = false;
     if (chatId) {
       // The reused chat may have been deleted by the user since the last run -- check
       // before reusing instead of letting a stale id crash deep inside sendUserMessage.
       try {
         await readChat(chatId);
+        chatExists = true;
       } catch (error) {
         if (error.statusCode !== 404) throw error;
         chatId = null;
@@ -74,6 +77,10 @@ async function executeTask(taskId) {
       const chat = await createChat(claimed.name, { provider: claimed.provider, model: claimed.model });
       chatId = chat.id;
       if (claimed.reuseChat) await updateScheduledTask(claimed.id, { chatId });
+    } else if (chatExists && (claimed.provider || claimed.model)) {
+      // The chat only gets provider/model at creation time. If the task's own provider/model
+      // was edited later, a reused chat would otherwise keep running on the old one forever.
+      await updateChatMetadata(chatId, { provider: claimed.provider, model: claimed.model });
     }
     const result = await sendUserMessage(chatId, claimed.prompt, {
       scheduledTaskContext: {
