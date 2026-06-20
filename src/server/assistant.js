@@ -46,8 +46,8 @@ import { sendEmail } from './email.js';
 
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
-const MAX_TOOL_ROUNDS = 4;
-const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 8;
+const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 16;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
 const MEMORY_TOOL_ACTIONS = new Set(['read', 'write', 'append']);
@@ -229,18 +229,12 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           }
         }
         if (assistantOutcome) break;
-        if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
-          const actionContent = cleanAssistantContent(assistantMessage.content || '');
-          assistantOutcome = {
-            status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-            content: actionContent.content || 'Ação executada.',
-            thinking: actionContent.thinking,
-            finishReason: assistantMessage.finishReason || null,
-            continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
-            error: null,
-          };
-          break;
-        }
+        // Do not stop just because no tool in this round needed its result surfaced
+        // (returnOutput:false) -- that only means the model doesn't need to see the
+        // output, not that it is done talking. Models routinely emit tool_calls with
+        // empty content and only write their real final answer in the next round, once
+        // the (possibly masked) tool result comes back. Always give it that round; the
+        // natural stop is the no-tool-calls branch above, bounded by getMaxToolRounds.
         continue;
       }
 
@@ -336,18 +330,9 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         }
       }
       if (assistantOutcome) break;
-      if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
-        const actionContent = cleanAssistantContent(assistantMessage.content || '');
-        assistantOutcome = {
-          status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-          content: actionContent.content || 'Ação executada.',
-          thinking: actionContent.thinking,
-          finishReason: assistantMessage.finishReason || null,
-          continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
-          error: null,
-        };
-        break;
-      }
+      // See comment above the equivalent scheduled-task branch: returnOutput:false tool
+      // calls do not mean the model is done, so always let it take another round instead
+      // of guessing a placeholder "Ação executada." answer.
     }
 
     if (!assistantOutcome) {
@@ -368,13 +353,19 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         modelUsed = assistantMessage.modelUsed || modelUsed;
         executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
         const finalContent = cleanAssistantContent(assistantMessage.content || '');
+        // Reaching this branch means the round budget ran out while the model kept asking
+        // for more tool calls (the normal "model stopped on its own" paths above always set
+        // assistantOutcome and never fall through to here) -- always surface that as
+        // incomplete/error, even though this forced no-tools call still got some text, so the
+        // scheduler's failure check and the chat UI's Continue action both see it instead of
+        // it silently looking like a clean "sent" answer.
         assistantOutcome = {
-          status: isIncompleteFinishReason(assistantMessage.finishReason) ? 'incomplete' : 'sent',
-          content: finalContent.content || 'Terminei a execução das tools, mas não recebi texto final.',
+          status: 'incomplete',
+          content: finalContent.content || 'A IA atingiu o limite de rodadas de tools antes de concluir. Use Continuar para retomar do último estado útil.',
           thinking: finalContent.thinking,
           finishReason: assistantMessage.finishReason || null,
-          continuationAvailable: isIncompleteFinishReason(assistantMessage.finishReason),
-          error: null,
+          continuationAvailable: true,
+          error: 'Limite de rodadas de tools atingido.',
         };
       } catch (error) {
         if (isUserStopError(error)) {
@@ -1105,23 +1096,9 @@ async function continueAssistantToolLoop({
       }
     }
 
-    if (toolCalls.every((toolCall) => !shouldReturnToolOutput(toolCall))) {
-      throwIfStopped(signal);
-      return {
-        outcome: {
-          status: 'sent',
-          content: cleanedContent.content || 'Ação executada.',
-          thinking: currentThinking,
-          finishReason: assistantMessage.finishReason || null,
-          continuationAvailable: false,
-          error: null,
-        },
-        providerUsed: currentProviderUsed,
-        modelUsed: currentModelUsed,
-        toolUses,
-        executionTrace,
-      };
-    }
+    // See comment in sendUserMessageLocked: returnOutput:false tool calls do not mean the
+    // model is done, so always let it take another round instead of guessing a placeholder
+    // "Ação executada." answer.
   }
 
   throwIfStopped(signal);

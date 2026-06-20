@@ -2407,32 +2407,45 @@ test('parallel continue requests only create one follow-up attempt', async () =>
           }),
         };
       }
+      if (callNumber === 2) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Vou executar uma continuação.',
+                  tool_calls: [
+                    {
+                      id: `continue-tool-${callNumber}`,
+                      type: 'function',
+                      function: {
+                        name: 'run_terminal_command',
+                        arguments: JSON.stringify({
+                          command: `${process.execPath} -e ${JSON.stringify(sideEffectScript)}`,
+                          returnOutput: false,
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: {},
+          }),
+        };
+      }
+      // returnOutput:false on the tool call above does not end the turn (the model still gets a
+      // round to speak after a side-effect-only tool call) -- a real model stops here on its own;
+      // simulate that by returning plain final content with no further tool_calls.
       return {
         ok: true,
         status: 200,
         json: async () => ({
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: 'Vou executar uma continuação.',
-                tool_calls: [
-                  {
-                    id: `continue-tool-${callNumber}`,
-                    type: 'function',
-                    function: {
-                      name: 'run_terminal_command',
-                      arguments: JSON.stringify({
-                        command: `${process.execPath} -e ${JSON.stringify(sideEffectScript)}`,
-                        returnOutput: false,
-                      }),
-                    },
-                  },
-                ],
-              },
-              finish_reason: 'tool_calls',
-            },
-          ],
+          choices: [{ message: { role: 'assistant', content: 'Continuação concluída.' }, finish_reason: 'stop' }],
           usage: {},
         }),
       };
@@ -2499,7 +2512,7 @@ test('parallel continue requests only create one follow-up attempt', async () =>
       () => assistant.sendUserMessage(chat.id, '', { continueMessageId: 'missing-message' }),
       (error) => error.statusCode === 404,
     );
-    assert.equal(providerCalls, 2);
+    assert.equal(providerCalls, 3);
   } finally {
     global.fetch = originalFetch;
   }
