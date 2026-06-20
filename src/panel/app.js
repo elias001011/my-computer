@@ -1885,6 +1885,11 @@ function renderScheduledTaskEditor() {
         Prompt enviado a cada execução
         <textarea id="sched-task-prompt" rows="4" placeholder="O que a IA deve fazer nesta execução?">${escapeHtml(task?.prompt || '')}</textarea>
       </label>
+      <label>
+        System prompt (instruções fixas, além do prompt acima)
+        <textarea id="sched-task-system-prompt" rows="3" placeholder="Ex.: Responda sempre em tom descontraído, em português, sem emojis em excesso.">${escapeHtml(task?.systemPrompt || '')}</textarea>
+        <small class="help-text">Opcional. Entra como instrução fixa de sistema em toda execução desta tarefa, separado do prompt principal -- útil pra regras que não mudam (tom, formato, restrições), em vez de repetir no prompt.</small>
+      </label>
       <div class="setup-grid">
         <label>
           Provider
@@ -5038,6 +5043,7 @@ function readScheduledTaskFormValues() {
     name: document.getElementById('sched-task-name')?.value || 'Tarefa agendada',
     enabled: document.getElementById('sched-task-enabled')?.checked !== false,
     prompt: document.getElementById('sched-task-prompt')?.value || '',
+    systemPrompt: document.getElementById('sched-task-system-prompt')?.value || '',
     provider: document.getElementById('sched-task-provider')?.value,
     model: document.getElementById('sched-task-model')?.value,
     schedule,

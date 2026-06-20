@@ -1910,6 +1910,9 @@ function buildSystemPrompt(
     `Current context window file: ${chat.paths.contextWindow}`,
     '',
     'Always use the persistent memory, chat memory, and compacted context below as durable context.',
+    scheduledTaskContext?.systemPrompt
+      ? 'This run is a scheduled task. <scheduled_task_system_prompt> below contains fixed standing instructions for every run of this task (tone, format, recurring rules) -- treat it as at least as authoritative as the user message, and apply it together with that message, not instead of it.'
+      : '',
     '',
     '<persistent_memory_md>',
     skipMemory ? 'Memória persistente não incluída nesta execução agendada (otimização de tokens).' : persistentMemory || 'Sem memória persistente.',
@@ -1932,6 +1935,9 @@ function buildSystemPrompt(
     '<chat_specific_preferences>',
     chat.systemPromptExtra || 'Nenhuma preferência específica do chat.',
     '</chat_specific_preferences>',
+    scheduledTaskContext?.systemPrompt
+      ? ['', '<scheduled_task_system_prompt>', scheduledTaskContext.systemPrompt, '</scheduled_task_system_prompt>'].join('\n')
+      : '',
   ].join('\n');
 }
 

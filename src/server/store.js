@@ -316,6 +316,11 @@ export async function createChat(title = 'New chat', options = {}) {
 export async function readChat(id) {
   assertChatId(id);
   const metadata = await readChatMetadata(id);
+  if (!metadata) {
+    const error = new Error('Chat não encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
   const chatDir = getChatDir(id);
   const attachments = await listAttachments(id);
   const messages = sanitizeMessagesForAvailableAttachments(await readJson(path.join(chatDir, 'messages.json'), []), attachments);
@@ -882,6 +887,7 @@ function normalizeScheduledTask(task = {}, existing = null) {
     name: String(task.name ?? existing?.name ?? 'Tarefa agendada').trim().slice(0, 200) || 'Tarefa agendada',
     enabled: task.enabled === undefined ? existing?.enabled ?? true : task.enabled !== false,
     prompt: String(task.prompt ?? existing?.prompt ?? '').trim(),
+    systemPrompt: String(task.systemPrompt ?? existing?.systemPrompt ?? '').trim().slice(0, 4000),
     provider: task.provider !== undefined ? normalizeProviderId(task.provider) : existing?.provider,
     model: task.model !== undefined ? String(task.model || '').trim() : existing?.model,
     allowedTools,

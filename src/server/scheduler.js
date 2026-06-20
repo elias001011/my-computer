@@ -7,6 +7,7 @@ import {
   createChat,
   listScheduledTasks,
   loadConfig,
+  readChat,
   releaseScheduledTaskRun,
   updateScheduledTask,
 } from './store.js';
@@ -59,6 +60,16 @@ async function executeTask(taskId) {
   let errorMessage = null;
   try {
     let chatId = claimed.reuseChat ? claimed.chatId : null;
+    if (chatId) {
+      // The reused chat may have been deleted by the user since the last run -- check
+      // before reusing instead of letting a stale id crash deep inside sendUserMessage.
+      try {
+        await readChat(chatId);
+      } catch (error) {
+        if (error.statusCode !== 404) throw error;
+        chatId = null;
+      }
+    }
     if (!chatId) {
       const chat = await createChat(claimed.name, { provider: claimed.provider, model: claimed.model });
       chatId = chat.id;
@@ -68,6 +79,7 @@ async function executeTask(taskId) {
       scheduledTaskContext: {
         allowedTools: claimed.allowedTools || [],
         skipMemory: claimed.skipMemoryInPrompt !== false,
+        systemPrompt: claimed.systemPrompt || '',
       },
     });
     // sendUserMessage resolves normally even when the assistant turn itself failed or
