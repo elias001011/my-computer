@@ -209,7 +209,14 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         for (const toolCall of toolCalls) {
           throwIfStopped(operationSignal);
           const toolUse = isToolAllowedForScheduledTask(toolCall, scheduledTaskContext)
-            ? await executeToolCallSafely(chatId, toolCall, { ...selectedConfig, signal: operationSignal })
+            ? await executeToolCallSafely(chatId, toolCall, {
+                ...selectedConfig,
+                // isToolEnabled() below reads config.tools directly; tools like send_email
+                // that have no global on/off flag are gated purely by this mask (allowlist +
+                // isEmailConfigured), so execution must see the masked tools, not the raw ones.
+                tools: applyScheduledTaskToolMask(selectedConfig.tools, scheduledTaskContext, selectedConfig.email),
+                signal: operationSignal,
+              })
             : createScheduledTaskDeniedToolUse(toolCall);
           throwIfStopped(operationSignal);
           toolUses.push(toolUse);
@@ -1780,7 +1787,7 @@ function buildEffectiveConfig(config, chat = {}, runtimeInfo = {}, extra = {}) {
       : config.model || getDefaultModelForProvider('ollama')
     : chat.model || config.model;
   const searchMode = getSearchMode(config.tools);
-  const offlineSearchMode = offlineMode && ['native', 'both'].includes(searchMode) ? 'off' : searchMode;
+  const offlineSearchMode = offlineMode && searchMode === 'both' ? 'off' : searchMode;
   return {
     ...config,
     ...extra,
@@ -2561,6 +2568,10 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'chat_document') return tools.chatDocuments !== false;
   if (name === 'compact_context') return tools.autoCompact !== false;
   if (name === 'rename_chat') return tools.chatTitle !== false;
+  // send_email has no global on/off flag -- tools.sendEmail only ever becomes true via
+  // applyScheduledTaskToolMask (allowlist + isEmailConfigured), so outside that masked
+  // context this is always false, structurally blocking it from regular chats.
+  if (name === 'send_email') return tools.sendEmail === true;
   return true;
 }
 
@@ -2760,7 +2771,7 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
 
   let nativeError = null;
   let nativeResult = null;
-  if (searchMode === 'native' || searchMode === 'both') {
+  if (searchMode === 'both') {
     try {
       nativeResult = await callProviderNativeWebSearch({
         config,
@@ -2865,10 +2876,10 @@ async function executeWebSearchToolCall(chatId, toolCallId, input, config = {}) 
 
 function getSearchMode(tools = {}) {
   const mode = String(tools.searchMode || '').trim();
-  if (['off', 'native', 'terminal', 'both'].includes(mode)) return mode;
+  if (['off', 'terminal', 'both'].includes(mode)) return mode;
   if (tools.webSearch === false) return 'off';
   if (tools.searchTerminal === true) return 'terminal';
-  return 'native';
+  return 'both';
 }
 
 function nativeSearchSupported(providerId) {

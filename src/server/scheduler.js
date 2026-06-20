@@ -64,12 +64,19 @@ async function executeTask(taskId) {
       chatId = chat.id;
       if (claimed.reuseChat) await updateScheduledTask(claimed.id, { chatId });
     }
-    await sendUserMessage(chatId, claimed.prompt, {
+    const result = await sendUserMessage(chatId, claimed.prompt, {
       scheduledTaskContext: {
         allowedTools: claimed.allowedTools || [],
         skipMemory: claimed.skipMemoryInPrompt !== false,
       },
     });
+    // sendUserMessage resolves normally even when the assistant turn itself failed or
+    // stalled (denied tool, max tool rounds, provider error caught internally) -- only a
+    // thrown exception (network/IO/validation) would otherwise be treated as a failure, so
+    // most realistic task failures would silently count as "ok" without this check.
+    if (result.assistantStatus === 'failed' || result.assistantStatus === 'incomplete') {
+      throw new Error(result.assistantMessage?.error || `A IA não concluiu a tarefa (status: ${result.assistantStatus}).`);
+    }
     await appendEvent({ type: 'scheduledTask.run.completed', chatId, details: { id: claimed.id, name: claimed.name } });
   } catch (error) {
     status = 'error';
