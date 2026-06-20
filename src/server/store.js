@@ -749,8 +749,21 @@ const VALID_SCHEDULE_TIMEZONES = (() => {
   }
 })();
 
+export function getServerLocalTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+// 'local' is a sentinel, not a real IANA zone: it is resolved to the server's actual local
+// timezone at the moment each occurrence is computed (getTimezoneOffsetMinutes), not frozen
+// into a fixed zone name here. That way it keeps tracking "whatever machine this runs on"
+// instead of baking in today's host timezone forever.
 function normalizeScheduleTimezone(timezone) {
-  const value = String(timezone || 'UTC').trim() || 'UTC';
+  const value = String(timezone || '').trim();
+  if (!value || value === 'local') return 'local';
   if (VALID_SCHEDULE_TIMEZONES && !VALID_SCHEDULE_TIMEZONES.has(value)) return 'UTC';
   return value;
 }
@@ -789,9 +802,10 @@ function normalizeScheduleConfig(schedule = {}) {
 }
 
 function getTimezoneOffsetMinutes(timezone, date) {
+  const resolvedTimezone = timezone === 'local' ? getServerLocalTimezone() : timezone;
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
+      timeZone: resolvedTimezone,
       hourCycle: 'h23',
       year: 'numeric',
       month: '2-digit',

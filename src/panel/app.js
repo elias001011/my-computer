@@ -538,6 +538,7 @@ function applyBootstrapData(data = {}) {
   state.profiles = data.profiles || state.profiles || [];
   state.activeProfile = data.activeProfile || state.activeProfile || null;
   state.rootRuntimeHome = data.rootRuntimeHome || state.rootRuntimeHome || '';
+  state.serverLocalTimezone = data.serverLocalTimezone || state.serverLocalTimezone || 'UTC';
 }
 
 function render() {
@@ -1822,7 +1823,8 @@ const SCHEDULED_TASK_TIMEZONES = (() => {
 function describeScheduledTaskSchedule(schedule = {}) {
   const hour = String(schedule.hour ?? 9).padStart(2, '0');
   const minute = String(schedule.minute ?? 0).padStart(2, '0');
-  const time = `${hour}:${minute} (${schedule.timezone || 'UTC'})`;
+  const timezoneLabel = !schedule.timezone || schedule.timezone === 'local' ? `local, ${state.serverLocalTimezone || 'UTC'}` : schedule.timezone;
+  const time = `${hour}:${minute} (${timezoneLabel})`;
   if (schedule.type === 'interval') {
     return `A cada ${schedule.everyHours}h`;
   }
@@ -1869,7 +1871,7 @@ function renderScheduledTaskEditor() {
   if (!isNew && !task) return '';
   const provider = task?.provider || state.config?.provider || 'groq';
   const model = task?.model || state.config?.model || '';
-  const schedule = task?.schedule || { type: 'daily', hour: 9, minute: 0, timezone: 'UTC' };
+  const schedule = task?.schedule || { type: 'daily', hour: 9, minute: 0, timezone: 'local' };
   const scheduleType = schedule.type || 'daily';
   const allowedTools = new Set(task?.allowedTools || []);
   const selectedWeekdays = new Set(schedule.daysOfWeek || [1]);
@@ -1917,10 +1919,13 @@ function renderScheduledTaskEditor() {
         </label>
         <label>
           Fuso horário
-          <input id="sched-task-timezone" list="sched-task-tz-options" value="${escapeAttr(schedule.timezone || 'UTC')}" placeholder="Ex.: America/Sao_Paulo" />
-          <datalist id="sched-task-tz-options">
-            ${SCHEDULED_TASK_TIMEZONES.map((tz) => `<option value="${escapeAttr(tz)}"></option>`).join('')}
-          </datalist>
+          <select id="sched-task-timezone">
+            <option value="local" ${!schedule.timezone || schedule.timezone === 'local' ? 'selected' : ''}>Horário local (${escapeHtml(state.serverLocalTimezone || 'UTC')})</option>
+            ${SCHEDULED_TASK_TIMEZONES.map(
+              (tz) => `<option value="${escapeAttr(tz)}" ${tz === schedule.timezone ? 'selected' : ''}>${escapeHtml(tz)}</option>`,
+            ).join('')}
+          </select>
+          <small class="help-text">"Horário local" acompanha o fuso da máquina onde o My Computer está rodando, mesmo se ela mudar de fuso depois. Escolher um fuso específico da lista fixa esse fuso para esta tarefa.</small>
         </label>
       </div>
       <div class="weekday-chip-grid" id="sched-task-weekday-fields" style="${scheduleType === 'weekly' ? '' : 'display:none'}">
@@ -2384,6 +2389,7 @@ function renderChatSettingsModal() {
 function renderChatContextModal() {
   const chat = state.activeChat;
   const draft = getChatContextDraft(chat);
+  const linkedScheduledTask = (state.scheduledTasks || []).find((task) => task.chatId === chat?.id);
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="chat-context-title">
@@ -2401,6 +2407,15 @@ function renderChatContextModal() {
                 System prompt do chat
                 <textarea id="chat-prompt-modal-input" rows="7" placeholder="Preferências específicas deste chat.">${escapeHtml(draft.systemPromptExtra || '')}</textarea>
               </label>
+              ${
+                linkedScheduledTask
+                  ? `<p class="help-text">Este chat é reutilizado pela tarefa agendada <strong>${escapeHtml(linkedScheduledTask.name)}</strong>. O system prompt acima é específico deste chat; o system prompt fixo da própria tarefa (campo separado, editado na tarefa agendada) é injetado à parte em toda execução agendada, somado a este -- os dois não são o mesmo campo e não se sobrescrevem.${
+                      linkedScheduledTask.systemPrompt
+                        ? `<br />System prompt atual da tarefa: <em>${escapeHtml(linkedScheduledTask.systemPrompt)}</em>`
+                        : ' A tarefa não tem um system prompt próprio configurado agora.'
+                    }</p>`
+                  : ''
+              }
             </section>
             <section class="modal-section">
               <label>
