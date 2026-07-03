@@ -543,29 +543,27 @@ test('offline terminal search still requires approval when tools are always allo
         json: async () => ({ models: [{ name: 'llama3.2' }] }),
       };
     }
-    if (String(url).includes('/chat/completions')) {
+    // Ollama chats go through the native /api/chat endpoint (not /chat/completions),
+    // so the mock answers in the native response shape: { message, done_reason }.
+    if (String(url).includes('/api/chat')) {
       return {
         ok: true,
         json: async () => ({
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: '',
-                tool_calls: [
-                  {
-                    id: 'search-1',
-                    type: 'function',
-                    function: {
-                      name: 'web_search',
-                      arguments: JSON.stringify({ query: 'weather', reason: 'public info', maxResults: 2 }),
-                    },
-                  },
-                ],
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'search-1',
+                type: 'function',
+                function: {
+                  name: 'web_search',
+                  arguments: { query: 'weather', reason: 'public info', maxResults: 2 },
+                },
               },
-              finish_reason: 'tool_calls',
-            },
-          ],
+            ],
+          },
+          done_reason: 'stop',
         }),
       };
     }
