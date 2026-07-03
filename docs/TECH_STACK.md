@@ -18,6 +18,7 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 - Node.js 20+.
 - `fetch` nativo para providers e descoberta dinâmica.
 - `child_process.spawn` para a tool de terminal.
+- `tmux` (binário de sistema) para as sessões de terminal persistentes do modo avançado — mesma filosofia do `python3`: ferramenta externa via spawn, zero pacote npm.
 - `python3` para a busca web via terminal quando necessário.
 - Git local para update.
 - JSON, JSONL e Markdown para persistência.
@@ -41,6 +42,7 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 
 - `ollama` para modelos locais, vision local e catálogo dinâmico via `/api/tags`.
 - `python3` para a pesquisa web via terminal.
+- `tmux` para sessões de terminal persistentes (modo avançado da seção Terminal). Sem tmux instalado, o modo avançado apenas retorna um erro explicando como instalar; o resto do app não muda.
 - `sudo` apenas quando o usuário quiser liberar tarefas administrativas do Ollama.
 
 ## Por que ainda não tem React, Fastify ou SQLite

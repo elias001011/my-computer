@@ -40,9 +40,11 @@ import {
   runTerminalCommand,
   runWebSearch,
   sendEmailToolDefinition,
+  terminalSessionToolDefinition,
   terminalToolDefinition,
   webSearchToolDefinition,
 } from './tools.js';
+import * as terminalSessions from './terminal-sessions.js';
 import { sendEmail } from './email.js';
 
 const MAX_CONTEXT_CHARS = 28000;
@@ -1735,6 +1737,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
   return {
     ...tools,
     terminal: tools.terminal !== false && allowed.has('run_terminal_command'),
+    terminalSessions: tools.terminalSessions === true && allowed.has('terminal_session'),
     chatMemory: tools.chatMemory !== false && allowed.has('memory_chat'),
     persistentMemory: tools.persistentMemory !== false && allowed.has('persistent_memory'),
     userMemory: tools.userMemory !== false && allowed.has('persistent_memory_user'),
@@ -1834,6 +1837,16 @@ function buildSystemPrompt(
     config.tools?.terminal
       ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Do not use terminal commands as a substitute for public web search: grep, find, rg, ls, cat, browser caches, local files, and /home searches inspect the user machine, not the internet. Do not run broad recursive searches across /home, the user profile, or filesystem root unless the user explicitly asked for a local-file search and gave a narrow scope; ask for a path or use a targeted command instead. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
       : 'Terminal execution is disabled by user settings.',
+    // Advanced mode only: when sessions are off (or the whole terminal is off) the
+    // model must not see a single word about them -- an explicit "disabled" line
+    // here would still teach the tool name and invite hallucinated calls.
+    config.tools?.terminalSessions === true
+      ? [
+          'Persistent terminal sessions are enabled via the terminal_session tool. Use run_terminal_command for one-shot commands; use terminal_session when shell state must survive between calls: interactive programs and REPLs, long tasks you need to supervise step by step, or multi-command work sharing cwd/env.',
+          'Session flow: open, then write text (Enter is pressed by default) with a waitSeconds that matches how slow the command is, and the visible screen returns. If the screen shows work still in progress, call read with a larger waitSeconds instead of typing again. Close sessions you no longer need.',
+          'The user sees and types into these same sessions through the Terminal window in the panel. When a program asks for a password, sudo authentication, or any manual step you cannot perform, tell the user exactly what to do there (open the Terminal window, which session, what to type), wait for them to confirm in chat, then continue with read.',
+        ].join('\n')
+      : '',
     config.provider === 'ollama'
       ? 'Current provider is Ollama/local. Do not ask for an API key for this provider. If the model is missing or Ollama seems unavailable, explain the local daemon/model step clearly and use available Ollama status/model-management UI assumptions before suggesting terminal commands.'
       : '',
@@ -2079,6 +2092,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executeSendEmailToolCall(chatId, toolCall.id, input, config);
   }
 
+  if (name === 'terminal_session') {
+    return executeTerminalSessionToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -2233,6 +2250,71 @@ async function executeSendEmailToolCall(chatId, toolCallId, input, config = {}) 
   }
 }
 
+async function executeTerminalSessionToolCall(chatId, toolCallId, input, config = {}) {
+  const action = input.action;
+  const tools = config.tools || {};
+  const defaultWait = clampInteger(tools.terminalSessionDefaultWaitSeconds, 0, 120, 3);
+  const waitSeconds = Object.hasOwn(input, 'waitSeconds') ? input.waitSeconds : defaultWait;
+  const lines = Object.hasOwn(input, 'lines') ? input.lines : clampInteger(tools.terminalSessionOutputLines, 50, 2000, 200);
+  await appendEvent({
+    type: `tool.terminal_session.${action}`,
+    chatId,
+    details: {
+      sessionId: input.sessionId || null,
+      // Only the typed text is logged (it is a command the user approved); captured
+      // screens stay out of the event log since they can echo credentials typed by
+      // the user directly in the terminal window.
+      text: action === 'write' ? truncate(String(input.text || ''), 500) : undefined,
+      keys: action === 'write' ? input.keys || undefined : undefined,
+      waitSeconds: action === 'write' || action === 'read' ? waitSeconds : undefined,
+    },
+  });
+
+  const finish = (result) => ({
+    id: toolCallId,
+    name: 'terminal_session',
+    input,
+    result,
+    createdAt: new Date().toISOString(),
+  });
+
+  try {
+    if (action === 'open') {
+      const session = await terminalSessions.openSession(chatId, {
+        terminalMode: tools.terminalMode,
+        runtimeHome: config.runtimeHome,
+        maxSessions: clampInteger(tools.terminalSessionMaxPerChat, 1, 8, 3),
+      });
+      return finish({ action, ...session });
+    }
+    if (action === 'list') {
+      return finish({ action, sessions: await terminalSessions.listSessions(chatId) });
+    }
+    if (action === 'close') {
+      return finish({ action, ...(await terminalSessions.closeSession(chatId, input.sessionId)) });
+    }
+    if (action === 'read') {
+      const read = await terminalSessions.readSession(chatId, input.sessionId, { waitSeconds, lines, signal: config.signal });
+      throwIfStopped(config.signal);
+      return finish({ action, ...read });
+    }
+    const written = await terminalSessions.writeToSession(chatId, input.sessionId, {
+      text: input.text,
+      keys: input.keys,
+      pressEnter: input.pressEnter,
+      waitSeconds,
+      lines,
+      signal: config.signal,
+    });
+    throwIfStopped(config.signal);
+    return finish({ action, ...written });
+  } catch (error) {
+    if (isUserStopError(error)) throw error;
+    throwIfStopped(config.signal);
+    return finish({ action, error: error.message });
+  }
+}
+
 async function executeCompactContextToolCall(chatId, toolCallId, input, config = {}) {
   const compacted = await compactChat(chatId, { signal: config.signal });
   await appendEvent({
@@ -2255,6 +2337,10 @@ async function executeCompactContextToolCall(chatId, toolCallId, input, config =
 function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
   const definitions = [
     tools.terminal !== false ? terminalToolDefinition : null,
+    // normalizeTools already forces terminalSessions off when the master terminal
+    // flag is off, so this single flag is the whole gate -- and it keeps the
+    // scheduled-task mask exact per tool (a task may allow only one of the two).
+    tools.terminalSessions === true ? terminalSessionToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
@@ -2425,6 +2511,17 @@ function normalizeToolInput(name, input = {}) {
     normalizedInput.subject = String(normalizedInput.subject || '').trim().slice(0, 200);
     normalizedInput.body = String(normalizedInput.body || '').trim().slice(0, 20000);
   }
+  if (name === 'terminal_session') {
+    normalizedInput.action = ['open', 'write', 'read', 'list', 'close'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'list';
+    if (Object.hasOwn(normalizedInput, 'sessionId')) normalizedInput.sessionId = String(normalizedInput.sessionId || '').trim();
+    if (Object.hasOwn(normalizedInput, 'keys')) normalizedInput.keys = String(normalizedInput.keys || '').trim();
+    const pressEnter = normalizeBooleanLike(normalizedInput.pressEnter);
+    if (pressEnter !== undefined) normalizedInput.pressEnter = pressEnter;
+    if (Object.hasOwn(normalizedInput, 'waitSeconds')) normalizedInput.waitSeconds = clampInteger(normalizedInput.waitSeconds, 0, 180, 0);
+    if (Object.hasOwn(normalizedInput, 'lines')) normalizedInput.lines = clampInteger(normalizedInput.lines, 10, 2000, 200);
+  }
   if (name === 'persistent_memory_user') {
     normalizedInput.action = ['list', 'read', 'search'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -2543,6 +2640,7 @@ function normalizeBooleanLike(value) {
 function describeEnabledTools(tools = {}) {
   return [
     tools.terminal !== false ? 'run_terminal_command' : null,
+    tools.terminalSessions === true ? 'terminal_session' : null,
     getSearchMode(tools) !== 'off' ? 'web_search' : null,
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
@@ -2556,6 +2654,7 @@ function describeEnabledTools(tools = {}) {
 
 function isToolEnabled(name, tools = {}) {
   if (name === 'run_terminal_command') return tools.terminal !== false;
+  if (name === 'terminal_session') return tools.terminalSessions === true;
   if (name === 'web_search') return getSearchMode(tools) !== 'off';
   if (name === 'memory_chat') return tools.chatMemory !== false;
   if (name === 'persistent_memory') return tools.persistentMemory !== false;
@@ -2576,6 +2675,13 @@ function toolRequiresApproval(toolCall, config = {}) {
   if (name === 'web_search' && config.privacy?.offlineMode === true) return true;
   if (config.tools?.alwaysAllow === true) return false;
   if (name === 'run_terminal_command') return true;
+  if (name === 'terminal_session') {
+    // Only write actually executes something in the shell; open/read/list/close
+    // just manage or observe sessions and would make small models drown in
+    // approval prompts if they were gated too.
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return input.action === 'write';
+  }
   if (name === 'memory_chat' || name === 'persistent_memory') {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action !== 'read';

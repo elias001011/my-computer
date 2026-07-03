@@ -1118,6 +1118,7 @@ function renderApp() {
             <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(providerLabel(chatProviderId))} - ${escapeHtml(chatModel)}` : 'Sem chat ativo'}</div>
           </div>
           <div class="chat-header-actions">
+            ${state.config.tools?.terminalSessions === true ? `<button id="open-terminal" ${!chat ? 'disabled' : ''}>Terminal</button>` : ''}
             <button id="save-context" ${!chat || state.busy ? 'disabled' : ''}>Salvar snapshot</button>
             <button id="compact-context" ${!chat || state.busy ? 'disabled' : ''}>Compactar contexto</button>
             <button class="icon-button small-icon" id="edit-context" ${!chat || state.busy ? 'disabled' : ''} title="Editar contexto compactado" aria-label="Editar contexto compactado">✎</button>
@@ -1214,6 +1215,7 @@ function renderApp() {
     ${state.contextEditorOpen ? renderContextEditorModal() : ''}
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
     ${state.messageDetailsOpen ? renderMessageDetailsModal() : ''}
+    ${state.terminalViewer ? renderTerminalModal() : ''}
     ${state.attachmentViewer ? renderAttachmentViewerModal() : ''}
     ${state.attachmentDiff ? renderAttachmentDiffModal() : ''}
     ${state.userMemoryDiff ? renderUserMemoryDiffModal() : ''}
@@ -1513,7 +1515,6 @@ function renderSettingsModal() {
                 ${renderSearchModeControl(getSearchMode(draftConfig.tools), { offlineMode })}
               </div>
               <div class="toggle-list">
-                ${renderToolToggle('terminal', 'Terminal local', 'Permite que a IA execute comandos no terminal por run_terminal_command.')}
                 ${renderToolToggle('deepInvestigation', 'Incentivar a IA a fazer investigações mais profundas', 'Quando ligado, injeta instruções para usar mais rodadas de tools, seguir referências e olhar outputs antes da resposta final.')}
                 ${renderToolToggle('chatMemory', 'Memória do chat', 'Permite que a IA edite o memory.md do chat atual por memory_chat.')}
                 ${renderToolToggle('persistentMemory', 'Memória persistente', 'Permite que a IA edite a memória global por persistent_memory.')}
@@ -1522,14 +1523,67 @@ function renderSettingsModal() {
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
               </div>
               <div class="settings-subpanel">
+                <h4>Como o app decide o que a IA pode usar</h4>
+                <div class="explain-list">
+                  <p><strong>Duas camadas, sempre sincronizadas:</strong> a função (definição que o provider recebe e pode chamar de fato) e o texto narrativo do prompt (instruções em linguagem natural dizendo quando/como usar cada tool). Cada toggle aqui liga/desliga as duas ao mesmo tempo — uma tool nunca fica só "narrada" sem existir de verdade (isso já causou alucinação de uso de tool em tarefas agendadas com allowlist restrita, corrigido mascarando o texto narrativo também).</p>
+                  <p><strong>"Sempre permitir qualquer tool":</strong> pula a aprovação manual de toda tool, incluindo o terminal — não é por tool, é global. Com isso desligado, cada chamada de tool aparece para você aprovar ou negar antes de executar (exceto em tarefas agendadas, que usam a allowlist própria da tarefa em vez de aprovação humana, já que ninguém fica presente).</p>
+                  <p><strong>Busca web "Ambos":</strong> tenta a busca nativa do provider primeiro; se falhar ou vier vazia, cai automaticamente para a busca via terminal (DuckDuckGo), sem você precisar perceber a troca — o resultado final indica qual método foi usado.</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="modal-section settings-panel ${activeSection === 'terminal' ? 'active' : ''}" data-section="terminal">
+              <h3>Terminal</h3>
+              <div class="toggle-list">
+                ${renderToolToggle('terminal', 'Terminal local', 'Permite que a IA execute comandos no terminal por run_terminal_command.')}
+              </div>
+              <div class="settings-subpanel">
                 <h4>Nível de isolamento</h4>
                 <div class="choice-grid">
                   ${renderTerminalModeCards(draftConfig.tools?.terminalMode || 'standard')}
                 </div>
+                <p class="help-text">O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.</p>
+              </div>
+              <div class="settings-subpanel">
+                <h4>Modo avançado: sessões persistentes</h4>
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_terminalSessions" id="tool-terminalSessions" ${draftConfig.tools?.terminalSessions === true ? 'checked' : ''} ${draftConfig.tools?.terminal === false ? 'disabled' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Sessões de terminal persistentes (terminal_session)</strong>
+                    <small>A IA ganha sessões de shell que mantêm estado entre chamadas (cwd, variáveis, programas interativos como REPLs e CLIs), e você pode ver e digitar nas mesmas sessões pela janela Terminal do chat. Requer tmux instalado (ex.: sudo apt install tmux).</small>
+                  </span>
+                </label>
+                <div class="setup-grid">
+                  <label>
+                    Linhas de tela enviadas à IA
+                    <input name="terminalSessionOutputLines" type="number" min="50" max="2000" step="10" value="${escapeAttr(draftConfig.tools?.terminalSessionOutputLines || 200)}" />
+                  </label>
+                  <label>
+                    Máximo de sessões por chat
+                    <input name="terminalSessionMaxPerChat" type="number" min="1" max="8" step="1" value="${escapeAttr(draftConfig.tools?.terminalSessionMaxPerChat || 3)}" />
+                  </label>
+                  <label>
+                    Espera padrão antes de ler (segundos)
+                    <input name="terminalSessionDefaultWaitSeconds" type="number" min="0" max="120" step="1" value="${escapeAttr(draftConfig.tools?.terminalSessionDefaultWaitSeconds ?? 3)}" />
+                  </label>
+                </div>
+                <p class="help-text">Linhas de tela controlam quanto do terminal volta pra IA a cada leitura — valores altos dão mais contexto e gastam mais tokens. A espera padrão vale quando a IA não define waitSeconds na chamada.</p>
+              </div>
+              <div class="settings-subpanel">
+                <h4>Como o modo avançado funciona por dentro</h4>
+                <div class="explain-list">
+                  <p><strong>tmux, não PTY via npm:</strong> cada sessão é uma sessão tmux de verdade num servidor tmux privado desta instância (socket próprio, invisível pra outras instâncias/usuários). Escrever usa <code>send-keys</code> e ler usa <code>capture-pane</code> — a IA (e a janela do chat) enxergam uma "foto" da tela, atualizada por leitura, não um stream ao vivo. Isso mantém o projeto com zero dependências npm.</p>
+                  <p><strong>Fluxo da IA:</strong> abrir sessão → digitar (Enter automático) → esperar N segundos configuráveis → ler a tela → decidir o próximo passo. Programas interativos (claude, python, ssh...) continuam rodando entre as chamadas.</p>
+                  <p><strong>Aprovação:</strong> só a ação de digitar (write) pede sua permissão — abrir, ler, listar e fechar não executam nada no shell. "Sempre permitir qualquer tool" também pula essa aprovação.</p>
+                  <p><strong>Senhas e sudo:</strong> quando um programa pedir senha, a IA pede pra você abrir a janela Terminal e digitar direto — o que você digita lá não passa pela IA nem fica nos eventos do app.</p>
+                  <p><strong>Ciclo de vida:</strong> as sessões morrem junto com o app (encerrar/reiniciar/logout). É intencional: um shell órfão poderia segurar um volume criptografado montado depois do logout.</p>
+                  <p><strong>Modo simples:</strong> com este toggle desligado, nada sobre sessões vai pro prompt da IA — ela só conhece o run_terminal_command de sempre.</p>
+                </div>
               </div>
               <div class="settings-subpanel">
                 <h4>Sudo no My Computer</h4>
-                <p class="help-text">O app executa comandos como seu usuário. Para permitir sudo sem digitar senha no navegador, configure uma regra NOPASSWD limitada aos comandos que você aceita delegar.</p>
+                <p class="help-text">O app executa comandos como seu usuário. Para permitir sudo sem digitar senha no navegador, configure uma regra NOPASSWD limitada aos comandos que você aceita delegar — ou, com sessões persistentes ligadas, digite a senha do sudo você mesmo na janela Terminal quando o prompt aparecer.</p>
                 <pre>${escapeHtml([
                   '# Exemplo seguro: crie um arquivo dedicado com sudo visudo -f /etc/sudoers.d/my-computer',
                   '# Troque elias pelo seu usuário e limite os binários ao que faz sentido no seu caso.',
@@ -1537,15 +1591,6 @@ function renderSettingsModal() {
                   '',
                   '# Evite liberar ALL sem senha. O app mostrará stdout/stderr no histórico da execução.',
                 ].join('\n'))}</pre>
-              </div>
-              <p class="help-text">O método isolado é uma contenção leve por diretório e HOME, não uma VM/container. Comandos ainda podem acessar caminhos absolutos se forem instruídos a isso.</p>
-              <div class="settings-subpanel">
-                <h4>Como o app decide o que a IA pode usar</h4>
-                <div class="explain-list">
-                  <p><strong>Duas camadas, sempre sincronizadas:</strong> a função (definição que o provider recebe e pode chamar de fato) e o texto narrativo do prompt (instruções em linguagem natural dizendo quando/como usar cada tool). Cada toggle aqui liga/desliga as duas ao mesmo tempo — uma tool nunca fica só "narrada" sem existir de verdade (isso já causou alucinação de uso de tool em tarefas agendadas com allowlist restrita, corrigido mascarando o texto narrativo também).</p>
-                  <p><strong>"Sempre permitir qualquer tool":</strong> pula a aprovação manual de toda tool, incluindo o terminal — não é por tool, é global. Com isso desligado, cada chamada de tool aparece para você aprovar ou negar antes de executar (exceto em tarefas agendadas, que usam a allowlist própria da tarefa em vez de aprovação humana, já que ninguém fica presente).</p>
-                  <p><strong>Busca web "Ambos":</strong> tenta a busca nativa do provider primeiro; se falhar ou vier vazia, cai automaticamente para a busca via terminal (DuckDuckGo), sem você precisar perceber a troca — o resultado final indica qual método foi usado.</p>
-                </div>
               </div>
             </section>
 
@@ -1752,6 +1797,7 @@ function renderSettingsNav(activeSection) {
     ['modelIndex', 'Modelos'],
     ['memory', 'Memória'],
     ['tools', 'Tools'],
+    ['terminal', 'Terminal'],
     ['context', 'Contexto'],
     ['scheduledTasks', 'Tarefas agendadas'],
     ['email', 'Email'],
@@ -1809,6 +1855,7 @@ function renderProfileRows() {
 
 const SCHEDULED_TASK_TOOL_LABELS = {
   run_terminal_command: 'Terminal',
+  terminal_session: 'Sessões de terminal (modo avançado)',
   web_search: 'Busca web',
   memory_chat: 'Memória do chat',
   persistent_memory: 'Memória persistente global',
@@ -2473,6 +2520,282 @@ function renderContextEditorModal() {
       </section>
     </div>
   `;
+}
+
+const TERMINAL_POLL_INTERVAL_MS = 2500;
+const TERMINAL_SPECIAL_KEYS = [
+  ['Enter', 'Enter'],
+  ['C-c', 'Ctrl+C'],
+  ['Escape', 'Esc'],
+  ['Tab', 'Tab'],
+  ['Up', '↑'],
+  ['Down', '↓'],
+];
+let terminalPollTimer = null;
+
+function renderTerminalModal() {
+  const viewer = state.terminalViewer || {};
+  const emptyMessage = viewer.loading
+    ? 'Carregando sessões...'
+    : 'Nenhuma sessão aberta neste chat. Crie uma com "Nova sessão" ou peça pra IA abrir.';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal terminal-modal" role="dialog" aria-modal="true" aria-labelledby="terminal-modal-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="terminal-modal-title">Terminal do chat</h2>
+            <p>Sessões tmux desta conversa — a mesma tela que a IA lê. Atualiza a cada ~2s (captura, não stream).</p>
+          </div>
+          <button type="button" id="close-terminal-viewer" aria-label="Fechar">×</button>
+        </header>
+        <div class="modal-body terminal-modal-body">
+          <div class="terminal-toolbar">
+            <div class="terminal-session-tabs" id="terminal-session-tabs" data-signature="${escapeAttr(terminalTabsSignature(viewer))}">
+              ${renderTerminalSessionTabs(viewer)}
+            </div>
+            <div class="terminal-toolbar-actions">
+              <button type="button" id="new-terminal-session" ${viewer.busy ? 'disabled' : ''}>Nova sessão</button>
+              <button type="button" id="kill-terminal-session" class="danger-button" ${!viewer.activeSessionId || viewer.busy ? 'disabled' : ''}>Encerrar sessão</button>
+            </div>
+          </div>
+          ${viewer.error ? `<p class="error terminal-error" id="terminal-error">${escapeHtml(viewer.error)}</p>` : '<p class="error terminal-error hidden" id="terminal-error"></p>'}
+          <pre class="terminal-output" id="terminal-output" tabindex="0">${escapeHtml(viewer.activeSessionId ? viewer.output || '' : emptyMessage)}</pre>
+          <div class="terminal-meta" id="terminal-meta">${escapeHtml(formatTerminalMeta(viewer))}</div>
+          <form id="terminal-input-form" class="terminal-input-row">
+            <input id="terminal-input" type="${viewer.maskInput ? 'password' : 'text'}" placeholder="Digite aqui e pressione Enter pra enviar à sessão ativa..." autocomplete="off" spellcheck="false" value="${escapeAttr(viewer.draft || '')}" ${!viewer.activeSessionId ? 'disabled' : ''} />
+            <button class="primary" type="submit" ${!viewer.activeSessionId ? 'disabled' : ''}>Enviar</button>
+          </form>
+          <div class="terminal-keys">
+            ${TERMINAL_SPECIAL_KEYS.map(
+              ([key, label]) =>
+                `<button type="button" class="terminal-key" data-terminal-key="${escapeAttr(key)}" ${!viewer.activeSessionId ? 'disabled' : ''}>${escapeHtml(label)}</button>`,
+            ).join('')}
+            <label class="toggle-row terminal-mask-toggle">
+              <input type="checkbox" id="terminal-mask-input" ${viewer.maskInput ? 'checked' : ''} />
+              <span>Ocultar digitação (senhas)</span>
+            </label>
+          </div>
+          <p class="help-text">O que você digita aqui vai direto pro shell da sessão: não passa pela IA e não fica registrado nos eventos do app — é o lugar certo pra responder prompts de senha/sudo quando a IA pedir.</p>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderTerminalSessionTabs(viewer = {}) {
+  if (!viewer.sessions?.length) return '<span class="terminal-no-sessions">Sem sessões</span>';
+  return viewer.sessions
+    .map(
+      (session) => `
+        <button type="button" class="terminal-session-tab ${session.sessionId === viewer.activeSessionId ? 'active' : ''}" data-session-id="${escapeAttr(session.sessionId)}">
+          ${escapeHtml(shortTerminalSessionLabel(session.sessionId))}${session.currentCommand ? ` · ${escapeHtml(session.currentCommand)}` : ''}
+        </button>
+      `,
+    )
+    .join('');
+}
+
+function shortTerminalSessionLabel(sessionId = '') {
+  const match = String(sessionId).match(/-(\d+)$/);
+  return match ? `Sessão ${match[1]}` : sessionId;
+}
+
+function terminalTabsSignature(viewer = {}) {
+  return `${(viewer.sessions || []).map((session) => `${session.sessionId}:${session.currentCommand || ''}`).join('|')}@${viewer.activeSessionId || ''}`;
+}
+
+function formatTerminalMeta(viewer = {}) {
+  if (!viewer.activeSessionId) return '';
+  const session = (viewer.sessions || []).find((item) => item.sessionId === viewer.activeSessionId);
+  const parts = [viewer.activeSessionId];
+  if (viewer.currentCommand || session?.currentCommand) parts.push(`rodando: ${viewer.currentCommand || session.currentCommand}`);
+  return parts.join(' · ');
+}
+
+function openTerminalViewer() {
+  const chat = state.activeChat;
+  if (!chat?.id) return;
+  state.terminalViewer = {
+    chatId: chat.id,
+    sessions: [],
+    activeSessionId: null,
+    output: '',
+    currentCommand: null,
+    draft: '',
+    maskInput: false,
+    error: '',
+    loading: true,
+    busy: false,
+  };
+  renderPreservingVisualState();
+  refreshTerminalViewer({ render: true }).then(() => startTerminalPolling());
+}
+
+function closeTerminalViewer() {
+  stopTerminalPolling();
+  state.terminalViewer = null;
+  renderPreservingVisualState();
+}
+
+function startTerminalPolling() {
+  stopTerminalPolling();
+  terminalPollTimer = setInterval(() => {
+    if (!state.terminalViewer || state.terminalViewer.busy) return;
+    refreshTerminalViewer();
+  }, TERMINAL_POLL_INTERVAL_MS);
+}
+
+function stopTerminalPolling() {
+  if (terminalPollTimer) clearInterval(terminalPollTimer);
+  terminalPollTimer = null;
+}
+
+async function refreshTerminalViewer(options = {}) {
+  const viewer = state.terminalViewer;
+  if (!viewer) return;
+  if (state.activeChat?.id && state.activeChat.id !== viewer.chatId) {
+    closeTerminalViewer();
+    return;
+  }
+  try {
+    const data = await api(`/api/chats/${encodeURIComponent(viewer.chatId)}/terminal/sessions`);
+    if (state.terminalViewer !== viewer) return;
+    viewer.sessions = data.sessions || [];
+    if (!viewer.sessions.some((session) => session.sessionId === viewer.activeSessionId)) {
+      viewer.activeSessionId = viewer.sessions[0]?.sessionId || null;
+    }
+    if (viewer.activeSessionId) {
+      const output = await api(
+        `/api/chats/${encodeURIComponent(viewer.chatId)}/terminal/sessions/${encodeURIComponent(viewer.activeSessionId)}/output?lines=500`,
+      );
+      if (state.terminalViewer !== viewer) return;
+      viewer.output = output.output || '';
+      viewer.currentCommand = output.currentCommand || null;
+    } else {
+      viewer.output = '';
+      viewer.currentCommand = null;
+    }
+    viewer.error = '';
+  } catch (error) {
+    if (state.terminalViewer !== viewer) return;
+    viewer.error = error.message;
+  }
+  viewer.loading = false;
+  if (options.render) renderPreservingVisualState();
+  else patchTerminalViewerDom();
+}
+
+// The poll deliberately patches the open modal in place instead of re-rendering the
+// whole app: a full render every ~2s would wipe what the user is typing in the
+// terminal input (and any other focused field).
+function patchTerminalViewerDom() {
+  const viewer = state.terminalViewer;
+  if (!viewer) return;
+  const outputEl = document.querySelector('#terminal-output');
+  if (!outputEl) return;
+  const nextOutput = viewer.activeSessionId
+    ? viewer.output || ''
+    : 'Nenhuma sessão aberta neste chat. Crie uma com "Nova sessão" ou peça pra IA abrir.';
+  if (outputEl.textContent !== nextOutput) {
+    const nearBottom = outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 48;
+    outputEl.textContent = nextOutput;
+    if (nearBottom) outputEl.scrollTop = outputEl.scrollHeight;
+  }
+  const metaEl = document.querySelector('#terminal-meta');
+  if (metaEl) metaEl.textContent = formatTerminalMeta(viewer);
+  const errorEl = document.querySelector('#terminal-error');
+  if (errorEl) {
+    errorEl.textContent = viewer.error || '';
+    errorEl.classList.toggle('hidden', !viewer.error);
+  }
+  const tabsEl = document.querySelector('#terminal-session-tabs');
+  const signature = terminalTabsSignature(viewer);
+  if (tabsEl && tabsEl.dataset.signature !== signature) {
+    tabsEl.dataset.signature = signature;
+    tabsEl.innerHTML = renderTerminalSessionTabs(viewer);
+    bindTerminalSessionTabs();
+  }
+}
+
+function bindTerminalSessionTabs() {
+  document.querySelectorAll('.terminal-session-tab').forEach((button) => {
+    button.addEventListener('click', () => {
+      const viewer = state.terminalViewer;
+      if (!viewer) return;
+      viewer.activeSessionId = button.dataset.sessionId;
+      viewer.output = '';
+      refreshTerminalViewer({ render: true });
+    });
+  });
+}
+
+async function createTerminalSession() {
+  const viewer = state.terminalViewer;
+  if (!viewer || viewer.busy) return;
+  viewer.busy = true;
+  try {
+    const data = await api(`/api/chats/${encodeURIComponent(viewer.chatId)}/terminal/sessions`, { method: 'POST' });
+    viewer.sessions = data.sessions || viewer.sessions;
+    viewer.activeSessionId = data.session?.sessionId || viewer.activeSessionId;
+    viewer.error = '';
+  } catch (error) {
+    viewer.error = error.message;
+  }
+  viewer.busy = false;
+  await refreshTerminalViewer({ render: true });
+}
+
+async function killActiveTerminalSession() {
+  const viewer = state.terminalViewer;
+  if (!viewer?.activeSessionId || viewer.busy) return;
+  viewer.busy = true;
+  try {
+    const data = await api(
+      `/api/chats/${encodeURIComponent(viewer.chatId)}/terminal/sessions/${encodeURIComponent(viewer.activeSessionId)}`,
+      { method: 'DELETE' },
+    );
+    viewer.sessions = data.sessions || [];
+    viewer.activeSessionId = viewer.sessions[0]?.sessionId || null;
+    viewer.error = '';
+  } catch (error) {
+    viewer.error = error.message;
+  }
+  viewer.busy = false;
+  await refreshTerminalViewer({ render: true });
+}
+
+async function sendTerminalInput(event) {
+  event.preventDefault();
+  const viewer = state.terminalViewer;
+  if (!viewer?.activeSessionId) return;
+  const inputEl = document.querySelector('#terminal-input');
+  const text = inputEl?.value ?? viewer.draft ?? '';
+  viewer.draft = '';
+  if (inputEl) inputEl.value = '';
+  // Empty submit means "just press Enter" (answering a prompt, confirming a default).
+  await sendTerminalPayload(text ? { text, pressEnter: true } : { keys: 'Enter' });
+}
+
+async function sendTerminalKey(key) {
+  await sendTerminalPayload({ keys: key });
+}
+
+async function sendTerminalPayload(payload) {
+  const viewer = state.terminalViewer;
+  if (!viewer?.activeSessionId) return;
+  try {
+    const result = await api(
+      `/api/chats/${encodeURIComponent(viewer.chatId)}/terminal/sessions/${encodeURIComponent(viewer.activeSessionId)}/input`,
+      { method: 'POST', body: payload },
+    );
+    if (state.terminalViewer !== viewer) return;
+    viewer.output = result.output || viewer.output;
+    viewer.currentCommand = result.currentCommand || viewer.currentCommand;
+    viewer.error = '';
+  } catch (error) {
+    viewer.error = error.message;
+  }
+  patchTerminalViewerDom();
 }
 
 function renderModelSettingsModal() {
@@ -3335,7 +3658,8 @@ function renderToolUse(toolUse, message = null) {
         }
         ${result.stdout ? `<div><div class="message-label">stdout</div><pre>${escapeHtml(result.stdout)}</pre></div>` : ''}
         ${result.stderr ? `<div><div class="message-label">stderr</div><pre>${escapeHtml(result.stderr)}</pre></div>` : ''}
-        ${!result.stdout && !result.stderr && !searchResults.length ? `<div><div class="message-label">Resultado</div><pre>${escapeHtml(genericResult)}</pre></div>` : ''}
+        ${toolUse.name === 'terminal_session' && typeof result.output === 'string' ? `<div><div class="message-label">Tela do terminal</div><pre>${escapeHtml(result.output)}</pre></div>` : ''}
+        ${!result.stdout && !result.stderr && !searchResults.length && !(toolUse.name === 'terminal_session' && typeof result.output === 'string') ? `<div><div class="message-label">Resultado</div><pre>${escapeHtml(genericResult)}</pre></div>` : ''}
       </div>
     </details>
   `;
@@ -3345,6 +3669,12 @@ function formatToolInputSummary(toolUse = {}) {
   const input = toolUse.input || {};
   const parts = [];
   if (toolUse.name === 'run_terminal_command' && input.command) parts.push(input.command);
+  if (toolUse.name === 'terminal_session') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.sessionId) parts.push(input.sessionId);
+    if (input.text) parts.push(input.text);
+    if (input.keys) parts.push(`tecla: ${input.keys}`);
+  }
   if (toolUse.name === 'web_search' && input.query) parts.push(`query: ${input.query}`);
   if (toolUse.name === 'persistent_memory_user') {
     if (input.action) parts.push(`ação: ${input.action}`);
@@ -4535,6 +4865,27 @@ function bindAppEvents() {
   document.querySelector('#compact-context').addEventListener('click', compactContext);
   document.querySelector('#save-context').addEventListener('click', saveContext);
   document.querySelector('#edit-context').addEventListener('click', openContextEditor);
+  document.querySelector('#open-terminal')?.addEventListener('click', openTerminalViewer);
+  if (state.terminalViewer) {
+    document.querySelector('#close-terminal-viewer')?.addEventListener('click', closeTerminalViewer);
+    document.querySelector('#terminal-input-form')?.addEventListener('submit', sendTerminalInput);
+    document.querySelector('#terminal-input')?.addEventListener('input', (event) => {
+      if (state.terminalViewer) state.terminalViewer.draft = event.target.value;
+    });
+    document.querySelector('#terminal-mask-input')?.addEventListener('change', (event) => {
+      if (state.terminalViewer) state.terminalViewer.maskInput = event.target.checked;
+      const input = document.querySelector('#terminal-input');
+      if (input) input.type = event.target.checked ? 'password' : 'text';
+    });
+    document.querySelector('#new-terminal-session')?.addEventListener('click', createTerminalSession);
+    document.querySelector('#kill-terminal-session')?.addEventListener('click', killActiveTerminalSession);
+    document.querySelectorAll('.terminal-key').forEach((button) => {
+      button.addEventListener('click', () => sendTerminalKey(button.dataset.terminalKey));
+    });
+    bindTerminalSessionTabs();
+  } else {
+    stopTerminalPolling();
+  }
   document.querySelectorAll('.open-context-editor').forEach((button) => {
     button.addEventListener('click', openContextEditor);
   });
@@ -6498,6 +6849,10 @@ async function saveGeneralSettings(event, options = {}) {
       userMemoryEdit,
       alwaysAllow: form.get('tool_alwaysAllow') === 'on',
       terminalMode: form.get('terminalMode') || 'standard',
+      terminalSessions: form.get('tool_terminal') === 'on' && form.get('tool_terminalSessions') === 'on',
+      terminalSessionOutputLines: Number(form.get('terminalSessionOutputLines') || 200),
+      terminalSessionMaxPerChat: Number(form.get('terminalSessionMaxPerChat') || 3),
+      terminalSessionDefaultWaitSeconds: Number(form.get('terminalSessionDefaultWaitSeconds') ?? 3),
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
@@ -6682,6 +7037,10 @@ function captureSettingsDraftFromForm() {
     userMemoryEdit,
     alwaysAllow: form.get('tool_alwaysAllow') === 'on',
     terminalMode: form.get('terminalMode') || 'standard',
+    terminalSessions: form.get('tool_terminal') === 'on' && form.get('tool_terminalSessions') === 'on',
+    terminalSessionOutputLines: Number(form.get('terminalSessionOutputLines') || 200),
+    terminalSessionMaxPerChat: Number(form.get('terminalSessionMaxPerChat') || 3),
+    terminalSessionDefaultWaitSeconds: Number(form.get('terminalSessionDefaultWaitSeconds') ?? 3),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',

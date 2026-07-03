@@ -36,6 +36,10 @@ export const defaultConfig = Object.freeze({
   },
   tools: {
     terminal: true,
+    terminalSessions: false,
+    terminalSessionOutputLines: 200,
+    terminalSessionMaxPerChat: 3,
+    terminalSessionDefaultWaitSeconds: 3,
     chatMemory: true,
     persistentMemory: true,
     autoCompact: true,
@@ -729,6 +733,7 @@ export async function searchUserMemoryFiles(keyword, options = {}) {
 // not the definitions, and tools.js does not import store.js.
 const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'run_terminal_command',
+  'terminal_session',
   'web_search',
   'memory_chat',
   'persistent_memory',
@@ -2098,6 +2103,10 @@ function normalizeTools(tools = {}, options = {}) {
   const safeSearchMode = options.offlineMode && searchMode === 'both' ? 'off' : searchMode;
   return {
     terminal: tools.terminal !== false,
+    terminalSessions: tools.terminal !== false && tools.terminalSessions === true,
+    terminalSessionOutputLines: clampInteger(tools.terminalSessionOutputLines, 50, 2000, 200),
+    terminalSessionMaxPerChat: clampInteger(tools.terminalSessionMaxPerChat, 1, 8, 3),
+    terminalSessionDefaultWaitSeconds: clampInteger(tools.terminalSessionDefaultWaitSeconds, 0, 120, 3),
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,

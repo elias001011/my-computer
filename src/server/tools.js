@@ -34,6 +34,58 @@ export const terminalToolDefinition = {
   },
 };
 
+export const terminalSessionToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'terminal_session',
+    description:
+      'Persistent interactive terminal sessions (tmux-backed). Unlike run_terminal_command (stateless, one command per call), a session keeps shell state between calls: working directory, environment, REPLs, and long-running interactive programs. Flow: open a session, write text into it (Enter is pressed by default), wait waitSeconds, and the visible screen comes back; call read to wait/poll again without typing; close when done. Prefer run_terminal_command for simple one-shot commands. The user can watch this same session live and type into it through the Terminal window in the panel -- if a program asks for a password or manual step, ask the user to open the Terminal window and do it there, then continue.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['open', 'write', 'read', 'list', 'close'],
+          description:
+            'open creates a session and returns its sessionId. write types text and/or a special key into the session, waits waitSeconds, and returns the screen. read only waits waitSeconds and returns the screen. list returns the sessions of this chat. close ends a session.',
+        },
+        sessionId: {
+          type: 'string',
+          description: 'Session id returned by open or list. Required for write, read, and close.',
+        },
+        text: {
+          type: 'string',
+          description: 'Literal text to type for write. Sent followed by Enter unless pressEnter is false.',
+        },
+        keys: {
+          type: 'string',
+          description:
+            'Optional special key for write, sent after text when both are given. Accepted: Enter, Escape, Tab, Space, BSpace, Up, Down, Left, Right, Home, End, PageUp, PageDown, DC, F1-F12, C-<letter> (Ctrl, e.g. C-c), M-<letter> (Alt).',
+        },
+        pressEnter: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Whether to press Enter after text. Default true. Set false to type without submitting.',
+        },
+        waitSeconds: {
+          type: 'number',
+          description:
+            'Seconds to wait before capturing the screen, from 0 to 180. Use small values for prompts and larger ones for slow commands; if the screen still shows work in progress, call read again with a larger waitSeconds instead of retyping.',
+        },
+        lines: {
+          type: 'number',
+          description: 'How many terminal lines to return, from 10 to 2000. Omit to use the user-configured default.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, because the captured screen is meant to inform the next step. Strings like "true" or "false" are accepted for compatibility.',
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const webSearchToolDefinition = {
   type: 'function',
   function: {

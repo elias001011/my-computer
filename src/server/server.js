@@ -7,6 +7,7 @@ import { compactChat, continueToolApproval, editContextSummary, saveContextWindo
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
+import * as terminalSessions from './terminal-sessions.js';
 import { applySourceUpdate, getUpdateStatus, restartProcess } from './updater.js';
 import { runScheduledTaskNow, startScheduler } from './scheduler.js';
 import { sendEmail } from './email.js';
@@ -456,6 +457,11 @@ async function handleChatsApi(request, response, parts) {
     return;
   }
 
+  if (chatId && parts[3] === 'terminal') {
+    await handleTerminalSessionsApi(request, response, parts, chatId);
+    return;
+  }
+
   if (method === 'POST' && chatId && parts[3] === 'tool-approvals' && parts[4]) {
     const body = await readBody(request);
     const result = await continueToolApproval(chatId, parts[4], body.decision || 'approve', {
@@ -478,6 +484,73 @@ async function handleChatsApi(request, response, parts) {
   }
 
   sendJson(response, 404, { error: 'Endpoint de chat nao encontrado.' });
+}
+
+async function handleTerminalSessionsApi(request, response, parts, chatId) {
+  const method = request.method || 'GET';
+  const config = await loadConfig();
+  if (config.tools?.terminalSessions !== true) {
+    sendJson(response, 403, { error: 'Sessões de terminal estão desligadas. Ative o modo avançado na seção Terminal das configurações.' });
+    return;
+  }
+  if (parts[4] !== 'sessions') {
+    sendJson(response, 404, { error: 'Endpoint de terminal nao encontrado.' });
+    return;
+  }
+  const sessionId = parts[5];
+
+  if (method === 'GET' && !sessionId) {
+    sendJson(response, 200, { sessions: await terminalSessions.listSessions(chatId) });
+    return;
+  }
+
+  if (method === 'POST' && !sessionId) {
+    await readChat(chatId);
+    const session = await terminalSessions.openSession(chatId, {
+      terminalMode: config.tools?.terminalMode,
+      runtimeHome: (await getRuntimeInfo()).runtimeHome,
+      maxSessions: config.tools?.terminalSessionMaxPerChat,
+    });
+    await appendEvent({ type: 'terminal.session.user_opened', chatId, details: { sessionId: session.sessionId } });
+    sendJson(response, 201, { session, sessions: await terminalSessions.listSessions(chatId) });
+    return;
+  }
+
+  if (method === 'GET' && sessionId && parts[6] === 'output') {
+    const url = new URL(request.url, 'http://localhost');
+    const lines = Number(url.searchParams.get('lines') || 0) || undefined;
+    sendJson(response, 200, await terminalSessions.readSession(chatId, sessionId, { lines, waitSeconds: 0 }));
+    return;
+  }
+
+  if (method === 'POST' && sessionId && parts[6] === 'input') {
+    const body = await readBody(request);
+    // What the user types here is never logged: the terminal window is exactly where
+    // passwords and sudo prompts are supposed to be answered.
+    const result = await terminalSessions.writeToSession(chatId, sessionId, {
+      text: body.text,
+      keys: body.keys,
+      pressEnter: body.pressEnter,
+      waitSeconds: 0,
+      lines: Number(body.lines || 0) || undefined,
+    });
+    await appendEvent({
+      type: 'terminal.session.user_input',
+      chatId,
+      details: { sessionId, textLength: String(body.text || '').length, keys: body.keys || undefined },
+    });
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (method === 'DELETE' && sessionId) {
+    const result = await terminalSessions.closeSession(chatId, sessionId);
+    await appendEvent({ type: 'terminal.session.user_closed', chatId, details: { sessionId } });
+    sendJson(response, 200, { ...result, sessions: await terminalSessions.listSessions(chatId) });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de terminal nao encontrado.' });
 }
 
 async function handleProfilesApi(request, response, parts) {
