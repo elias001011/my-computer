@@ -3338,8 +3338,29 @@ function renderMessage(message) {
       ${message.error ? `<div class="message-error">${escapeHtml(message.error)}</div>` : ''}
       ${renderMessageActions(message)}
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
+      ${renderSendFileAttachments(message)}
     </article>
   `;
+}
+
+function collectSendFileAttachments(message) {
+  if (message.role !== 'assistant') return [];
+  const seen = new Set();
+  const attachments = [];
+  for (const toolUse of message.toolUses || []) {
+    if (toolUse.name !== 'send_file') continue;
+    const attachmentId = toolUse.result?.attachment?.id;
+    if (!attachmentId || seen.has(attachmentId)) continue;
+    seen.add(attachmentId);
+    attachments.push(attachmentId);
+  }
+  return attachments;
+}
+
+function renderSendFileAttachments(message) {
+  const attachmentIds = collectSendFileAttachments(message);
+  if (!attachmentIds.length) return '';
+  return `<div class="message-attachments">${attachmentIds.map((id) => renderAttachmentCard({ id })).join('')}</div>`;
 }
 
 function collectMessageSources(message) {
