@@ -1531,6 +1531,46 @@ function renderSettingsModal() {
                 <p class="help-text">${draftConfig.tools?.terminal === false && draftConfig.tools?.terminalSessions !== true ? 'Terminal desligado: por enquanto só a criação de arquivo de texto novo funciona, anexar um arquivo já existente no disco fica indisponível.' : 'Anexar arquivo existente pede sua aprovação (como o terminal); criar arquivo novo não pede, por ser conteúdo que a própria IA escreveu.'}</p>
               </div>
               <div class="settings-subpanel">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_fileEditing" id="tool-fileEditing" ${draftConfig.tools?.fileEditing === true ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Editar arquivos da máquina (edit_file)</strong>
+                    <small>A IA pode listar, ler e editar arquivos de verdade no PC (código de projeto, scripts, configs), não só anexos do chat. Ler/listar é livre; escrever/substituir/criar pede sua aprovação (como o terminal). Não é uma fronteira nova — o terminal já dá esse acesso. Desligado por padrão.</small>
+                  </span>
+                </label>
+                <label class="field-label">
+                  Diretório de projeto (opcional)
+                  <input type="text" name="tool_fileEditingRoot" id="tool-fileEditingRoot" value="${escapeAttr(draftConfig.tools?.fileEditingRoot || '')}" placeholder="/caminho/absoluto/do/projeto" />
+                </label>
+                <p class="help-text">Caminhos relativos que a IA usar resolvem a partir desse diretório (e ele é informado à IA como o projeto atual). Vazio = caminhos relativos resolvem a partir da sua pasta pessoal. Caminhos absolutos funcionam sempre, com ou sem isso.</p>
+              </div>
+              <div class="settings-subpanel">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_browser" id="tool-browser" ${draftConfig.tools?.browser === true ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Navegador (browser)</strong>
+                    <small>A IA abre páginas num Chromium headless: tira print (se o modelo tiver visão, ela mesma analisa o layout; o print também vira anexo pra você) ou lê o DOM/texto renderizado pós-JavaScript. Útil pra inspecionar sites ou validar mudanças web num servidor local. Precisa de Chrome/Chromium instalado. Cada uso pede aprovação. Desligado por padrão.</small>
+                  </span>
+                </label>
+                <label class="field-label">
+                  Caminho do Chrome/Chromium (opcional)
+                  <input type="text" name="tool_browserBinaryPath" id="tool-browserBinaryPath" value="${escapeAttr(draftConfig.tools?.browserBinaryPath || '')}" placeholder="auto-detectado (deixe vazio)" />
+                </label>
+                <p class="help-text">Vazio = o app procura sozinho (google-chrome, chromium, chromium-browser...). Console ao vivo e navegação interativa multi-step ainda não estão nesta versão.</p>
+              </div>
+              <div class="settings-subpanel">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_autoContinueOnError" id="tool-autoContinueOnError" ${draftConfig.tools?.autoContinueOnError === true ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Auto continue</strong>
+                    <small>Quando uma resposta para no meio por erro ou limite (e daria pra "Continuar" sem recomeçar do zero), a IA continua sozinha, sem te pedir. Não pula aprovação de tools, e tem um limite de continuações automáticas por mensagem pra não rodar sem parar.</small>
+                  </span>
+                </label>
+              </div>
+              <div class="settings-subpanel">
                 <h4>Como o app decide o que a IA pode usar</h4>
                 <div class="explain-list">
                   <p><strong>Duas camadas, sempre sincronizadas:</strong> a função (definição que o provider recebe e pode chamar de fato) e o texto narrativo do prompt (instruções em linguagem natural dizendo quando/como usar cada tool). Cada toggle aqui liga/desliga as duas ao mesmo tempo — uma tool nunca fica só "narrada" sem existir de verdade (isso já causou alucinação de uso de tool em tarefas agendadas com allowlist restrita, corrigido mascarando o texto narrativo também).</p>
@@ -1894,6 +1934,8 @@ const SCHEDULED_TASK_TOOL_LABELS = {
   run_terminal_command: 'Terminal',
   terminal_session: 'Sessões de terminal (modo avançado)',
   send_file: 'Enviar/criar arquivos',
+  edit_file: 'Editar arquivos da máquina',
+  browser: 'Navegador',
   web_search: 'Busca web',
   memory_chat: 'Memória do chat',
   persistent_memory: 'Memória persistente global',
@@ -1942,10 +1984,16 @@ function isMentionableToolEnabled(name, tools = {}) {
 
 function getMentionableTools() {
   const tools = state.config?.tools || {};
-  return CHAT_MENTIONABLE_TOOLS.filter((name) => isMentionableToolEnabled(name, tools)).map((name) => ({
+  const items = CHAT_MENTIONABLE_TOOLS.filter((name) => isMentionableToolEnabled(name, tools)).map((name) => ({
     name,
     label: SCHEDULED_TASK_TOOL_LABELS[name] || name,
   }));
+  // Offer a file/dir path citation only when some tool can actually act on files.
+  const canActOnFiles = tools.fileEditing === true || tools.terminal !== false || tools.terminalSessions === true;
+  if (canActOnFiles) {
+    items.push({ name: '__path', isPath: true, label: 'Aponta um arquivo ou pasta do PC pra IA' });
+  }
+  return items;
 }
 
 const SCHEDULED_TASK_WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -3461,12 +3509,15 @@ function renderMessage(message) {
   `;
 }
 
+// Tools that deliver a file/image to the chat (send_file, browser screenshot) get their
+// attachment promoted inline into the bubble, same as web_search sources -- otherwise it
+// would only be reachable through the "Ver detalhes" execution history.
 function collectSendFileAttachments(message) {
   if (message.role !== 'assistant') return [];
   const seen = new Set();
   const attachments = [];
   for (const toolUse of message.toolUses || []) {
-    if (toolUse.name !== 'send_file') continue;
+    if (toolUse.name !== 'send_file' && toolUse.name !== 'browser') continue;
     const attachmentId = toolUse.result?.attachment?.id;
     if (!attachmentId || seen.has(attachmentId)) continue;
     seen.add(attachmentId);
@@ -3796,6 +3847,15 @@ function formatToolInputSummary(toolUse = {}) {
   if (toolUse.name === 'read_skill') {
     if (input.action) parts.push(`ação: ${input.action}`);
     if (input.skillId || input.name) parts.push(`skill: ${input.skillId || input.name}`);
+  }
+  if (toolUse.name === 'edit_file') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.path) parts.push(input.path);
+    if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
+  }
+  if (toolUse.name === 'browser') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.url) parts.push(input.url);
   }
   if (!parts.length) {
     try {
@@ -6552,7 +6612,28 @@ async function sendMessageContent(content, options = {}) {
     }
     renderPreservingVisualState();
   }
+  await maybeAutoContinue(chatId, options);
   return { messageAccepted };
+}
+
+const MAX_AUTO_CONTINUE = 8;
+
+// When the "Auto continue" setting is on, a run that stopped mid-task on a continuable
+// error/limit is resumed automatically -- the same "Continuar" the user could click, just
+// fired for them. Guardrails: never fires on a tool-approval pause (a human decision), on
+// a user-requested stop, on a transport error, or past MAX_AUTO_CONTINUE resumes per turn.
+async function maybeAutoContinue(chatId, options = {}) {
+  if (state.config?.tools?.autoContinueOnError !== true) return;
+  if ((options.autoContinueDepth || 0) >= MAX_AUTO_CONTINUE) return;
+  if (state.busy || state.stopInFlight || state.error) return;
+  if (!state.activeChat || state.activeChat.id !== chatId) return;
+  if (chatHasActiveToolApproval(state.activeChat)) return;
+  const latest = [...(state.activeChat.messages || [])].reverse().find((message) => message.role === 'assistant');
+  if (!latest || !['incomplete', 'failed'].includes(latest.status)) return;
+  if (!latest.continuationAvailable || latest.finishReason === 'stopped_by_user') return;
+  if (!isLatestAssistantAttempt(latest)) return;
+  state.status = 'Auto continue: retomando automaticamente...';
+  await sendMessageContent('', { continueMessageId: latest.id, autoContinueDepth: (options.autoContinueDepth || 0) + 1 });
 }
 
 async function stopActiveAgent() {
@@ -6626,6 +6707,8 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
   } finally {
     state.toolDecisionInFlight.delete(decisionKey);
   }
+  // If approving the tool still left the run mid-task, honor Auto continue here too.
+  await maybeAutoContinue(chatId, {});
 }
 
 async function refreshChatAfterAcceptedMessage(chatId) {
@@ -6711,8 +6794,10 @@ function getComposerMentionContext(textarea) {
   let start = cursor;
   while (start > 0 && !/\s/.test(value[start - 1])) start -= 1;
   const token = value.slice(start, cursor);
-  if (!token.startsWith('@') || token.length > 40) return null;
-  return { start, end: cursor, query: token.slice(1).toLowerCase() };
+  // Longer cap than a tool name so a `@path:/some/long/path` token still counts.
+  if (!token.startsWith('@') || token.length > 300) return null;
+  const raw = token.slice(1);
+  return { start, end: cursor, token, raw, query: raw.toLowerCase() };
 }
 
 function updateMentionSuggestions() {
@@ -6722,9 +6807,29 @@ function updateMentionSuggestions() {
     closeMentionSuggestions();
     return;
   }
-  const matches = getMentionableTools().filter(
-    (tool) => !context.query || tool.name.toLowerCase().includes(context.query) || tool.label.toLowerCase().includes(context.query),
-  );
+  // Path-citation mode: the user is typing `@path:<file or dir>`.
+  if (context.query.startsWith('path:')) {
+    const typedPath = context.raw.slice('path:'.length);
+    mentionState = {
+      ...context,
+      pathMode: true,
+      activeIndex: 0,
+      matches: [
+        {
+          name: '__path',
+          isPath: true,
+          label: typedPath ? `Citar caminho: ${typedPath}` : 'Digite o caminho do arquivo/diretório após @path:',
+        },
+      ],
+    };
+    renderMentionSuggestions();
+    return;
+  }
+  const matches = getMentionableTools().filter((tool) => {
+    if (!context.query) return true;
+    if (tool.isPath) return 'path caminho arquivo diretorio diretório file dir pasta'.includes(context.query);
+    return tool.name.toLowerCase().includes(context.query) || tool.label.toLowerCase().includes(context.query);
+  });
   if (!matches.length) {
     closeMentionSuggestions();
     return;
@@ -6739,10 +6844,10 @@ function renderMentionSuggestions() {
   container.hidden = false;
   container.innerHTML = mentionState.matches
     .map(
-      (tool, index) => `
-        <button type="button" class="mention-suggestion ${index === mentionState.activeIndex ? 'active' : ''}" data-tool-name="${escapeAttr(tool.name)}">
-          <strong>@${escapeHtml(tool.name)}</strong>
-          <span>${escapeHtml(tool.label)}</span>
+      (item, index) => `
+        <button type="button" class="mention-suggestion ${index === mentionState.activeIndex ? 'active' : ''}" data-tool-name="${escapeAttr(item.name)}">
+          <strong>${item.isPath ? '📁 Caminho de arquivo/diretório' : `@${escapeHtml(item.name)}`}</strong>
+          <span>${escapeHtml(item.label)}</span>
         </button>
       `,
     )
@@ -6762,10 +6867,33 @@ function closeMentionSuggestions() {
 
 function applyMentionSuggestion(toolName) {
   const textarea = document.querySelector('#composer textarea');
-  const tool = mentionState?.matches?.find((item) => item.name === toolName);
-  if (!textarea || !tool) return;
+  const item = mentionState?.matches?.find((entry) => entry.name === toolName);
+  if (!textarea || !item) return;
   const value = textarea.value;
-  const insertText = `@${tool.name} `;
+
+  if (item.isPath && !mentionState.pathMode) {
+    // First pick of the path entry: seed `@path:` and keep the dropdown open in path
+    // mode so the user can type (or paste) the actual file/dir path next.
+    const insertText = '@path:';
+    textarea.value = `${value.slice(0, mentionState.start)}${insertText}${value.slice(mentionState.end)}`;
+    const nextPosition = mentionState.start + insertText.length;
+    textarea.selectionStart = nextPosition;
+    textarea.selectionEnd = nextPosition;
+    textarea.focus();
+    autoResizeComposer();
+    saveComposerDraft();
+    updateMentionSuggestions();
+    return;
+  }
+
+  if (item.isPath) {
+    // In path mode the `@path:<path>` text is already typed; accepting just closes.
+    closeMentionSuggestions();
+    textarea.focus();
+    return;
+  }
+
+  const insertText = `@${item.name} `;
   textarea.value = `${value.slice(0, mentionState.start)}${insertText}${value.slice(mentionState.end)}`;
   const nextPosition = mentionState.start + insertText.length;
   textarea.selectionStart = nextPosition;
@@ -6776,18 +6904,24 @@ function applyMentionSuggestion(toolName) {
   saveComposerDraft();
 }
 
-// A mentioned tool stays as literal @tool_name text in the composer; before sending,
-// each mention is expanded into a plain-language suggestion inline in the message so
-// the model sees a nudge, not a forced tool_choice -- the user can still edit or
-// remove it like any other text before hitting send.
+// Mentions stay as literal text in the composer; before sending, each is expanded inline
+// so the model sees a nudge, not a forced tool_choice. Two kinds: `@path:...` cites a real
+// file/dir on the machine, and `@tool` suggests a tool. Path expansion runs first so it
+// fully consumes the `@path:...` token before the tool regex could touch its `@path` part.
 function expandMentionsForSend(content) {
-  const mentionable = new Map(getMentionableTools().map((tool) => [tool.name, tool.label]));
-  return content.replace(/@([a-z_]+)\b/gi, (match, name) => {
+  let out = String(content).replace(/@path:(?:"([^"]*)"|(\S+))/g, (match, quoted, bare) => {
+    const target = String(quoted ?? bare ?? '').trim();
+    if (!target) return match;
+    return `(o usuário aponta este arquivo/diretório no PC: ${target} -- use-o diretamente; se o caminho não existir, procure)`;
+  });
+  const mentionable = new Map(getMentionableTools().filter((tool) => !tool.isPath).map((tool) => [tool.name, tool.label]));
+  out = out.replace(/@([a-z_]+)\b/gi, (match, name) => {
     const normalizedName = name.toLowerCase();
     const label = mentionable.get(normalizedName);
     if (!label) return match;
     return `(usuário sugere usar a tool "${normalizedName}" -- ${label})`;
   });
+  return out;
 }
 
 function insertTextAtCursor(textarea, text) {
@@ -7253,6 +7387,11 @@ async function saveGeneralSettings(event, options = {}) {
       terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
       terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
       fileDelivery: form.get('tool_fileDelivery') === 'on',
+      fileEditing: form.get('tool_fileEditing') === 'on',
+      fileEditingRoot: String(form.get('tool_fileEditingRoot') || '').trim(),
+      browser: form.get('tool_browser') === 'on',
+      browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
+      autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
       skills: form.get('tool_skills') === 'on',
     };
     tools.webSearch = tools.searchMode !== 'off';
@@ -7445,6 +7584,11 @@ function captureSettingsDraftFromForm() {
     terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
     terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
     fileDelivery: form.get('tool_fileDelivery') === 'on',
+    fileEditing: form.get('tool_fileEditing') === 'on',
+    fileEditingRoot: String(form.get('tool_fileEditingRoot') || '').trim(),
+    browser: form.get('tool_browser') === 'on',
+    browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
+    autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
     skills: form.get('tool_skills') === 'on',
     searchMode,
     webSearch: searchMode !== 'off',

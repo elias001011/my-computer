@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getRuntimeHome } from './paths.js';
@@ -371,6 +372,106 @@ export const sendFileToolDefinition = {
         },
       },
       required: ['action', 'fileName'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const fileEditToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'edit_file',
+    description:
+      'Read, list, and edit real files on the user machine (project source, scripts, config, web code -- anything the user can access), not just chat attachments. Use it to inspect a directory, read a file, make a precise replace of an exact snippet, or write/create a whole file. This is the tool for editing a project the user pointed you at (via an @ path citation or by asking). For running/building/moving files or anything sudo, use the terminal instead. Prefer replace over write when changing part of an existing file, and read the file first so oldText matches exactly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'read', 'replace', 'write', 'create'],
+          description:
+            'list returns directory entries at path. read returns file text (paginated). replace swaps one exact oldText snippet for newText in an existing file. write overwrites an existing file with content. create makes a new file with content (fails if it already exists).',
+        },
+        path: {
+          type: 'string',
+          description:
+            'Absolute path, or path relative to the configured project root (or the user home when no project root is set). For list, a directory; otherwise a file.',
+        },
+        oldText: {
+          type: 'string',
+          description: 'Exact text currently in the file, for replace. Must match exactly once -- include enough surrounding context to be unique.',
+        },
+        newText: {
+          type: 'string',
+          description: 'Replacement text for replace.',
+        },
+        content: {
+          type: 'string',
+          description: 'Full file content for write and create.',
+        },
+        offset: {
+          type: 'number',
+          description: 'Character offset for read pagination. Use nextOffset from a truncated read to continue.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum characters to return for read. Defaults to 20000; max 100000.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for this file operation.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, because list/read results and edit confirmations inform the next step.',
+        },
+      },
+      required: ['action', 'path', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
+export const browserToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'browser',
+    description:
+      'Open a web page in a real headless browser (Chromium) to see or read it. screenshot renders the page to a PNG image delivered as a chat attachment -- if the current model supports vision, the image is also sent to you so you can analyze the layout; otherwise you still get the saved path. read returns the fully rendered DOM/text after JavaScript runs, which is more accurate than a raw fetch for modern sites. Use this to inspect a site, check how a page looks, or validate web changes you just made (e.g. a local dev server URL).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['screenshot', 'read'],
+          description: 'screenshot captures the rendered page as a PNG image. read returns the rendered DOM/text of the page.',
+        },
+        url: {
+          type: 'string',
+          description: 'The URL to open (http/https, or a file:// path). A local dev server like http://localhost:3000 is fine.',
+        },
+        fullPage: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'For screenshot: capture the full scrollable page instead of just the viewport. Default false.',
+        },
+        width: {
+          type: 'number',
+          description: 'Viewport width in pixels for screenshot, from 320 to 3840. Default 1280.',
+        },
+        height: {
+          type: 'number',
+          description: 'Viewport height in pixels for screenshot, from 240 to 2160. Default 800.',
+        },
+        waitSeconds: {
+          type: 'number',
+          description: 'Seconds to let the page settle before capturing, from 0 to 30. Default 3.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, so the screenshot reference or page text informs the next step.',
+        },
+      },
+      required: ['action', 'url'],
       additionalProperties: false,
     },
   },
@@ -790,6 +891,171 @@ PY`;
       terminal: terminalResult,
       error: terminalResult.stderr || 'Search command did not return valid JSON.',
     };
+  }
+}
+
+const CHROMIUM_CANDIDATES = [
+  'google-chrome-stable',
+  'google-chrome',
+  'chromium',
+  'chromium-browser',
+  'chrome',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+];
+
+async function isExecutable(candidate) {
+  try {
+    await fs.access(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Zero-dep "which": if the candidate is a path, test it directly; otherwise walk PATH.
+// Same philosophy as tmux/python3 -- shell out to a system binary, never bundle one.
+async function resolveExecutable(candidate) {
+  if (!candidate) return null;
+  if (candidate.includes(path.sep)) {
+    return (await isExecutable(candidate)) ? candidate : null;
+  }
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const full = path.join(dir, candidate);
+    if (await isExecutable(full)) return full;
+  }
+  return null;
+}
+
+export async function detectBrowserBinary(configuredPath = '') {
+  const configured = String(configuredPath || '').trim();
+  if (configured) {
+    const resolved = await resolveExecutable(configured);
+    if (resolved) return resolved;
+    return null;
+  }
+  for (const candidate of CHROMIUM_CANDIDATES) {
+    const resolved = await resolveExecutable(candidate);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+// Drive a headless Chromium as a discrete, stateless operation (one launch per call),
+// exactly like the python3-backed web search: no persistent driver, no npm dependency.
+// screenshot returns PNG bytes; read returns the post-JS rendered DOM. Live console
+// capture and interactive multi-step navigation are intentionally out of scope here --
+// they would need a CDP/WebSocket layer, which is a separate, heavier piece.
+export async function runBrowser(action, url, options = {}) {
+  const cleanUrl = String(url || '').trim();
+  if (!cleanUrl) return { action, error: 'url is required.' };
+  if (!/^(https?:|file:)/i.test(cleanUrl)) {
+    return { action, error: 'url must start with http://, https://, or file://.' };
+  }
+  const binary = await detectBrowserBinary(options.binaryPath);
+  if (!binary) {
+    return {
+      action,
+      error:
+        'No Chromium/Chrome binary found. Install Google Chrome or Chromium (e.g. "apt install chromium" / "brew install --cask google-chrome"), or set the browser binary path in the Browser settings.',
+    };
+  }
+
+  const waitSeconds = Math.min(Math.max(Number(options.waitSeconds ?? 3), 0), 30);
+  const virtualTimeBudget = Math.max(1000, Math.round(waitSeconds * 1000) || 3000);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mc-browser-'));
+  const userDataDir = path.join(tempDir, 'profile');
+  const baseArgs = [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--hide-scrollbars',
+    '--disable-extensions',
+    '--no-first-run',
+    `--user-data-dir=${userDataDir}`,
+    `--virtual-time-budget=${virtualTimeBudget}`,
+  ];
+
+  let args;
+  let outputPath = null;
+  if (action === 'screenshot') {
+    const width = Math.min(Math.max(Number(options.width || 1280), 320), 3840);
+    // Full-page capture over the CLI is not reliable; a taller window is a best-effort
+    // stand-in that captures more of the page without a CDP driver.
+    const height = options.fullPage
+      ? Math.min(Math.max(Number(options.height || 800) * 5, 2400), 12000)
+      : Math.min(Math.max(Number(options.height || 800), 240), 2160);
+    outputPath = path.join(tempDir, 'screenshot.png');
+    args = [...baseArgs, `--window-size=${width},${height}`, `--screenshot=${outputPath}`, cleanUrl];
+  } else {
+    args = [...baseArgs, '--dump-dom', cleanUrl];
+  }
+
+  const spawnTimeoutMs = (waitSeconds + 30) * 1000;
+  const result = await new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let stdoutTruncated = false;
+    const child = spawn(binary, args, { windowsHide: true });
+    child.stdin?.end();
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      killProcessTree(child);
+      done({ timedOut: true, stdout, stderr });
+    }, spawnTimeoutMs);
+    const abortListener = () => {
+      killProcessTree(child);
+      done({ aborted: true, stdout, stderr });
+    };
+    options.signal?.addEventListener?.('abort', abortListener, { once: true });
+    child.stdout?.on('data', (chunk) => {
+      const collected = collect(stdout, chunk.toString(), 200000);
+      stdout = collected.value;
+      stdoutTruncated ||= collected.truncated;
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr = collect(stderr, chunk.toString(), 8000).value;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener?.('abort', abortListener);
+      done({ error: error.message, stdout, stderr });
+    });
+    child.on('close', (exitCode) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener?.('abort', abortListener);
+      done({ exitCode, stdout, stdoutTruncated, stderr });
+    });
+  });
+
+  try {
+    if (result.aborted) return { action, error: 'Execução interrompida pelo usuário.', aborted: true };
+    if (result.timedOut) return { action, error: `Browser timed out after ${waitSeconds + 30}s loading ${cleanUrl}.` };
+    if (result.error) return { action, error: `Failed to launch browser: ${result.error}` };
+
+    if (action === 'screenshot') {
+      let imageBuffer;
+      try {
+        imageBuffer = await fs.readFile(outputPath);
+      } catch {
+        return { action, error: `Browser did not produce a screenshot.${result.stderr ? ` (${result.stderr.trim().slice(0, 400)})` : ''}` };
+      }
+      if (!imageBuffer.length) return { action, error: 'Screenshot came back empty.' };
+      return { action, url: cleanUrl, imageBase64: imageBuffer.toString('base64'), mimeType: 'image/png', bytes: imageBuffer.length };
+    }
+
+    const dom = String(result.stdout || '').trim();
+    if (!dom) return { action, error: `Browser returned no page content.${result.stderr ? ` (${result.stderr.trim().slice(0, 400)})` : ''}` };
+    return { action, url: cleanUrl, dom, truncated: Boolean(result.stdoutTruncated) };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

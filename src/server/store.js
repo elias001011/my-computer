@@ -44,6 +44,11 @@ export const defaultConfig = Object.freeze({
     terminalSessionIdleTimeoutMinutes: 30,
     terminalSessionMaxGlobal: 12,
     fileDelivery: false,
+    fileEditing: false,
+    fileEditingRoot: '',
+    browser: false,
+    browserBinaryPath: '',
+    autoContinueOnError: false,
     chatMemory: true,
     persistentMemory: true,
     autoCompact: true,
@@ -742,6 +747,8 @@ const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'run_terminal_command',
   'terminal_session',
   'send_file',
+  'edit_file',
+  'browser',
   'web_search',
   'memory_chat',
   'persistent_memory',
@@ -2320,6 +2327,11 @@ function normalizeTools(tools = {}, options = {}) {
     terminalSessionIdleTimeoutMinutes: clampInteger(tools.terminalSessionIdleTimeoutMinutes, 0, 720, 30),
     terminalSessionMaxGlobal: clampInteger(tools.terminalSessionMaxGlobal, 1, 64, 12),
     fileDelivery: tools.fileDelivery === true,
+    fileEditing: tools.fileEditing === true,
+    fileEditingRoot: normalizeAbsolutePathOrEmpty(tools.fileEditingRoot),
+    browser: tools.browser === true,
+    browserBinaryPath: String(tools.browserBinaryPath || '').trim().slice(0, 500),
+    autoContinueOnError: tools.autoContinueOnError === true,
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
@@ -2699,6 +2711,15 @@ function clampInteger(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isInteger(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+// Project root for edit_file: only an absolute path is meaningful (relative paths would
+// resolve against an unpredictable cwd). Empty means "no project root -- relative paths
+// resolve against the user home", which is the safe default.
+function normalizeAbsolutePathOrEmpty(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return path.isAbsolute(trimmed) ? path.normalize(trimmed).slice(0, 500) : '';
 }
 
 function getPrimaryApiKey(providerSettings = {}, providerId = 'groq') {

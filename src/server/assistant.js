@@ -37,15 +37,18 @@ import {
   ATTACHMENT_FILE_LIMIT_BYTES,
 } from './store.js';
 import {
+  browserToolDefinition,
   chatDocumentToolDefinition,
   compactContextToolDefinition,
   editPersistentMemoryUserToolDefinition,
+  fileEditToolDefinition,
   memoryChatToolDefinition,
   persistentMemoryToolDefinition,
   persistentMemoryUserToolDefinition,
   renameChatToolDefinition,
   runTerminalCommand,
   runWebSearch,
+  runBrowser,
   readSkillToolDefinition,
   sendEmailToolDefinition,
   sendFileToolDefinition,
@@ -1754,6 +1757,8 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
     terminal: tools.terminal !== false && allowed.has('run_terminal_command'),
     terminalSessions: tools.terminalSessions === true && allowed.has('terminal_session'),
     fileDelivery: tools.fileDelivery === true && allowed.has('send_file'),
+    fileEditing: tools.fileEditing === true && allowed.has('edit_file'),
+    browser: tools.browser === true && allowed.has('browser'),
     chatMemory: tools.chatMemory !== false && allowed.has('memory_chat'),
     persistentMemory: tools.persistentMemory !== false && allowed.has('persistent_memory'),
     userMemory: tools.userMemory !== false && allowed.has('persistent_memory_user'),
@@ -1874,6 +1879,24 @@ function buildSystemPrompt(
           config.tools?.terminal !== false || config.tools?.terminalSessions === true
             ? 'You can also use action attach to send a file that already exists on disk -- for example, produce it first with run_terminal_command/terminal_session (installing a library and running a script if needed, such as removing an image background) and then attach the resulting file so the user receives it.'
             : 'Action attach (sending an existing file from disk) is unavailable because the terminal tool is off; only create (new text content) works right now.',
+        ].join('\n')
+      : '',
+    config.tools?.fileEditing === true
+      ? [
+          'You can read and edit real files on the user machine with the edit_file tool (not just chat attachments): action list a directory, read a file, replace an exact snippet, write a whole file, or create a new one. Use this to work on a project the user pointed you at -- an @ path citation in their message tells you exactly where; if a path is wrong, look for it with list or the terminal.',
+          config.tools?.fileEditingRoot
+            ? `The configured project root is ${config.tools.fileEditingRoot}; relative paths resolve against it. Prefer working inside it unless the user asks otherwise.`
+            : 'No project root is configured, so relative paths resolve against the user home. Prefer absolute paths, or the exact path the user cited.',
+          'Always read a file (or the relevant part) before replace, so oldText matches exactly; replace needs a unique match, so include enough surrounding context. Use replace for partial edits, write to overwrite an existing file, create for a new one. For running, building, moving, deleting, or anything needing sudo, use the terminal instead.',
+        ].join('\n')
+      : '',
+    config.tools?.browser === true
+      ? [
+          'You can open web pages in a real headless browser with the browser tool: action screenshot renders the page to an image, action read returns the page DOM/text after JavaScript runs.',
+          modelSupportsImages(config.provider, config.model, config)
+            ? 'The current model supports vision, so a screenshot is sent to you as an image -- use screenshot to actually see a page layout, and read when you only need the text/markup. The user also receives the screenshot as an attachment.'
+            : 'The current model is not a vision model, so you will not see a screenshot yourself (the user still receives it) -- prefer action read to get the page text/markup you can reason over, and switch to a vision model when you need to judge layout.',
+          'Use this to inspect a site, check how a page renders, or validate a web change you just made (e.g. open a local dev server URL after editing its files).',
         ].join('\n')
       : '',
     config.provider === 'ollama'
@@ -2156,6 +2179,14 @@ async function executeToolCall(chatId, toolCall, config = {}) {
 
   if (name === 'send_file') {
     return executeSendFileToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
+  }
+
+  if (name === 'edit_file') {
+    return executeFileEditToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
+  }
+
+  if (name === 'browser') {
+    return executeBrowserToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
   }
 
   if (name !== 'run_terminal_command') {
@@ -2476,6 +2507,193 @@ async function executeSendFileToolCall(chatId, toolCallId, input, config = {}) {
   }
 }
 
+const FILE_EDIT_MAX_WRITE_BYTES = 8 * 1024 * 1024;
+const FILE_EDIT_MAX_LIST_ENTRIES = 1000;
+
+// Resolve the model-provided path to an absolute one. Absolute paths are used as-is
+// (this tool grants the same reach the terminal already has -- there is no confinement
+// wall, the off-by-default toggle plus per-write approval are the guard). Relative paths
+// resolve against the configured project root, or the user home when none is set.
+function resolveMachinePath(rawPath, config = {}) {
+  const trimmed = String(rawPath || '').trim();
+  if (!trimmed) return null;
+  if (path.isAbsolute(trimmed)) return path.resolve(trimmed);
+  const root = config.tools?.fileEditingRoot ? String(config.tools.fileEditingRoot) : os.homedir();
+  return path.resolve(root, trimmed);
+}
+
+function looksBinary(buffer) {
+  const sample = buffer.subarray(0, 8000);
+  return sample.includes(0);
+}
+
+async function executeFileEditToolCall(chatId, toolCallId, input, config = {}) {
+  const action = input.action || 'read';
+  const resolvedPath = resolveMachinePath(input.path, config);
+  const finish = (result) => ({
+    id: toolCallId,
+    name: 'edit_file',
+    input,
+    ...(result.error ? { status: 'failed' } : {}),
+    result: { action, path: resolvedPath, ...result },
+    createdAt: new Date().toISOString(),
+  });
+
+  if (!resolvedPath) return finish({ error: 'path is required.' });
+  await appendEvent({ type: `tool.edit_file.${action}`, chatId, details: { path: resolvedPath, reason: input.reason } });
+
+  try {
+    if (action === 'list') {
+      const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+      const items = [];
+      for (const entry of entries.slice(0, FILE_EDIT_MAX_LIST_ENTRIES)) {
+        const type = entry.isDirectory() ? 'dir' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other';
+        let size = null;
+        if (type === 'file') {
+          try {
+            size = (await fs.stat(path.join(resolvedPath, entry.name))).size;
+          } catch {
+            size = null;
+          }
+        }
+        items.push({ name: entry.name, type, size });
+      }
+      throwIfStopped(config.signal);
+      return finish({ entries: items, truncated: entries.length > FILE_EDIT_MAX_LIST_ENTRIES, totalEntries: entries.length });
+    }
+
+    if (action === 'read') {
+      const buffer = await fs.readFile(resolvedPath);
+      if (looksBinary(buffer)) {
+        return finish({ error: 'File appears to be binary; edit_file only reads text. Use the terminal to inspect binary files.' });
+      }
+      const fullText = buffer.toString('utf8');
+      const offset = input.offset || 0;
+      const limit = input.limit || 20000;
+      const content = fullText.slice(offset, offset + limit);
+      const nextOffset = offset + content.length;
+      const truncated = nextOffset < fullText.length;
+      throwIfStopped(config.signal);
+      return finish({ content, offset, limit, totalChars: fullText.length, nextOffset: truncated ? nextOffset : null, truncated });
+    }
+
+    if (action === 'replace') {
+      const oldText = String(input.oldText ?? '');
+      if (!oldText) return finish({ error: 'oldText is required for replace.' });
+      const buffer = await fs.readFile(resolvedPath);
+      if (looksBinary(buffer)) return finish({ error: 'File appears to be binary; cannot replace text in it.' });
+      const previous = buffer.toString('utf8');
+      const firstIndex = previous.indexOf(oldText);
+      if (firstIndex === -1) return finish({ error: 'oldText was not found in the file. Read the file again and match it exactly.' });
+      if (previous.indexOf(oldText, firstIndex + oldText.length) !== -1) {
+        return finish({ error: 'oldText matched more than once. Include more surrounding context so it identifies a single location.' });
+      }
+      const newText = String(input.newText ?? '');
+      const next = previous.slice(0, firstIndex) + newText + previous.slice(firstIndex + oldText.length);
+      if (Buffer.byteLength(next, 'utf8') > FILE_EDIT_MAX_WRITE_BYTES) {
+        return finish({ error: 'Resulting file exceeds the 8 MB edit_file limit.' });
+      }
+      await fs.writeFile(resolvedPath, next, 'utf8');
+      throwIfStopped(config.signal);
+      return finish({
+        bytesWritten: Buffer.byteLength(next, 'utf8'),
+        previousExcerpt: truncate(previous.slice(Math.max(0, firstIndex - 200), firstIndex + oldText.length + 200), 2000),
+        newExcerpt: truncate(next.slice(Math.max(0, firstIndex - 200), firstIndex + newText.length + 200), 2000),
+      });
+    }
+
+    if (action === 'write' || action === 'create') {
+      const content = String(input.content ?? '');
+      if (Buffer.byteLength(content, 'utf8') > FILE_EDIT_MAX_WRITE_BYTES) {
+        return finish({ error: 'Content exceeds the 8 MB edit_file limit.' });
+      }
+      let exists = false;
+      try {
+        await fs.access(resolvedPath);
+        exists = true;
+      } catch {
+        exists = false;
+      }
+      if (action === 'create' && exists) {
+        return finish({ error: 'File already exists. Use action "write" to overwrite it, or "replace" to change part of it.' });
+      }
+      if (action === 'write' && !exists) {
+        return finish({ error: 'File does not exist. Use action "create" to make a new file.' });
+      }
+      if (action === 'create') {
+        await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+      }
+      await fs.writeFile(resolvedPath, content, 'utf8');
+      throwIfStopped(config.signal);
+      return finish({ created: action === 'create', bytesWritten: Buffer.byteLength(content, 'utf8') });
+    }
+
+    return finish({ error: 'action must be list, read, replace, write, or create.' });
+  } catch (error) {
+    if (isUserStopError(error)) throw error;
+    throwIfStopped(config.signal);
+    return finish({ error: error.message });
+  }
+}
+
+async function executeBrowserToolCall(chatId, toolCallId, input, config = {}) {
+  const action = input.action || 'screenshot';
+  const finish = (result) => ({
+    id: toolCallId,
+    name: 'browser',
+    input,
+    ...(result.error ? { status: 'failed' } : {}),
+    result: { action, ...result },
+    createdAt: new Date().toISOString(),
+  });
+  await appendEvent({ type: `tool.browser.${action}`, chatId, details: { url: input.url || null, reason: input.reason } });
+
+  try {
+    const raw = await runBrowser(action, input.url, {
+      binaryPath: config.tools?.browserBinaryPath || '',
+      waitSeconds: input.waitSeconds,
+      width: input.width,
+      height: input.height,
+      fullPage: input.fullPage === true,
+      signal: config.signal,
+    });
+    if (raw.aborted) throw createUserStopError();
+    if (raw.error) return finish({ url: input.url, error: raw.error });
+
+    if (action === 'screenshot') {
+      const name = `screenshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      const attachment = await saveAttachment(chatId, {
+        name,
+        mimeType: 'image/png',
+        size: raw.bytes,
+        dataBase64: raw.imageBase64,
+      });
+      throwIfStopped(config.signal);
+      const supportsVision = modelSupportsImages(config.provider, config.model, config);
+      const result = {
+        url: raw.url,
+        attachment: serializeSendFileAttachmentForTool(attachment),
+        visibleToModel: supportsVision,
+        note: supportsVision
+          ? 'Screenshot delivered to the user and attached below as an image you can analyze.'
+          : 'Screenshot delivered to the user, but the current model is not a vision model, so you cannot see it. Switch to a vision model to analyze the layout, or use action "read" to get the DOM/text instead.',
+      };
+      // Transient: consumed by appendToolResultForModel to feed the image to a vision
+      // model as a follow-up user turn, then stripped before the toolUse is persisted.
+      if (supportsVision) {
+        result.__imageForModel = { mimeType: 'image/png', dataBase64: raw.imageBase64, name };
+      }
+      return finish(result);
+    }
+
+    return finish({ url: raw.url, dom: truncate(raw.dom || '', 60000), truncated: Boolean(raw.truncated) });
+  } catch (error) {
+    if (isUserStopError(error)) throw error;
+    throwIfStopped(config.signal);
+    return finish({ url: input.url, error: error.message });
+  }
+}
+
 async function executeCompactContextToolCall(chatId, toolCallId, input, config = {}) {
   const compacted = await compactChat(chatId, { signal: config.signal });
   await appendEvent({
@@ -2503,6 +2721,8 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
     // scheduled-task mask exact per tool (a task may allow only one of the two).
     tools.terminalSessions === true ? terminalSessionToolDefinition : null,
     tools.fileDelivery === true ? sendFileToolDefinition : null,
+    tools.fileEditing === true ? fileEditToolDefinition : null,
+    tools.browser === true ? browserToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
@@ -2708,6 +2928,28 @@ function normalizeToolInput(name, input = {}) {
     if (Object.hasOwn(normalizedInput, 'skillId')) normalizedInput.skillId = String(normalizedInput.skillId || '').trim();
     if (Object.hasOwn(normalizedInput, 'name')) normalizedInput.name = String(normalizedInput.name || '').trim();
   }
+  if (name === 'edit_file') {
+    normalizedInput.action = ['list', 'read', 'replace', 'write', 'create'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'read';
+    normalizedInput.path = String(normalizedInput.path || '').trim();
+    if (Object.hasOwn(normalizedInput, 'oldText')) normalizedInput.oldText = String(normalizedInput.oldText ?? '');
+    if (Object.hasOwn(normalizedInput, 'newText')) normalizedInput.newText = String(normalizedInput.newText ?? '');
+    if (Object.hasOwn(normalizedInput, 'content')) normalizedInput.content = String(normalizedInput.content ?? '');
+    if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 20_000_000, 0);
+    if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 100000, 20000);
+  }
+  if (name === 'browser') {
+    normalizedInput.action = ['screenshot', 'read'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'screenshot';
+    normalizedInput.url = String(normalizedInput.url || '').trim();
+    const fullPage = normalizeBooleanLike(normalizedInput.fullPage);
+    if (fullPage !== undefined) normalizedInput.fullPage = fullPage;
+    if (Object.hasOwn(normalizedInput, 'width')) normalizedInput.width = clampInteger(normalizedInput.width, 320, 3840, 1280);
+    if (Object.hasOwn(normalizedInput, 'height')) normalizedInput.height = clampInteger(normalizedInput.height, 240, 2160, 800);
+    if (Object.hasOwn(normalizedInput, 'waitSeconds')) normalizedInput.waitSeconds = clampInteger(normalizedInput.waitSeconds, 0, 30, 3);
+  }
   if (name === 'chat_document') {
     normalizedInput.action = ['list', 'read', 'replace', 'write'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -2821,6 +3063,8 @@ function describeEnabledTools(tools = {}) {
     tools.terminal !== false ? 'run_terminal_command' : null,
     tools.terminalSessions === true ? 'terminal_session' : null,
     tools.fileDelivery === true ? 'send_file' : null,
+    tools.fileEditing === true ? 'edit_file' : null,
+    tools.browser === true ? 'browser' : null,
     getSearchMode(tools) !== 'off' ? 'web_search' : null,
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
@@ -2837,6 +3081,8 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'run_terminal_command') return tools.terminal !== false;
   if (name === 'terminal_session') return tools.terminalSessions === true;
   if (name === 'send_file') return tools.fileDelivery === true;
+  if (name === 'edit_file') return tools.fileEditing === true;
+  if (name === 'browser') return tools.browser === true;
   if (name === 'web_search') return getSearchMode(tools) !== 'off';
   if (name === 'memory_chat') return tools.chatMemory !== false;
   if (name === 'persistent_memory') return tools.persistentMemory !== false;
@@ -2871,6 +3117,17 @@ function toolRequiresApproval(toolCall, config = {}) {
     // chat, which is a real disclosure surface, so it needs a human nod.
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action === 'attach';
+  }
+  if (name === 'edit_file') {
+    // Reading/listing real machine files is inspection; changing them (replace/write/
+    // create) mutates the user's disk and needs the same human nod as the terminal.
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return ['replace', 'write', 'create'].includes(input.action);
+  }
+  if (name === 'browser') {
+    // Opening a URL in a real browser makes an outbound network request from the
+    // user's machine, so it goes through approval like other host actions.
+    return true;
   }
   if (name === 'memory_chat' || name === 'persistent_memory') {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
@@ -2954,7 +3211,12 @@ function shouldReturnToolOutput(toolCall) {
 
 function appendToolResultForModel(messages, toolCall, toolUse) {
   const returnOutput = shouldReturnToolOutput(toolCall);
-  const outputLimit = ['persistent_memory_user', 'chat_document'].includes(toolUse.name) ? 70000 : 12000;
+  // A browser screenshot carries the PNG transiently so we can hand it to a vision
+  // model as a real image; strip it before it is stringified into the tool result or
+  // persisted, since the bytes belong in the saved attachment, not the transcript JSON.
+  const imageForModel = toolUse.result?.__imageForModel || null;
+  if (imageForModel && toolUse.result) delete toolUse.result.__imageForModel;
+  const outputLimit = ['persistent_memory_user', 'chat_document', 'edit_file'].includes(toolUse.name) ? 70000 : 12000;
   const result = returnOutput
     ? toolUse.result
     : {
@@ -2968,6 +3230,15 @@ function appendToolResultForModel(messages, toolCall, toolUse) {
     name: toolUse.name,
     content: truncate(JSON.stringify(result), outputLimit),
   });
+  if (imageForModel?.dataBase64) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: `Screenshot from the browser tool (${imageForModel.name || 'screenshot.png'}):` },
+        { type: 'image_url', image_url: { url: `data:${imageForModel.mimeType};base64,${imageForModel.dataBase64}` } },
+      ],
+    });
+  }
   return returnOutput;
 }
 
