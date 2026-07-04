@@ -2223,9 +2223,9 @@ pre {
 }
 
 .terminal-session-tab.active {
-  background: var(--surface-ink);
-  color: var(--bg);
-  border-color: var(--surface-ink);
+  border-color: var(--border-accent-soft);
+  background: var(--surface-accent-soft);
+  color: var(--accent-dark);
 }
 
 .terminal-no-sessions {
