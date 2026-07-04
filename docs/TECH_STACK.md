@@ -20,6 +20,8 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 - `child_process.spawn` para a tool de terminal.
 - `tmux` (binário de sistema) para as sessões de terminal persistentes do modo avançado — mesma filosofia do `python3`: ferramenta externa via spawn, zero pacote npm.
 - `python3` para a busca web via terminal quando necessário.
+- `chromium`/`google-chrome` (binário de sistema, opcional) para a tool de navegador — mesma filosofia: `--headless` via spawn (screenshot e dump-dom), sem Playwright/Puppeteer nem pacote npm. Console ao vivo e navegação interativa multi-step não estão nesta versão (exigiriam uma camada CDP/WebSocket).
+- `edit_file`: leitura/edição de arquivos reais da máquina via `node:fs` (não só anexos), com aprovação nas escritas — mesma disciplina de match exato do `chat_document`.
 - Git local para update.
 - JSON, JSONL e Markdown para persistência.
 - Extração simples de texto para anexos sem parser pesado no MVP.
@@ -44,6 +46,7 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 - `ollama` para modelos locais, vision local e catálogo dinâmico via `/api/tags`.
 - `python3` para a pesquisa web via terminal.
 - `tmux` para sessões de terminal persistentes (modo avançado da seção Terminal). Sem tmux instalado, o modo avançado apenas retorna um erro explicando como instalar; o resto do app não muda.
+- `chromium`/`google-chrome` para a tool de navegador (seção Tools). Sem ele instalado, a tool retorna um erro explicando como instalar; o resto do app não muda. Auto-detectado no PATH ou apontado por um caminho configurável.
 - `sudo` apenas quando o usuário quiser liberar tarefas administrativas do Ollama.
 
 ## Por que ainda não tem React, Fastify ou SQLite
