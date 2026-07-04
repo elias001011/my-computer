@@ -59,7 +59,10 @@ Quando a UI e o fluxo de tools ficarem mais complexos, essas escolhas podem ser 
 ## Runtime e desinstalação
 
 - `./install.sh` instala dependências, prepara o runtime e pode abrir o painel.
-- `./uninstall.sh` remove o projeto local.
+- `./uninstall.sh` remove o projeto local e, em terminal interativo, detecta dependências
+  opcionais presentes no sistema (tmux, ollama) e pergunta se quer remover também --
+  nunca remove sozinho, já que o MC nunca instala essas ferramentas por conta própria e
+  não há como saber se foram instaladas só por causa do MC. `--no-deps` pula essa etapa.
 - `./uninstall.sh --remove-data` apaga também o runtime do usuário.
 
 Use os scripts da raiz como entrypoint do usuário final. `install.sh` chama `scripts/bootstrap.sh` por baixo; o arquivo em `scripts/` é implementação interna para manutenção/desenvolvimento, não um comando que o usuário precisa decorar.
