@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { panelDir } from './paths.js';
-import { compactChat, continueToolApproval, editContextSummary, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
+import { compactChat, continueToolApproval, editContextSummary, improveSkillWithAI, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
@@ -22,6 +22,7 @@ import {
   deleteAttachment,
   deleteProfile,
   deleteScheduledTask,
+  deleteSkill,
   deleteUserMemoryFile,
   ensureRuntime,
   exportRuntimeData,
@@ -30,6 +31,7 @@ import {
   importRuntimeData,
   listChats,
   listScheduledTasks,
+  listSkills,
   listUserMemoryFilesWithHints,
   loadConfig,
   readAttachmentFile,
@@ -38,7 +40,9 @@ import {
   readContextSummary,
   readEvents,
   readPersistentMemory,
+  readSkill,
   readUserMemoryFileWithHints,
+  saveSkill,
   saveUserMemoryFile,
   saveAttachment,
   sanitizeConfig,
@@ -46,6 +50,7 @@ import {
   updateProfile,
   updateChatMetadata,
   updateScheduledTask,
+  updateSkill,
   withProfileScope,
   writeAttachmentTextContent,
   writeUserMemoryFileContent,
@@ -212,6 +217,11 @@ async function handleApiScoped(request, response, url) {
 
   if (parts[1] === 'persistent-memory-user') {
     await handleUserMemoryApi(request, response, parts);
+    return;
+  }
+
+  if (parts[1] === 'skills') {
+    await handleSkillsApi(request, response, parts);
     return;
   }
 
@@ -716,6 +726,51 @@ async function handleUserMemoryApi(request, response, parts) {
   sendJson(response, 404, { error: 'Endpoint de arquivo de memória não encontrado.' });
 }
 
+async function handleSkillsApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const skillId = parts[2];
+
+  if (method === 'GET' && !skillId) {
+    sendJson(response, 200, { skills: await listSkills() });
+    return;
+  }
+
+  if (method === 'GET' && skillId && parts[3] === undefined) {
+    const skill = await readSkill(skillId);
+    sendJson(response, 200, { skill });
+    return;
+  }
+
+  if (method === 'POST' && !skillId) {
+    const body = await readBody(request, { limit: 1_000_000 });
+    const skill = await saveSkill(body);
+    sendJson(response, 201, { skill, skills: await listSkills() });
+    return;
+  }
+
+  if (method === 'POST' && skillId === 'improve-draft') {
+    const body = await readBody(request, { limit: 1_000_000 });
+    const result = await improveSkillWithAI(body);
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (method === 'PUT' && skillId) {
+    const body = await readBody(request, { limit: 1_000_000 });
+    const skill = await updateSkill(skillId, body);
+    sendJson(response, 200, { skill, skills: await listSkills() });
+    return;
+  }
+
+  if (method === 'DELETE' && skillId) {
+    await deleteSkill(skillId);
+    sendJson(response, 200, { skills: await listSkills() });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de skill não encontrado.' });
+}
+
 async function buildBootstrapPayload() {
   const config = await loadConfig();
   const runtimeInfo = await getRuntimeInfo();
@@ -732,6 +787,7 @@ async function buildBootstrapPayload() {
     activeChatEvents: activeChat ? await readChatEvents(activeChat.id) : [],
     persistentMemory: await readPersistentMemory(),
     userMemoryFiles: await listUserMemoryFilesWithHints(),
+    skills: await listSkills(),
     scheduledTasks: await listScheduledTasks(),
     serverLocalTimezone: getServerLocalTimezone(),
     runtimeHome: runtimeInfo.runtimeHome,

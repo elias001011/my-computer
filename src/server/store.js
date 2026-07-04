@@ -11,6 +11,7 @@ const fileLocks = new Map();
 const USER_MEMORY_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 const USER_MEMORY_PROMPT_TOTAL_CHARS = 60000;
 const USER_MEMORY_PROMPT_FILE_CHARS = 12000;
+const SKILL_FILE_LIMIT_BYTES = 200 * 1024;
 export const ATTACHMENT_FILE_LIMIT_BYTES = 20 * 1024 * 1024;
 const profileScope = new AsyncLocalStorage();
 const defaultProfile = Object.freeze({
@@ -56,6 +57,7 @@ export const defaultConfig = Object.freeze({
     userMemory: true,
     userMemoryEdit: false,
     chatDocuments: true,
+    skills: true,
   },
   userMemory: {
     sendFilesToPrompt: false,
@@ -113,6 +115,7 @@ export async function ensureRuntime() {
   await fs.mkdir(paths.runtimeHome, { recursive: true, mode: 0o700 });
   await fs.mkdir(paths.chatsDir, { recursive: true, mode: 0o700 });
   await fs.mkdir(paths.userMemoryDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.skillsDir, { recursive: true, mode: 0o700 });
   await fs.mkdir(path.join(paths.runtimeHome, 'logs'), { recursive: true, mode: 0o700 });
   await ensureTextFile(
     paths.persistentMemoryPath,
@@ -120,6 +123,7 @@ export async function ensureRuntime() {
   );
   await ensureJsonFile(paths.userMemoryIndexPath, []);
   await ensureJsonFile(paths.scheduledTasksPath, []);
+  await ensureJsonFile(paths.skillsIndexPath, []);
 
   try {
     await fs.access(paths.configPath);
@@ -747,6 +751,7 @@ const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'compact_context',
   'rename_chat',
   'send_email',
+  'read_skill',
 ];
 const SCHEDULED_TASK_LEASE_STALE_MS = 10 * 60 * 1000;
 
@@ -1064,6 +1069,205 @@ export async function buildUserMemoryPromptContext(config = {}) {
     promptFiles,
     totalContentLimit: USER_MEMORY_PROMPT_TOTAL_CHARS,
   };
+}
+
+// Skills: durable, user-authored (or AI-improved) step-by-step guidance for a specific
+// recurring task. Same "disclosure progressiva" shape as persistent_memory_user above --
+// only name+description ever sit in the system prompt, the body is fetched on demand by
+// the read_skill tool -- but simpler, since skills are always short Markdown with a
+// Claude-Code-style frontmatter header (---\nname: ...\ndescription: ...\n---\nbody),
+// never binary, never large, and have no separate "edit via chat tool" surface: editing
+// only happens through the panel.
+export async function listSkills() {
+  await ensureRuntime();
+  const skills = await readJson(getActivePaths().skillsIndexPath, []);
+  return normalizeSkills(skills);
+}
+
+export async function buildSkillsPromptContext() {
+  const skills = await listSkills();
+  return { skills: skills.map((skill) => ({ id: skill.id, name: skill.name, description: skill.description })) };
+}
+
+export async function saveSkill({ name, description, body } = {}) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  const slug = sanitizeSkillName(name);
+  const trimmedDescription = String(description || '').trim();
+  if (!trimmedDescription) {
+    const error = new Error('Descrição da skill é obrigatória.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const existing = await listSkills();
+  if (existing.some((skill) => skill.name === slug)) {
+    const error = new Error(`Já existe uma skill chamada "${slug}".`);
+    error.statusCode = 409;
+    throw error;
+  }
+  const content = serializeSkillFile({ name: slug, description: trimmedDescription, body });
+  const buffer = Buffer.from(content, 'utf8');
+  if (buffer.length > SKILL_FILE_LIMIT_BYTES) {
+    const error = new Error('Skill muito grande. Limite atual: 200 KB.');
+    error.statusCode = 413;
+    throw error;
+  }
+  await fs.mkdir(paths.skillsDir, { recursive: true, mode: 0o700 });
+  const id = crypto.randomUUID();
+  const filePath = path.join(paths.skillsDir, `${id}-${slug}.md`);
+  await fs.writeFile(filePath, buffer, { mode: 0o600 });
+  const now = new Date().toISOString();
+  const entry = { id, name: slug, description: trimmedDescription, path: filePath, size: buffer.length, createdAt: now, updatedAt: now };
+  await withFileLock(paths.skillsIndexPath, async () => {
+    const skills = normalizeSkills(await readJson(paths.skillsIndexPath, []));
+    await writeJson(paths.skillsIndexPath, [...skills, entry], 0o600);
+  });
+  await appendEvent({ type: 'skill.created', details: { name: slug } });
+  return entry;
+}
+
+export async function readSkill(identifier) {
+  await ensureRuntime();
+  const entry = await findSkill(identifier);
+  const content = await fs.readFile(assertSkillPath(entry.path), 'utf8');
+  const parsed = parseSkillFrontmatter(content);
+  return { ...entry, body: parsed.body, content };
+}
+
+export async function updateSkill(identifier, { name, description, body } = {}) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  const entry = await findSkill(identifier);
+  const nextName = name !== undefined ? sanitizeSkillName(name) : entry.name;
+  if (nextName !== entry.name) {
+    const existing = await listSkills();
+    if (existing.some((skill) => skill.id !== entry.id && skill.name === nextName)) {
+      const error = new Error(`Já existe uma skill chamada "${nextName}".`);
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+  const nextDescription = description !== undefined ? String(description).trim() : entry.description;
+  if (!nextDescription) {
+    const error = new Error('Descrição da skill é obrigatória.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const nextBody = body !== undefined ? String(body ?? '') : (await readSkill(entry.id)).body;
+  const content = serializeSkillFile({ name: nextName, description: nextDescription, body: nextBody });
+  const buffer = Buffer.from(content, 'utf8');
+  if (buffer.length > SKILL_FILE_LIMIT_BYTES) {
+    const error = new Error('Skill muito grande. Limite atual: 200 KB.');
+    error.statusCode = 413;
+    throw error;
+  }
+  await fs.writeFile(assertSkillPath(entry.path), buffer, { mode: 0o600 });
+  const updatedAt = new Date().toISOString();
+  const updatedEntry = { ...entry, name: nextName, description: nextDescription, size: buffer.length, updatedAt };
+  await withFileLock(paths.skillsIndexPath, async () => {
+    const skills = normalizeSkills(await readJson(paths.skillsIndexPath, []));
+    await writeJson(
+      paths.skillsIndexPath,
+      skills.map((skill) => (skill.id === entry.id ? updatedEntry : skill)),
+      0o600,
+    );
+  });
+  await appendEvent({ type: 'skill.updated', details: { name: nextName } });
+  return { ...updatedEntry, body: nextBody };
+}
+
+export async function deleteSkill(identifier) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  const deleted = await withFileLock(paths.skillsIndexPath, async () => {
+    const skills = normalizeSkills(await readJson(paths.skillsIndexPath, []));
+    const target = findSkillInList(skills, identifier);
+    if (!target) return null;
+    await fs.rm(assertSkillPath(target.path), { force: true });
+    await writeJson(
+      paths.skillsIndexPath,
+      skills.filter((skill) => skill.id !== target.id),
+      0o600,
+    );
+    return target;
+  });
+  if (deleted) await appendEvent({ type: 'skill.deleted', details: { name: deleted.name } });
+  return deleted;
+}
+
+function normalizeSkills(skills = []) {
+  return (Array.isArray(skills) ? skills : [])
+    .map((skill) => {
+      const id = /^[a-zA-Z0-9_-]+$/.test(String(skill?.id || '')) ? String(skill.id) : '';
+      const filePath = String(skill?.path || '');
+      if (!id || !filePath) return null;
+      return {
+        id,
+        name: sanitizeSkillName(skill?.name),
+        description: String(skill?.description || '').slice(0, 400),
+        size: Number(skill?.size || 0),
+        path: filePath,
+        createdAt: skill?.createdAt || new Date().toISOString(),
+        updatedAt: skill?.updatedAt || skill?.createdAt || new Date().toISOString(),
+      };
+    })
+    .filter(Boolean);
+}
+
+async function findSkill(identifier) {
+  const skills = await listSkills();
+  const target = findSkillInList(skills, identifier);
+  if (!target) {
+    const error = new Error('Skill não encontrada.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return target;
+}
+
+function findSkillInList(skills, identifier) {
+  const value = String(identifier || '').trim();
+  return skills.find((skill) => skill.id === value || skill.name === value) || null;
+}
+
+function assertSkillPath(filePath) {
+  const resolved = path.resolve(filePath);
+  const skillsDir = path.resolve(getActivePaths().skillsDir);
+  if (!resolved.startsWith(`${skillsDir}${path.sep}`)) {
+    const error = new Error('Caminho de skill inválido.');
+    error.statusCode = 403;
+    throw error;
+  }
+  return resolved;
+}
+
+function sanitizeSkillName(name) {
+  const slug = String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || 'skill';
+}
+
+function parseSkillFrontmatter(content = '') {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(String(content));
+  if (!match) return { name: '', description: '', body: String(content || '').trim() };
+  const [, frontmatter, body] = match;
+  const fields = {};
+  for (const line of frontmatter.split(/\r?\n/)) {
+    const fieldMatch = /^([a-zA-Z0-9_]+):\s*(.*)$/.exec(line);
+    if (!fieldMatch) continue;
+    fields[fieldMatch[1]] = fieldMatch[2].trim().replace(/^["']|["']$/, '');
+  }
+  return { name: fields.name || '', description: fields.description || '', body: body.trim() };
+}
+
+function serializeSkillFile({ name, description, body }) {
+  const safeDescription = String(description || '').replace(/\r?\n/g, ' ').trim();
+  return `---\nname: ${name}\ndescription: ${safeDescription}\n---\n\n${String(body || '').trim()}\n`;
 }
 
 export async function readContextSummary(id) {
@@ -1926,6 +2130,8 @@ function buildProfilePaths(profileId = 'default') {
     userMemoryDir: path.join(profileRuntimeHome, 'persistent-memory-user'),
     userMemoryIndexPath: path.join(profileRuntimeHome, 'persistent-memory-user.json'),
     scheduledTasksPath: path.join(profileRuntimeHome, 'scheduledTasks.json'),
+    skillsDir: path.join(profileRuntimeHome, 'skills'),
+    skillsIndexPath: path.join(profileRuntimeHome, 'skills.json'),
   };
 }
 
@@ -2127,6 +2333,7 @@ function normalizeTools(tools = {}, options = {}) {
     userMemory: tools.userMemory !== false,
     userMemoryEdit: tools.userMemory !== false && tools.userMemoryEdit === true,
     chatDocuments: tools.chatDocuments !== false,
+    skills: tools.skills !== false,
   };
 }
 

@@ -376,6 +376,43 @@ export const sendFileToolDefinition = {
   },
 };
 
+export const readSkillToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'read_skill',
+    description:
+      'List or read user-authored skills -- durable step-by-step guidance for a specific recurring task (a CLI workflow, a house style, how to do some process this user cares about). The system prompt already lists every skill name and description; call this with action read before relying on a skill whose description matches the current task, since only the full body (fetched here) has the actual instructions.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'read'],
+          description: 'list returns the name+description index again. read returns the full body of one skill by skillId or name.',
+        },
+        skillId: {
+          type: 'string',
+          description: 'ID of the skill to read. Prefer this when known from the system prompt index.',
+        },
+        name: {
+          type: 'string',
+          description: 'Name of the skill to read when skillId is not available.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason for reading this skill.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, since the skill body is meant to inform the next reasoning step.',
+        },
+      },
+      required: ['action', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const compactContextToolDefinition = {
   type: 'function',
   function: {

@@ -6,6 +6,9 @@ import {
   appendMessages,
   createMessage,
   buildUserMemoryPromptContext,
+  buildSkillsPromptContext,
+  listSkills,
+  readSkill,
   getRuntimeInfo,
   getServerLocalTimezone,
   listUserMemoryFilesWithHints,
@@ -43,6 +46,7 @@ import {
   renameChatToolDefinition,
   runTerminalCommand,
   runWebSearch,
+  readSkillToolDefinition,
   sendEmailToolDefinition,
   sendFileToolDefinition,
   terminalSessionToolDefinition,
@@ -141,6 +145,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const runtimeInfo = await getRuntimeInfo();
   const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo, { modelSettings: chat.modelSettings || {} });
   const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
+  const skillsContext = await buildSkillsPromptContext();
   const toolUses = [];
   const executionTrace = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext);
@@ -160,6 +165,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     const workingMessages = await buildProviderMessages(chat, effectiveConfig, persistentMemory, {
       strictImageSupportForMessageId: userMessage.id,
       userMemoryContext,
+      skillsContext,
       skipMemory: scheduledTaskContext?.skipMemory === true,
       scheduledTaskContext,
     });
@@ -1730,6 +1736,7 @@ async function buildProviderMessages(chat, config, persistentMemory, options = {
   const systemPrompt = buildSystemPrompt(chat, config, persistentMemory, options.userMemoryContext || null, {
     skipMemory: options.skipMemory === true,
     scheduledTaskContext: options.scheduledTaskContext || null,
+    skillsContext: options.skillsContext || null,
   });
   return [{ role: 'system', content: systemPrompt }, ...(await selectRecentMessages(chat, config, options))];
 }
@@ -1755,6 +1762,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
     autoCompact: tools.autoCompact !== false && allowed.has('compact_context'),
     chatTitle: tools.chatTitle !== false && allowed.has('rename_chat'),
     sendEmail: tools.sendEmail !== false && allowed.has('send_email'),
+    skills: tools.skills !== false && allowed.has('read_skill'),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',
@@ -1805,7 +1813,7 @@ function buildSystemPrompt(
   config,
   persistentMemory,
   userMemoryContext = null,
-  { skipMemory = false, scheduledTaskContext = null } = {},
+  { skipMemory = false, scheduledTaskContext = null, skillsContext = null } = {},
 ) {
   if (scheduledTaskContext) {
     config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext) };
@@ -1947,6 +1955,8 @@ function buildSystemPrompt(
     '',
     skipMemory ? '' : renderUserMemoryPromptSection(userMemoryContext, config),
     '',
+    renderSkillsPromptSection(skillsContext, config),
+    '',
     '<chat_memory_md>',
     chat.memory || 'Sem memória de chat.',
     '</chat_memory_md>',
@@ -1966,6 +1976,26 @@ function buildSystemPrompt(
       ? ['', '<scheduled_task_system_prompt>', scheduledTaskContext.systemPrompt, '</scheduled_task_system_prompt>'].join('\n')
       : '',
   ].join('\n');
+}
+
+function renderSkillsPromptSection(skillsContext, config = {}) {
+  if (config.tools?.skills === false) return '';
+  const skills = skillsContext?.skills || [];
+  if (!skills.length) {
+    return ['<skills mode="empty">', 'Nenhuma skill foi cadastrada pelo usuário.', '</skills>'].join('\n');
+  }
+  const lines = [`<skills count="${skills.length}">`];
+  lines.push(
+    'User-authored skills: durable step-by-step guidance for a specific recurring task (a CLI workflow, a house style, a process this user cares about). Only name and description are listed here -- call read_skill with action "read" using skillId or name before relying on one; never guess a skill\'s content from its name/description alone.',
+  );
+  lines.push('');
+  for (const skill of skills) {
+    lines.push(`- id: ${skill.id}`);
+    lines.push(`  name: ${skill.name}`);
+    lines.push(`  description: ${skill.description}`);
+  }
+  lines.push('</skills>');
+  return lines.join('\n');
 }
 
 function buildTechnicalLevelInstruction(config) {
@@ -2094,6 +2124,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
 
   if (name === 'edit_persistent_memory_user') {
     return executeEditPersistentMemoryUserToolCall(chatId, toolCall.id, input);
+  }
+
+  if (name === 'read_skill') {
+    return executeReadSkillToolCall(chatId, toolCall.id, input);
   }
 
   if (name === 'chat_document') {
@@ -2478,6 +2512,7 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
     tools.autoCompact !== false ? compactContextToolDefinition : null,
     tools.chatTitle !== false ? renameChatToolDefinition : null,
     tools.sendEmail === true ? sendEmailToolDefinition : null,
+    tools.skills !== false ? readSkillToolDefinition : null,
   ].filter(Boolean);
   if (!scheduledTaskContext) return definitions;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
@@ -2666,6 +2701,13 @@ function normalizeToolInput(name, input = {}) {
     if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 2_000_000, 0);
     if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 50000, 20000);
   }
+  if (name === 'read_skill') {
+    normalizedInput.action = ['list', 'read'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'list';
+    if (Object.hasOwn(normalizedInput, 'skillId')) normalizedInput.skillId = String(normalizedInput.skillId || '').trim();
+    if (Object.hasOwn(normalizedInput, 'name')) normalizedInput.name = String(normalizedInput.name || '').trim();
+  }
   if (name === 'chat_document') {
     normalizedInput.action = ['list', 'read', 'replace', 'write'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -2787,6 +2829,7 @@ function describeEnabledTools(tools = {}) {
     tools.chatDocuments !== false ? 'chat_document' : null,
     tools.autoCompact !== false ? 'compact_context' : null,
     tools.chatTitle !== false ? 'rename_chat' : null,
+    tools.skills !== false ? 'read_skill' : null,
   ].filter(Boolean);
 }
 
@@ -2802,6 +2845,7 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'chat_document') return tools.chatDocuments !== false;
   if (name === 'compact_context') return tools.autoCompact !== false;
   if (name === 'rename_chat') return tools.chatTitle !== false;
+  if (name === 'read_skill') return tools.skills !== false;
   // send_email has no global on/off flag -- tools.sendEmail only ever becomes true via
   // applyScheduledTaskToolMask (allowlist + isEmailConfigured), so outside that masked
   // context this is always false, structurally blocking it from regular chats.
@@ -2832,7 +2876,7 @@ function toolRequiresApproval(toolCall, config = {}) {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action !== 'read';
   }
-  if (name === 'persistent_memory_user') {
+  if (name === 'persistent_memory_user' || name === 'read_skill') {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action === 'read';
   }
@@ -3307,6 +3351,93 @@ function serializeUserMemoryFileForTool(file = {}) {
     title: file.title || '',
     preview: file.preview || '',
   };
+}
+
+async function executeReadSkillToolCall(chatId, toolCallId, input) {
+  const action = String(input.action || 'list').trim();
+  if (action === 'list') {
+    const skills = (await listSkills()).map(serializeSkillForTool);
+    await appendEvent({ type: 'tool.read_skill.list', chatId, details: { reason: input.reason, skillCount: skills.length } });
+    return {
+      id: toolCallId,
+      name: 'read_skill',
+      input,
+      result: { action, skills },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const identifier = input.skillId || input.name;
+  if (!identifier) {
+    return {
+      id: toolCallId,
+      name: 'read_skill',
+      input,
+      status: 'failed',
+      result: { action, error: 'skillId or name is required for read' },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  try {
+    const skill = await readSkill(identifier);
+    await appendEvent({ type: 'tool.read_skill.read', chatId, details: { reason: input.reason, skillId: skill.id, name: skill.name } });
+    return {
+      id: toolCallId,
+      name: 'read_skill',
+      input,
+      result: { action: 'read', skill: { ...serializeSkillForTool(skill), body: skill.body } },
+      createdAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      id: toolCallId,
+      name: 'read_skill',
+      input,
+      status: 'failed',
+      result: { action: 'read', error: error.message },
+      createdAt: new Date().toISOString(),
+    };
+  }
+}
+
+function serializeSkillForTool(skill = {}) {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    size: skill.size,
+  };
+}
+
+// "Melhorar com IA": a plain one-off completion using the user's current default
+// provider/model (skills are not chat-scoped, so there is no per-chat config to
+// inherit here). Takes the draft straight from the panel form (not from disk), so it
+// works for a brand-new unsaved skill too. Returns a suggestion only -- the panel puts
+// it in the body field for review, nothing is written to disk until the user explicitly
+// saves it, same as any other AI edit in this app.
+export async function improveSkillWithAI({ name = '', description = '', body = '' } = {}) {
+  const config = await loadConfig();
+  const response = await callProviderChat({
+    config,
+    provider: config.provider,
+    model: config.model,
+    tools: [],
+    temperature: 0.3,
+    maxTokens: 2400,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You improve the wording, clarity, and structure of a user-authored "skill" file: durable step-by-step guidance an AI assistant reads before doing a specific recurring task. Keep the same intent and every concrete fact (paths, commands, names, numbers) exactly as given -- do not invent new steps or remove real constraints. Return only the improved body in Markdown: no frontmatter, no preamble, no explanation of what changed.',
+      },
+      {
+        role: 'user',
+        content: `Skill name: ${name || '(sem nome ainda)'}\nDescription: ${description || '(sem descrição ainda)'}\n\nCurrent body:\n${body || '(vazio)'}`,
+      },
+    ],
+  });
+  return { suggestion: String(response.content || '').trim() };
 }
 
 async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input) {

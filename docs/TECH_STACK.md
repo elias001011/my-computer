@@ -34,7 +34,8 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 ### Storage
 
 - Runtime do usuário em `~/.my-computer` por padrão, com seções novas em `~/.my-computer/profiles/<id>`.
-- Configurações, chats, memória, arquivos adicionais de memória e eventos ficam separados do código do projeto.
+- Configurações, chats, memória, arquivos adicionais de memória, skills e eventos ficam separados do código do projeto.
+- Skills: arquivos Markdown curtos com frontmatter (`name`/`description`) + corpo, em `skills/`. Só nome+descrição entram no prompt; o corpo completo é lido sob demanda pela tool `read_skill` (mesmo padrão de disclosure progressiva da memória de arquivos do usuário).
 - O backend usa escopo async por requisição para resolver qual seção atende cada chamada.
 - Export/import trabalha sobre a seção ativa e cobre configuração, memória persistente, arquivos adicionais, chats, anexos e eventos selecionados.
 

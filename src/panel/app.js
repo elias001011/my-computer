@@ -9,6 +9,8 @@ const state = {
   activeChatEvents: [],
   persistentMemory: '',
   userMemoryFiles: [],
+  skills: [],
+  skillEditor: null,
   profiles: [],
   activeProfile: null,
   runtimeHome: '',
@@ -534,6 +536,7 @@ async function bootstrap() {
 function applyBootstrapData(data = {}) {
   Object.assign(state, data);
   state.userMemoryFiles = data.userMemoryFiles || state.userMemoryFiles || [];
+  state.skills = data.skills || state.skills || [];
   state.scheduledTasks = data.scheduledTasks || state.scheduledTasks || [];
   state.profiles = data.profiles || state.profiles || [];
   state.activeProfile = data.activeProfile || state.activeProfile || null;
@@ -1135,6 +1138,7 @@ function renderApp() {
             ${state.pendingAttachments.length ? state.pendingAttachments.map((attachment) => renderAttachmentCard(attachment, { pending: true })).join('') : ''}
           </div>
           <div class="composer-main">
+            <div class="mention-suggestions" id="mention-suggestions" hidden></div>
             <label class="attach-button icon-button" title="Anexar arquivo" aria-label="Anexar arquivo">
               <span aria-hidden="true">+</span>
               <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${composerDisabled ? 'disabled' : ''} />
@@ -1220,6 +1224,7 @@ function renderApp() {
     ${state.attachmentDiff ? renderAttachmentDiffModal() : ''}
     ${state.userMemoryDiff ? renderUserMemoryDiffModal() : ''}
     ${state.userMemoryViewer ? renderUserMemoryViewerModal() : ''}
+    ${state.skillEditor ? renderSkillEditorModal() : ''}
     ${state.importModalOpen ? renderImportModal() : ''}
     ${state.confirmDialog ? renderConfirmDialog() : ''}
   `;
@@ -1535,6 +1540,27 @@ function renderSettingsModal() {
               </div>
             </section>
 
+            <section class="modal-section settings-panel ${activeSection === 'skills' ? 'active' : ''}" data-section="skills">
+              <h3>Skills</h3>
+              <div class="toggle-list">
+                ${renderToolToggle('skills', 'Permitir que a IA leia skills (read_skill)', 'Nome e descrição de cada skill abaixo sempre entram no prompt (se houver alguma cadastrada); o corpo completo só é lido quando a IA chama a tool read_skill para uma skill específica.')}
+              </div>
+              <div class="settings-subpanel">
+                <h4>O que é uma skill</h4>
+                <div class="explain-list">
+                  <p>Um arquivo curto de instruções passo a passo pra uma tarefa recorrente específica (um fluxo de CLI, um estilo de escrita, como fazer algo do seu jeito). A IA vê só o nome e a descrição de cada uma no prompt; só lê o corpo quando decide que aquela skill se aplica à tarefa atual.</p>
+                </div>
+              </div>
+              <div class="settings-subpanel">
+                <div class="button-row">
+                  <button type="button" id="new-skill" ${state.busy ? 'disabled' : ''}>Nova skill</button>
+                </div>
+                <div class="skill-list">
+                  ${renderSkillRows()}
+                </div>
+              </div>
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'terminal' ? 'active' : ''}" data-section="terminal">
               <h3>Terminal</h3>
               <div class="toggle-list">
@@ -1807,6 +1833,7 @@ function renderSettingsNav(activeSection) {
     ['providers', 'Providers'],
     ['memory', 'Memória'],
     ['tools', 'Tools'],
+    ['skills', 'Skills'],
     ['terminal', 'Terminal'],
     ['context', 'Contexto'],
     ['scheduledTasks', 'Tarefas agendadas'],
@@ -1876,7 +1903,50 @@ const SCHEDULED_TASK_TOOL_LABELS = {
   compact_context: 'Compactar contexto',
   rename_chat: 'Renomear chat',
   send_email: 'Enviar email',
+  read_skill: 'Skills',
 };
+
+// Every tool a normal chat message can mention with @ -- mirrors isToolEnabled() in
+// assistant.js (send_email is excluded on purpose: it has no chat-level toggle, only a
+// scheduled-task allowlist, so it can never be enabled here).
+const CHAT_MENTIONABLE_TOOLS = [
+  'run_terminal_command',
+  'terminal_session',
+  'send_file',
+  'web_search',
+  'memory_chat',
+  'persistent_memory',
+  'persistent_memory_user',
+  'edit_persistent_memory_user',
+  'chat_document',
+  'compact_context',
+  'rename_chat',
+  'read_skill',
+];
+
+function isMentionableToolEnabled(name, tools = {}) {
+  if (name === 'run_terminal_command') return tools.terminal !== false;
+  if (name === 'terminal_session') return tools.terminalSessions === true;
+  if (name === 'send_file') return tools.fileDelivery === true;
+  if (name === 'web_search') return getSearchMode(tools) !== 'off';
+  if (name === 'memory_chat') return tools.chatMemory !== false;
+  if (name === 'persistent_memory') return tools.persistentMemory !== false;
+  if (name === 'persistent_memory_user') return tools.userMemory !== false;
+  if (name === 'edit_persistent_memory_user') return tools.userMemoryEdit === true;
+  if (name === 'chat_document') return tools.chatDocuments !== false;
+  if (name === 'compact_context') return tools.autoCompact !== false;
+  if (name === 'rename_chat') return tools.chatTitle !== false;
+  if (name === 'read_skill') return tools.skills !== false;
+  return false;
+}
+
+function getMentionableTools() {
+  const tools = state.config?.tools || {};
+  return CHAT_MENTIONABLE_TOOLS.filter((name) => isMentionableToolEnabled(name, tools)).map((name) => ({
+    name,
+    label: SCHEDULED_TASK_TOOL_LABELS[name] || name,
+  }));
+}
 
 const SCHEDULED_TASK_WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
@@ -2910,10 +2980,15 @@ function renderAttachmentViewerModal() {
             <h2 id="attachment-viewer-title">${escapeHtml(attachment.name)}</h2>
             <p>${escapeHtml(formatBytes(attachment.size))} · ${escapeHtml(attachment.mimeType || 'arquivo')} · ${escapeHtml(attachment.kind || 'documento')} · cópia salva no My Computer</p>
           </div>
-          <button type="button" id="close-attachment-viewer" aria-label="Fechar">×</button>
+          <div class="modal-header-actions">
+            ${!attachment.viewerLoading ? `<a class="button-like" id="download-attachment-viewer" href="${escapeAttr(contentUrl)}" download="${escapeAttr(attachment.name)}">Baixar</a>` : ''}
+            ${!attachment.viewerLoading ? `<button type="button" id="copy-attachment-viewer" data-attachment-id="${escapeAttr(attachment.id)}">${attachment.kind === 'image' ? 'Copiar imagem' : 'Copiar caminho'}</button>` : ''}
+            <button type="button" id="close-attachment-viewer" aria-label="Fechar">×</button>
+          </div>
         </header>
         <div class="modal-body viewer-body">
           ${preview}
+          ${attachment.path ? `<p class="help-text attachment-path"><strong>Caminho no MC:</strong> <code>${escapeHtml(attachment.path)}</code></p>` : ''}
           <p class="help-text">${escapeHtml(
             editable
               ? 'Edite a cópia salva dentro deste chat. O arquivo original enviado de fora não é alterado.'
@@ -2985,6 +3060,49 @@ function renderUserMemoryViewerModal() {
           <footer class="modal-footer">
             <button type="button" id="cancel-user-memory-viewer">Cancelar</button>
             <button type="submit" class="primary" ${!editable || state.busy ? 'disabled' : ''}>Salvar arquivo</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderSkillEditorModal() {
+  const editor = state.skillEditor;
+  if (!editor) return '';
+  const isNew = !editor.id;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal wide-modal skill-editor-modal" role="dialog" aria-modal="true" aria-labelledby="skill-editor-title">
+        <form id="skill-editor-form">
+          <header class="modal-header">
+            <div>
+              <h2 id="skill-editor-title">${isNew ? 'Nova skill' : escapeHtml(editor.name)}</h2>
+              <p>${isNew ? 'O nome vira um identificador (kebab-case); a descrição ajuda a IA a saber quando usar.' : `ID interno: ${escapeHtml(editor.id)}`}</p>
+            </div>
+            <button type="button" id="close-skill-editor" aria-label="Fechar">×</button>
+          </header>
+          <div class="modal-body viewer-body">
+            <label>
+              Nome
+              <input type="text" id="skill-editor-name" value="${escapeAttr(editor.name)}" placeholder="ex.: revisar-pr" maxlength="60" required />
+            </label>
+            <label>
+              Descrição
+              <input type="text" id="skill-editor-description" value="${escapeAttr(editor.description)}" placeholder="Quando e por que usar essa skill" maxlength="400" required />
+            </label>
+            <label>
+              Corpo (Markdown)
+              <textarea id="skill-editor-body" class="viewer-text user-memory-viewer-text" placeholder="Passo a passo para a IA seguir...">${escapeHtml(editor.body || '')}</textarea>
+            </label>
+            ${editor.aiError ? `<p class="help-text warning">${escapeHtml(editor.aiError)}</p>` : ''}
+            <p class="help-text">"Melhorar com IA" usa o provider/modelo padrão atual pra reescrever o corpo com base no que está nos campos agora -- o resultado só substitui o campo Corpo acima para revisão; nada é salvo em disco automaticamente.</p>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" id="improve-skill-with-ai" ${editor.aiBusy || state.busy ? 'disabled' : ''}>${editor.aiBusy ? 'Melhorando...' : 'Melhorar com IA'}</button>
+            ${!isNew ? `<button type="button" id="delete-skill-from-editor" class="danger-button" data-skill-id="${escapeAttr(editor.id)}" ${state.busy ? 'disabled' : ''}>Excluir</button>` : ''}
+            <button type="button" id="cancel-skill-editor">Cancelar</button>
+            <button type="submit" class="primary" ${state.busy ? 'disabled' : ''}>${isNew ? 'Criar skill' : 'Salvar skill'}</button>
           </footer>
         </form>
       </section>
@@ -3674,6 +3792,10 @@ function formatToolInputSummary(toolUse = {}) {
     if (input.action) parts.push(`ação: ${input.action}`);
     if (input.fileName) parts.push(`arquivo: ${input.fileName}`);
     if (input.path) parts.push(`origem: ${input.path}`);
+  }
+  if (toolUse.name === 'read_skill') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.skillId || input.name) parts.push(`skill: ${input.skillId || input.name}`);
   }
   if (!parts.length) {
     try {
@@ -4745,6 +4867,30 @@ function renderUserMemoryFileRows() {
     .join('');
 }
 
+function renderSkillRows() {
+  const skills = state.skills || [];
+  if (!skills.length) {
+    return '<p class="empty small-empty">Nenhuma skill cadastrada.</p>';
+  }
+  return skills
+    .map(
+      (skill) => `
+        <div class="user-memory-file-row">
+          <div>
+            <strong>${escapeHtml(skill.name)}</strong>
+            <span class="user-memory-file-preview">${escapeHtml(skill.description)}</span>
+            <small>${formatBytes(skill.size)}</small>
+          </div>
+          <div class="profile-row-actions">
+            <button type="button" class="edit-skill" data-skill-id="${escapeAttr(skill.id)}" ${state.busy ? 'disabled' : ''}>Editar</button>
+            <button type="button" class="remove-skill danger-button" data-skill-id="${escapeAttr(skill.id)}" ${state.busy ? 'disabled' : ''}>Remover</button>
+          </div>
+        </div>
+      `,
+    )
+    .join('');
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -4840,6 +4986,12 @@ function bindAppEvents() {
   document.querySelector('#stop-agent')?.addEventListener('click', stopActiveAgent);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
   document.querySelector('#composer textarea').addEventListener('input', handleComposerInput);
+  document.querySelector('#mention-suggestions')?.addEventListener('mousedown', (event) => {
+    const button = event.target.closest('.mention-suggestion');
+    if (!button) return;
+    event.preventDefault();
+    applyMentionSuggestion(button.dataset.toolName);
+  });
   document.querySelector('#file-input')?.addEventListener('change', uploadSelectedFiles);
   document.querySelectorAll('.remove-pending-attachment').forEach((button) => {
     button.addEventListener('click', () => removePendingAttachment(button.dataset.attachmentId));
@@ -4863,6 +5015,18 @@ function bindAppEvents() {
   document.querySelector('#close-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
   document.querySelector('#cancel-user-memory-viewer')?.addEventListener('click', closeUserMemoryViewer);
   document.querySelector('#close-user-memory-diff')?.addEventListener('click', closeUserMemoryDiff);
+  document.querySelector('#new-skill')?.addEventListener('click', openNewSkillEditor);
+  document.querySelectorAll('.edit-skill').forEach((button) => {
+    button.addEventListener('click', () => openSkillEditor(button.dataset.skillId));
+  });
+  document.querySelectorAll('.remove-skill').forEach((button) => {
+    button.addEventListener('click', () => removeSkill(button.dataset.skillId));
+  });
+  document.querySelector('#skill-editor-form')?.addEventListener('submit', saveSkillEditor);
+  document.querySelector('#close-skill-editor')?.addEventListener('click', closeSkillEditor);
+  document.querySelector('#cancel-skill-editor')?.addEventListener('click', closeSkillEditor);
+  document.querySelector('#improve-skill-with-ai')?.addEventListener('click', improveSkillEditorWithAI);
+  document.querySelector('#delete-skill-from-editor')?.addEventListener('click', (event) => removeSkill(event.currentTarget.dataset.skillId));
   document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
   document.querySelector('#chat-model-input')?.addEventListener('change', () => toggleChatCustomModel());
   document.querySelector('#chat-title-input')?.addEventListener('input', markChatSettingsDirty);
@@ -5092,6 +5256,7 @@ function bindAppEvents() {
   document.querySelector('#attachment-viewer-form')?.addEventListener('submit', saveAttachmentViewer);
   document.querySelector('#close-attachment-viewer')?.addEventListener('click', closeAttachmentViewer);
   document.querySelector('#cancel-attachment-viewer')?.addEventListener('click', closeAttachmentViewer);
+  document.querySelector('#copy-attachment-viewer')?.addEventListener('click', (event) => copyAttachmentViewer(event.currentTarget.dataset.attachmentId));
   document.querySelector('#close-attachment-diff')?.addEventListener('click', closeAttachmentDiff);
   document.querySelector('#close-import-modal')?.addEventListener('click', closeImportModal);
   document.querySelector('#cancel-import-modal')?.addEventListener('click', closeImportModal);
@@ -5743,6 +5908,91 @@ function closeUserMemoryViewer() {
   renderPreservingVisualState();
 }
 
+function openNewSkillEditor() {
+  if (state.busy) return;
+  state.skillEditor = { id: null, name: '', description: '', body: '' };
+  renderPreservingVisualState();
+}
+
+async function openSkillEditor(skillId) {
+  if (!skillId || state.busy) return;
+  await runAction('Carregando skill...', async () => {
+    const data = await api(`/api/skills/${encodeURIComponent(skillId)}`);
+    state.skillEditor = { id: data.skill.id, name: data.skill.name, description: data.skill.description, body: data.skill.body || '' };
+  });
+}
+
+function hasSkillEditorUnsavedChanges() {
+  const editor = state.skillEditor;
+  if (!editor) return false;
+  const name = document.querySelector('#skill-editor-name')?.value ?? '';
+  const description = document.querySelector('#skill-editor-description')?.value ?? '';
+  const body = document.querySelector('#skill-editor-body')?.value ?? '';
+  if (!editor.id) return Boolean(name || description || body);
+  return name !== editor.name || description !== editor.description || body !== (editor.body || '');
+}
+
+function closeSkillEditor() {
+  if (hasSkillEditorUnsavedChanges()) {
+    const confirmed = confirmUi('Descartar alterações não salvas nesta skill?');
+    if (!confirmed) return;
+  }
+  state.skillEditor = null;
+  renderPreservingVisualState();
+}
+
+async function saveSkillEditor(event) {
+  event.preventDefault();
+  const editor = state.skillEditor;
+  if (!editor || state.busy) return;
+  const name = document.querySelector('#skill-editor-name')?.value.trim() || '';
+  const description = document.querySelector('#skill-editor-description')?.value.trim() || '';
+  const body = document.querySelector('#skill-editor-body')?.value ?? '';
+  if (!name || !description) {
+    state.error = 'Nome e descrição são obrigatórios.';
+    renderPreservingVisualState();
+    return;
+  }
+  await runAction(editor.id ? 'Salvando skill...' : 'Criando skill...', async () => {
+    const data = editor.id
+      ? await api(`/api/skills/${encodeURIComponent(editor.id)}`, { method: 'PUT', body: { name, description, body } })
+      : await api('/api/skills', { method: 'POST', body: { name, description, body } });
+    state.skills = data.skills || state.skills;
+    state.skillEditor = null;
+    state.status = `Skill "${data.skill?.name || name}" salva.`;
+  });
+}
+
+async function removeSkill(skillId) {
+  if (!skillId || state.busy) return;
+  const confirmed = confirmUi('Remover esta skill? Essa ação não pode ser desfeita.');
+  if (!confirmed) return;
+  await runAction('Removendo skill...', async () => {
+    const data = await api(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
+    state.skills = data.skills || [];
+    if (state.skillEditor?.id === skillId) state.skillEditor = null;
+    state.status = 'Skill removida.';
+  });
+}
+
+async function improveSkillEditorWithAI() {
+  const editor = state.skillEditor;
+  if (!editor || state.busy || editor.aiBusy) return;
+  const name = document.querySelector('#skill-editor-name')?.value.trim() || '';
+  const description = document.querySelector('#skill-editor-description')?.value.trim() || '';
+  const body = document.querySelector('#skill-editor-body')?.value ?? '';
+  state.skillEditor = { ...editor, name, description, body, aiBusy: true, aiError: null };
+  renderPreservingVisualState();
+  try {
+    const data = await api(`/api/skills/improve-draft`, { method: 'POST', body: { name, description, body } });
+    state.skillEditor = { ...state.skillEditor, body: data.suggestion || body, aiBusy: false };
+    state.status = 'Sugestão da IA aplicada ao campo Corpo -- revise antes de salvar.';
+  } catch (error) {
+    state.skillEditor = { ...state.skillEditor, aiBusy: false, aiError: error.message || 'Falha ao melhorar skill com IA.' };
+  }
+  renderPreservingVisualState();
+}
+
 function openUserMemoryDiff(toolUseId) {
   const toolUse = findToolUseById(toolUseId);
   const diff = getUserMemoryEditDiffData(toolUse);
@@ -6171,6 +6421,7 @@ async function sendMessageFromComposerDraft() {
 
 async function sendMessageFromValues(textarea, content) {
   if (!state.activeChat) return;
+  content = expandMentionsForSend(content);
   const chatId = state.activeChat?.id;
   if (chatHasActiveToolApproval(state.activeChat)) {
     state.error = 'Aprove ou negue a tool pendente antes de enviar outra mensagem neste chat.';
@@ -6416,7 +6667,33 @@ function stopEventPolling() {
   }
 }
 
+let mentionState = null;
+
 function handleComposerKeydown(event) {
+  if (mentionState?.matches?.length) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      mentionState.activeIndex = (mentionState.activeIndex + 1) % mentionState.matches.length;
+      renderMentionSuggestions();
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      mentionState.activeIndex = (mentionState.activeIndex - 1 + mentionState.matches.length) % mentionState.matches.length;
+      renderMentionSuggestions();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      applyMentionSuggestion(mentionState.matches[mentionState.activeIndex].name);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMentionSuggestions();
+      return;
+    }
+  }
   if (event.key !== 'Enter') return;
   if (event.altKey) {
     event.preventDefault();
@@ -6425,6 +6702,92 @@ function handleComposerKeydown(event) {
   }
   event.preventDefault();
   event.currentTarget.form.requestSubmit();
+}
+
+function getComposerMentionContext(textarea) {
+  if (!textarea || textarea.selectionStart !== textarea.selectionEnd) return null;
+  const cursor = textarea.selectionStart;
+  const value = textarea.value;
+  let start = cursor;
+  while (start > 0 && !/\s/.test(value[start - 1])) start -= 1;
+  const token = value.slice(start, cursor);
+  if (!token.startsWith('@') || token.length > 40) return null;
+  return { start, end: cursor, query: token.slice(1).toLowerCase() };
+}
+
+function updateMentionSuggestions() {
+  const textarea = document.querySelector('#composer textarea');
+  const context = getComposerMentionContext(textarea);
+  if (!context) {
+    closeMentionSuggestions();
+    return;
+  }
+  const matches = getMentionableTools().filter(
+    (tool) => !context.query || tool.name.toLowerCase().includes(context.query) || tool.label.toLowerCase().includes(context.query),
+  );
+  if (!matches.length) {
+    closeMentionSuggestions();
+    return;
+  }
+  mentionState = { ...context, matches, activeIndex: 0 };
+  renderMentionSuggestions();
+}
+
+function renderMentionSuggestions() {
+  const container = document.querySelector('#mention-suggestions');
+  if (!container || !mentionState) return;
+  container.hidden = false;
+  container.innerHTML = mentionState.matches
+    .map(
+      (tool, index) => `
+        <button type="button" class="mention-suggestion ${index === mentionState.activeIndex ? 'active' : ''}" data-tool-name="${escapeAttr(tool.name)}">
+          <strong>@${escapeHtml(tool.name)}</strong>
+          <span>${escapeHtml(tool.label)}</span>
+        </button>
+      `,
+    )
+    .join('');
+  applyPanelLanguage(container);
+}
+
+function closeMentionSuggestions() {
+  if (!mentionState) return;
+  mentionState = null;
+  const container = document.querySelector('#mention-suggestions');
+  if (container) {
+    container.hidden = true;
+    container.innerHTML = '';
+  }
+}
+
+function applyMentionSuggestion(toolName) {
+  const textarea = document.querySelector('#composer textarea');
+  const tool = mentionState?.matches?.find((item) => item.name === toolName);
+  if (!textarea || !tool) return;
+  const value = textarea.value;
+  const insertText = `@${tool.name} `;
+  textarea.value = `${value.slice(0, mentionState.start)}${insertText}${value.slice(mentionState.end)}`;
+  const nextPosition = mentionState.start + insertText.length;
+  textarea.selectionStart = nextPosition;
+  textarea.selectionEnd = nextPosition;
+  closeMentionSuggestions();
+  textarea.focus();
+  autoResizeComposer();
+  saveComposerDraft();
+}
+
+// A mentioned tool stays as literal @tool_name text in the composer; before sending,
+// each mention is expanded into a plain-language suggestion inline in the message so
+// the model sees a nudge, not a forced tool_choice -- the user can still edit or
+// remove it like any other text before hitting send.
+function expandMentionsForSend(content) {
+  const mentionable = new Map(getMentionableTools().map((tool) => [tool.name, tool.label]));
+  return content.replace(/@([a-z_]+)\b/gi, (match, name) => {
+    const normalizedName = name.toLowerCase();
+    const label = mentionable.get(normalizedName);
+    if (!label) return match;
+    return `(usuário sugere usar a tool "${normalizedName}" -- ${label})`;
+  });
 }
 
 function insertTextAtCursor(textarea, text) {
@@ -6441,6 +6804,7 @@ function insertTextAtCursor(textarea, text) {
 function handleComposerInput() {
   saveComposerDraft();
   autoResizeComposer();
+  updateMentionSuggestions();
 }
 
 function getComposerDraft(chatId) {
@@ -6522,6 +6886,30 @@ function openMessageDetails(messageId) {
 function closeMessageDetails() {
   state.messageDetailsOpen = false;
   state.messageDetailsMessageId = null;
+  renderPreservingVisualState();
+}
+
+async function copyAttachmentViewer(attachmentId) {
+  const attachment = resolveAttachment(attachmentId) || state.attachmentViewer;
+  const chatId = state.activeChat?.id;
+  if (!attachment || !chatId) return;
+  try {
+    if (attachment.kind === 'image') {
+      const contentUrl = withProfileQuery(`/api/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(attachment.id)}/content`);
+      const response = await fetch(contentUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      state.status = 'Imagem copiada para a área de transferência.';
+    } else if (attachment.path) {
+      await navigator.clipboard.writeText(attachment.path);
+      state.status = 'Caminho do arquivo copiado para a área de transferência.';
+    } else {
+      state.error = 'Nada para copiar neste anexo.';
+    }
+  } catch (error) {
+    state.error = error.message || 'Falha ao copiar.';
+  }
   renderPreservingVisualState();
 }
 
@@ -6865,6 +7253,7 @@ async function saveGeneralSettings(event, options = {}) {
       terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
       terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
       fileDelivery: form.get('tool_fileDelivery') === 'on',
+      skills: form.get('tool_skills') === 'on',
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
@@ -7056,6 +7445,7 @@ function captureSettingsDraftFromForm() {
     terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
     terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
     fileDelivery: form.get('tool_fileDelivery') === 'on',
+    skills: form.get('tool_skills') === 'on',
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',

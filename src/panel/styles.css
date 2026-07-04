@@ -122,6 +122,25 @@ button:hover {
   background: var(--surface);
 }
 
+a.button-like {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 12px;
+  text-decoration: none;
+}
+
+a.button-like:hover {
+  border-color: var(--border-muted);
+  background: var(--surface);
+}
+
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -372,6 +391,10 @@ pre {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.attachment-path code {
+  word-break: break-all;
 }
 
 .sidebar-actions {
@@ -965,10 +988,58 @@ pre {
 }
 
 .composer-main {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
+}
+
+.mention-suggestions {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 5;
+}
+
+.mention-suggestions:empty {
+  display: none;
+}
+
+.mention-suggestion {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.mention-suggestion strong {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.mention-suggestion span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mention-suggestion:hover,
+.mention-suggestion.active {
+  background: var(--surface-accent-soft);
 }
 
 .composer textarea {
