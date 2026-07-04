@@ -1428,14 +1428,6 @@ function renderSettingsModal() {
               }
             </section>
 
-            <section class="modal-section settings-panel ${activeSection === 'modelIndex' ? 'active' : ''}" data-section="modelIndex">
-              <h3>Índice de modelos</h3>
-              <p class="help-text">Revisado para o fim de maio de 2026. Modelos marcados como índice são informativos ou dependem de outra API, enquanto os selecionáveis entram nas rotatórias e no seletor do chat.</p>
-              <div class="model-index-list">
-                ${renderModelIndex(draftConfig)}
-              </div>
-            </section>
-
             <section class="modal-section settings-panel ${activeSection === 'memory' ? 'active' : ''}" data-section="memory">
               <h3>Memória persistente</h3>
               <p class="help-text">O Markdown global entra no prompt de todos os chats desta seção. Arquivos adicionais podem entrar completos ou apenas como índice para leitura por tool.</p>
@@ -1794,7 +1786,6 @@ function renderSettingsNav(activeSection) {
     ['profiles', 'Seções'],
     ['identity', 'Identidade'],
     ['providers', 'Providers'],
-    ['modelIndex', 'Modelos'],
     ['memory', 'Memória'],
     ['tools', 'Tools'],
     ['terminal', 'Terminal'],
@@ -2296,58 +2287,6 @@ function renderRoutingFallbackRows(fallbacks = []) {
       },
     )
     .join('');
-}
-
-function renderModelIndex(config = {}) {
-  const providers = isOfflineMode(config) ? (state.providers || []).filter((provider) => provider.id === 'ollama') : state.providers || [];
-  return providers
-    .map((provider) => `
-      <section class="model-index-provider">
-        <div class="model-index-provider-header">
-          <div>
-            <h4>${escapeHtml(provider.label)}</h4>
-            <p>${escapeHtml(provider.catalogSummary || 'Catálogo do provider')}</p>
-          </div>
-          <span>${escapeHtml(provider.catalogMode || 'static')}</span>
-        </div>
-        <div class="model-index-grid">
-          ${(provider.models || []).map((model) => renderModelIndexCard(provider, model, config)).join('')}
-        </div>
-      </section>
-    `)
-    .join('');
-}
-
-function renderModelIndexCard(provider, model, config = {}) {
-  const chips = [
-    model.selectable === false ? uiText('índice') : uiText('selecionável'),
-    displayModelKind(model.kind),
-    model.contextTokens ? `${formatCompactNumber(model.contextTokens)} ctx` : '',
-    model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} ${uiText('saída')}` : '',
-    model.supportsImages ? uiText('visão') : uiText('texto'),
-    model.supportsReasoning ? uiText('raciocínio') : '',
-    provider.id === 'ollama' && model.installed ? uiText('instalado') : '',
-  ].filter(Boolean);
-  return `
-    <article class="model-index-card">
-      <div>
-        <strong>${escapeHtml(model.label || model.id)}</strong>
-        <code>${escapeHtml(model.id)}</code>
-      </div>
-      <div class="model-chip-row">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join('')}</div>
-      ${model.reasoningEfforts?.length ? `<p>${escapeHtml(uiText('Raciocínio'))}: ${escapeHtml(model.reasoningEfforts.join(', '))}</p>` : ''}
-      ${model.maxInputImages || model.maxFileSizeMB ? `<p>${escapeHtml(uiText('Imagem'))}: ${escapeHtml([model.maxInputImages ? `${model.maxInputImages} ${uiText('imagem(ns)')}` : '', model.maxFileSizeMB ? `${model.maxFileSizeMB} MB` : ''].filter(Boolean).join(', '))}</p>` : ''}
-      ${model.description ? `<p>${escapeHtml(model.description)}</p>` : ''}
-      ${model.apiNotes ? `<p><strong>API:</strong> ${escapeHtml(model.apiNotes)}</p>` : ''}
-    </article>
-  `;
-}
-
-function formatCompactNumber(value) {
-  const number = Number(value || 0);
-  if (number >= 1000000) return `${Math.round(number / 100000) / 10}M`;
-  if (number >= 1000) return `${Math.round(number / 1000)}k`;
-  return String(number);
 }
 
 function renderModelFallbackRows(fallbacks = [], providerId = '') {
