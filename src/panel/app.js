@@ -43,6 +43,8 @@ const state = {
   userMemoryDiff: null,
   messageDetailsOpen: false,
   messageDetailsMessageId: null,
+  editingMessageId: null,
+  editHistoryMessageId: null,
   importDraft: null,
   importModalOpen: false,
   confirmDialog: null,
@@ -1219,6 +1221,7 @@ function renderApp() {
     ${state.contextEditorOpen ? renderContextEditorModal() : ''}
     ${state.modelSettingsOpen ? renderModelSettingsModal() : ''}
     ${state.messageDetailsOpen ? renderMessageDetailsModal() : ''}
+    ${state.editHistoryMessageId ? renderEditHistoryModal() : ''}
     ${state.terminalViewer ? renderTerminalModal() : ''}
     ${state.attachmentViewer ? renderAttachmentViewerModal() : ''}
     ${state.attachmentDiff ? renderAttachmentDiffModal() : ''}
@@ -3493,10 +3496,20 @@ function renderMessage(message) {
   const detailsButton = shouldShowMessageDetails(message)
     ? `<button type="button" class="open-message-details" data-message-id="${escapeAttr(message.id)}">Ver detalhes</button>`
     : '';
+  const canEdit = message.role === 'user' && !isLocalMessageId(message.id);
+  const editButton = canEdit
+    ? `<button type="button" class="edit-message" data-message-id="${escapeAttr(message.id)}" ${state.busy ? 'disabled' : ''}>Editar</button>`
+    : '';
+  const editedChip = message.editHistory?.length
+    ? `<button type="button" class="edited-chip" data-message-id="${escapeAttr(message.id)}" title="Ver versão anterior">editada · ${message.editHistory.length}×</button>`
+    : '';
+  if (state.editingMessageId === message.id) {
+    return renderMessageEditor(message, label);
+  }
   const bubbleContent = `${renderMessageSources(sources)}${formatContent(visibleContent, message.role)}`;
   return `
     <article class="message ${escapeAttr(message.role)} ${escapeAttr(message.status || '')}">
-      <div class="message-label">${label}${attemptBadge}${modelUsed}${status}${detailsButton}${copyButton}</div>
+      <div class="message-label">${label}${attemptBadge}${editedChip}${modelUsed}${status}${detailsButton}${editButton}${copyButton}</div>
       <div class="bubble">${bubbleContent}</div>
       ${renderToolApprovalPanel(message)}
       ${renderUserMemoryChangeChips(message)}
@@ -3505,6 +3518,26 @@ function renderMessage(message) {
       ${renderMessageActions(message)}
       ${message.attachments?.length ? `<div class="message-attachments">${message.attachments.map((attachment) => renderAttachmentCard(attachment)).join('')}</div>` : ''}
       ${renderSendFileAttachments(message)}
+    </article>
+  `;
+}
+
+function isLocalMessageId(id) {
+  return String(id || '').startsWith('local-');
+}
+
+function renderMessageEditor(message, label) {
+  return `
+    <article class="message ${escapeAttr(message.role)} editing">
+      <div class="message-label">${label}<span class="message-status">editando</span></div>
+      <form class="message-edit-form" data-message-id="${escapeAttr(message.id)}">
+        <textarea class="message-edit-input" ${state.busy ? 'disabled' : ''}>${escapeHtml(message.content || '')}</textarea>
+        <p class="help-text">Salvar re-roda a conversa a partir daqui: o que vinha depois é descartado do fluxo, mas a versão anterior (com as respostas) fica guardada em "editada · ver anterior".</p>
+        <div class="message-edit-actions">
+          <button type="button" class="cancel-message-edit">Cancelar</button>
+          <button type="submit" class="primary" ${state.busy ? 'disabled' : ''}>Salvar e re-rodar</button>
+        </div>
+      </form>
     </article>
   `;
 }
@@ -4262,6 +4295,61 @@ function getRelatedEventsForAttempt(selectedAttempt) {
     if (!Number.isFinite(eventTime) || !Number.isFinite(startedAt) || !Number.isFinite(finishedAt)) return false;
     return eventTime >= startedAt - 1000 && eventTime <= finishedAt + 3000;
   });
+}
+
+function renderEditHistoryModal() {
+  const message = state.activeChat?.messages?.find((item) => item.id === state.editHistoryMessageId);
+  const versions = message?.editHistory || [];
+  if (!message || !versions.length) return '';
+  // Newest previous version first.
+  const ordered = [...versions].reverse();
+  return `
+    <div class="modal-backdrop details-backdrop" role="presentation">
+      <section class="modal wide-modal details-modal" role="dialog" aria-modal="true" aria-labelledby="edit-history-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="edit-history-title">Versões anteriores desta mensagem</h2>
+            <p>Cada edição forka a conversa aqui. Abaixo, o que a mensagem dizia antes e as respostas que vieram depois, preservadas.</p>
+          </div>
+          <button type="button" id="close-edit-history" aria-label="Fechar">×</button>
+        </header>
+        <div class="modal-body">
+          ${ordered
+            .map((version, index) => {
+              const versionNumber = ordered.length - index;
+              const archived = version.archivedMessages || [];
+              return `
+                <section class="edit-version">
+                  <h3>Versão ${versionNumber} · editada ${escapeHtml(version.editedAt ? new Date(version.editedAt).toLocaleString() : '')}</h3>
+                  <div class="edit-version-block">
+                    <strong>Mensagem anterior:</strong>
+                    <pre>${escapeHtml(version.previousContent || '(vazia)')}</pre>
+                  </div>
+                  ${
+                    archived.length
+                      ? `<div class="edit-version-block">
+                          <strong>Conversa que veio depois (${archived.length}):</strong>
+                          ${archived
+                            .map(
+                              (archivedMessage) => `
+                                <div class="archived-message ${escapeAttr(archivedMessage.role || '')}">
+                                  <span class="archived-role">${archivedMessage.role === 'user' ? 'Você' : 'Assistente'}${archivedMessage.tools?.length ? ` · tools: ${escapeHtml(archivedMessage.tools.join(', '))}` : ''}</span>
+                                  <pre>${escapeHtml(archivedMessage.content || '(sem texto)')}</pre>
+                                </div>
+                              `,
+                            )
+                            .join('')}
+                        </div>`
+                      : '<p class="help-text">Nenhuma resposta havia sido gerada ainda quando esta versão foi editada.</p>'
+                  }
+                </section>
+              `;
+            })
+            .join('')}
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderMessageDetailsModal() {
@@ -5137,6 +5225,22 @@ function bindAppEvents() {
   document.querySelectorAll('.continue-message').forEach((button) => {
     button.addEventListener('click', () => continueMessage(button.dataset.messageId));
   });
+  document.querySelectorAll('.edit-message').forEach((button) => {
+    button.addEventListener('click', () => startMessageEdit(button.dataset.messageId));
+  });
+  document.querySelectorAll('.edited-chip').forEach((button) => {
+    button.addEventListener('click', () => openEditHistory(button.dataset.messageId));
+  });
+  document.querySelectorAll('.cancel-message-edit').forEach((button) => {
+    button.addEventListener('click', cancelMessageEdit);
+  });
+  document.querySelectorAll('.message-edit-form').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveMessageEdit(form.dataset.messageId);
+    });
+  });
+  document.querySelector('#close-edit-history')?.addEventListener('click', closeEditHistory);
   document.querySelectorAll('.approve-tool').forEach((button) => {
     button.addEventListener('click', () => decideToolApproval(button.dataset.messageId, 'approve', button.dataset.toolCallId, button));
   });
@@ -6995,6 +7099,69 @@ async function continueMessage(messageId) {
   if (message.role !== 'assistant') return;
   if (!isLatestAssistantAttempt(message)) return;
   await sendMessageContent('', { continueMessageId: message.id });
+}
+
+function startMessageEdit(messageId) {
+  if (state.busy) return;
+  const message = state.activeChat?.messages?.find((item) => item.id === messageId);
+  if (!message || message.role !== 'user') return;
+  state.editingMessageId = messageId;
+  renderPreservingVisualState();
+  const input = document.querySelector('.message-edit-input');
+  if (input) {
+    input.focus();
+    input.selectionStart = input.value.length;
+    input.selectionEnd = input.value.length;
+  }
+}
+
+function cancelMessageEdit() {
+  state.editingMessageId = null;
+  renderPreservingVisualState();
+}
+
+async function saveMessageEdit(messageId) {
+  if (state.busy) return;
+  const input = document.querySelector('.message-edit-input');
+  const message = state.activeChat?.messages?.find((item) => item.id === messageId);
+  if (!input || !message) return;
+  const content = input.value.trim();
+  if (!content) {
+    state.error = 'A mensagem editada não pode ficar vazia.';
+    renderPreservingVisualState();
+    return;
+  }
+  if (content === (message.content || '').trim()) {
+    // No change -- just close the editor without forking the conversation.
+    cancelMessageEdit();
+    return;
+  }
+  const chatId = state.activeChat?.id;
+  let edited = false;
+  await runAction('Salvando edição da mensagem...', async () => {
+    const data = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PUT',
+      body: { content },
+    });
+    state.activeChat = data.chat || state.activeChat;
+    state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+    state.editingMessageId = null;
+    edited = true;
+  });
+  // Re-run from the edited message, reusing the retry path (which regenerates the answer).
+  if (edited && !state.error && state.activeChat?.id === chatId) {
+    await sendMessageContent('', { retryMessageId: messageId });
+  }
+}
+
+function openEditHistory(messageId) {
+  state.editHistoryMessageId = messageId;
+  renderPreservingVisualState();
+}
+
+function closeEditHistory() {
+  state.editHistoryMessageId = null;
+  renderPreservingVisualState();
 }
 
 async function copyMessage(messageId) {

@@ -387,6 +387,84 @@ export async function updateMessage(id, messageId, patch) {
   });
 }
 
+// Editing a user message forks the conversation at that point (ChatGPT-style): the old
+// content and everything that came after it are archived onto the message's editHistory
+// (so the previous branch stays viewable), the live transcript is truncated to end at the
+// edited message, and its status is reset to pending so the caller can re-run it. Only
+// user messages are editable -- assistant turns already have the retry/continue system.
+export async function editUserMessage(id, messageId, { content } = {}) {
+  assertChatId(id);
+  const chatDir = getChatDir(id);
+  const messagesPath = path.join(chatDir, 'messages.json');
+  const nextContent = String(content ?? '').trim();
+  if (!nextContent) {
+    const error = new Error('A mensagem editada não pode ficar vazia.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return withFileLock(messagesPath, async () => {
+    const current = await readJson(messagesPath, []);
+    const index = current.findIndex((message) => message.id === messageId);
+    if (index === -1) {
+      const error = new Error('Mensagem não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+    const target = current[index];
+    if (target.role !== 'user') {
+      const error = new Error('Só mensagens do usuário podem ser editadas.');
+      error.statusCode = 400;
+      throw error;
+    }
+    const downstream = current.slice(index + 1);
+    const editedAt = new Date().toISOString();
+    const versionRecord = {
+      editedAt,
+      previousContent: target.content || '',
+      previousAttachments: (target.attachments || []).map(sanitizeArchivedAttachment),
+      archivedMessages: downstream.map(sanitizeArchivedMessage),
+    };
+    const updatedTarget = {
+      ...target,
+      content: nextContent,
+      status: 'pending',
+      error: null,
+      editedAt,
+      editHistory: [...(Array.isArray(target.editHistory) ? target.editHistory : []), versionRecord],
+      updatedAt: editedAt,
+    };
+    const next = [...current.slice(0, index), updatedTarget];
+    await writeJson(messagesPath, next, 0o600);
+    await touchChat(id);
+    await appendEvent({ type: 'chat.message.edited', chatId: id, details: { messageId, archivedCount: downstream.length } });
+    return updatedTarget;
+  });
+}
+
+function sanitizeArchivedAttachment(attachment = {}) {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    kind: attachment.kind,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+  };
+}
+
+function sanitizeArchivedMessage(message = {}) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: truncate(String(message.content || ''), 12000),
+    status: message.status || '',
+    createdAt: message.createdAt || '',
+    providerUsed: message.providerUsed || null,
+    modelUsed: message.modelUsed || null,
+    attachments: (message.attachments || []).map(sanitizeArchivedAttachment),
+    tools: Array.isArray(message.toolUses) ? message.toolUses.map((toolUse) => toolUse.name).filter(Boolean) : [],
+  };
+}
+
 export async function updateChatMetadata(id, patch) {
   assertChatId(id);
   const metadataPath = path.join(getChatDir(id), 'metadata.json');

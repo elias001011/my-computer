@@ -24,6 +24,7 @@ import {
   deleteScheduledTask,
   deleteSkill,
   deleteUserMemoryFile,
+  editUserMessage,
   ensureRuntime,
   exportRuntimeData,
   getRuntimeInfo,
@@ -453,6 +454,17 @@ async function handleChatsApi(request, response, parts) {
       attachmentIds: body.attachmentIds || [],
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
+    return;
+  }
+
+  if (method === 'PUT' && chatId && parts[3] === 'messages' && parts[4]) {
+    const body = await readBody(request);
+    const message = await editUserMessage(chatId, parts[4], { content: body.content || '' });
+    sendJson(response, 200, {
+      message,
+      chat: await readChat(chatId),
+      activeChatEvents: await readChatEvents(chatId),
+    });
     return;
   }
 
