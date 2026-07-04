@@ -17,6 +17,9 @@ test('config normalizes terminal session settings with clamps and master-flag ga
       terminalSessionOutputLines: 999999,
       terminalSessionMaxPerChat: 0,
       terminalSessionDefaultWaitSeconds: -5,
+      terminalSessionIdleTimeoutMinutes: 99999,
+      terminalSessionMaxGlobal: 0,
+      fileDelivery: true,
     },
   });
   let config = await store.loadConfig();
@@ -24,13 +27,23 @@ test('config normalizes terminal session settings with clamps and master-flag ga
   assert.equal(config.tools.terminalSessionOutputLines, 2000);
   assert.equal(config.tools.terminalSessionMaxPerChat, 1);
   assert.equal(config.tools.terminalSessionDefaultWaitSeconds, 0);
+  assert.equal(config.tools.terminalSessionIdleTimeoutMinutes, 720);
+  assert.equal(config.tools.terminalSessionMaxGlobal, 1);
+  assert.equal(config.tools.fileDelivery, true);
+
+  // 0 disables the idle reaper instead of clamping up to the minimum.
+  await store.saveConfig({ tools: { terminalSessionIdleTimeoutMinutes: 0 } });
+  config = await store.loadConfig();
+  assert.equal(config.tools.terminalSessionIdleTimeoutMinutes, 0);
 
   // Turning the master terminal flag off must force sessions off too, so no gate
-  // anywhere else needs to re-check the master flag.
+  // anywhere else needs to re-check the master flag. fileDelivery has no such
+  // coupling: its create action does not need the terminal at all.
   await store.saveConfig({ tools: { terminal: false } });
   config = await store.loadConfig();
   assert.equal(config.tools.terminal, false);
   assert.equal(config.tools.terminalSessions, false);
+  assert.equal(config.tools.fileDelivery, true);
 
   // Re-enabling the master flag does not resurrect the advanced mode: the forced-off
   // value was persisted, so sessions require an explicit re-opt-in (same semantics as
@@ -87,6 +100,23 @@ test('terminal sessions: open, write, capture, scope validation and close', asyn
     // Session cap is enforced at open time.
     await sessions.openSession(chatId, { maxSessions: 2 });
     await assert.rejects(() => sessions.openSession(chatId, { maxSessions: 2 }), /Limite de 2/);
+
+    // Global cap counts sessions across all chats, not just this one -- two chats
+    // are already at the current global total (2), so a third anywhere is rejected.
+    await assert.rejects(
+      () => sessions.openSession('other-chat-for-global-cap', { maxSessions: 8, maxGlobalSessions: 2 }),
+      /Limite global de 2/,
+    );
+
+    // Idle sessions get reaped opportunistically: a session with no activity past
+    // the configured timeout disappears the next time list/open sweeps for it.
+    const idleChatId = `idle-${Date.now()}`;
+    const idleOpened = await sessions.openSession(idleChatId, { maxSessions: 1 });
+    assert.equal((await sessions.listSessions(idleChatId)).length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const afterReap = await sessions.listSessions(idleChatId, { idleTimeoutMinutes: 0.02 });
+    assert.deepEqual(afterReap, []);
+    await assert.rejects(() => sessions.readSession(idleChatId, idleOpened.sessionId), /não existe/);
 
     for (const session of await sessions.listSessions(chatId)) {
       await sessions.closeSession(chatId, session.sessionId);

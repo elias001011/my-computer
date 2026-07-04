@@ -1515,6 +1515,17 @@ function renderSettingsModal() {
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
               </div>
               <div class="settings-subpanel">
+                <label class="toggle-row switch-row">
+                  <input type="checkbox" name="tool_fileDelivery" id="tool-fileDelivery" ${draftConfig.tools?.fileDelivery === true ? 'checked' : ''} />
+                  <span class="switch" aria-hidden="true"></span>
+                  <span>
+                    <strong>Enviar/criar arquivos (send_file)</strong>
+                    <small>A IA pode criar arquivos de texto novos (relatórios, Markdown, código, CSV) e enviá-los como anexo do chat. Se o terminal estiver ligado, ela também pode anexar um arquivo já existente no disco — por exemplo, o resultado de um script que ela mesma rodou (como remover o fundo de uma imagem enviada).</small>
+                  </span>
+                </label>
+                <p class="help-text">${draftConfig.tools?.terminal === false && draftConfig.tools?.terminalSessions !== true ? 'Terminal desligado: por enquanto só a criação de arquivo de texto novo funciona, anexar um arquivo já existente no disco fica indisponível.' : 'Anexar arquivo existente pede sua aprovação (como o terminal); criar arquivo novo não pede, por ser conteúdo que a própria IA escreveu.'}</p>
+              </div>
+              <div class="settings-subpanel">
                 <h4>Como o app decide o que a IA pode usar</h4>
                 <div class="explain-list">
                   <p><strong>Duas camadas, sempre sincronizadas:</strong> a função (definição que o provider recebe e pode chamar de fato) e o texto narrativo do prompt (instruções em linguagem natural dizendo quando/como usar cada tool). Cada toggle aqui liga/desliga as duas ao mesmo tempo — uma tool nunca fica só "narrada" sem existir de verdade (isso já causou alucinação de uso de tool em tarefas agendadas com allowlist restrita, corrigido mascarando o texto narrativo também).</p>
@@ -1559,8 +1570,16 @@ function renderSettingsModal() {
                     Espera padrão antes de ler (segundos)
                     <input name="terminalSessionDefaultWaitSeconds" type="number" min="0" max="120" step="1" value="${escapeAttr(draftConfig.tools?.terminalSessionDefaultWaitSeconds ?? 3)}" />
                   </label>
+                  <label>
+                    Fechar sessão inativa após (minutos, 0 desliga)
+                    <input name="terminalSessionIdleTimeoutMinutes" type="number" min="0" max="720" step="1" value="${escapeAttr(draftConfig.tools?.terminalSessionIdleTimeoutMinutes ?? 30)}" />
+                  </label>
+                  <label>
+                    Máximo de sessões no total (todos os chats)
+                    <input name="terminalSessionMaxGlobal" type="number" min="1" max="64" step="1" value="${escapeAttr(draftConfig.tools?.terminalSessionMaxGlobal || 12)}" />
+                  </label>
                 </div>
-                <p class="help-text">Linhas de tela controlam quanto do terminal volta pra IA a cada leitura — valores altos dão mais contexto e gastam mais tokens. A espera padrão vale quando a IA não define waitSeconds na chamada.</p>
+                <p class="help-text">Linhas de tela controlam quanto do terminal volta pra IA a cada leitura — valores altos dão mais contexto e gastam mais tokens. A espera padrão vale quando a IA não define waitSeconds na chamada. Sessão sem nenhuma atividade (nem a IA nem você) por mais tempo que o timeout é fechada sozinha; isso evita processos esquecidos rodando pra sempre. O máximo total protege a VPS contra sessões demais abertas ao mesmo tempo, somando todos os chats.</p>
               </div>
               <div class="settings-subpanel">
                 <h4>Como o modo avançado funciona por dentro</h4>
@@ -1569,7 +1588,7 @@ function renderSettingsModal() {
                   <p><strong>Fluxo da IA:</strong> abrir sessão → digitar (Enter automático) → esperar N segundos configuráveis → ler a tela → decidir o próximo passo. Programas interativos (claude, python, ssh...) continuam rodando entre as chamadas.</p>
                   <p><strong>Aprovação:</strong> só a ação de digitar (write) pede sua permissão — abrir, ler, listar e fechar não executam nada no shell. "Sempre permitir qualquer tool" também pula essa aprovação.</p>
                   <p><strong>Senhas e sudo:</strong> quando um programa pedir senha, a IA pede pra você abrir a janela Terminal e digitar direto — o que você digita lá não passa pela IA nem fica nos eventos do app.</p>
-                  <p><strong>Ciclo de vida:</strong> as sessões morrem junto com o app (encerrar/reiniciar/logout). É intencional: um shell órfão poderia segurar um volume criptografado montado depois do logout.</p>
+                  <p><strong>Ciclo de vida:</strong> as sessões morrem junto com o app (encerrar/reiniciar/logout). É intencional: um shell órfão poderia segurar um volume criptografado montado depois do logout. Além disso, uma sessão sem atividade (medida pelo próprio tmux, <code>session_activity</code>) por mais tempo que o timeout configurado é fechada automaticamente na próxima vez que qualquer listagem/abertura de sessão rodar — não é um processo em segundo plano separado, é uma varredura oportunista.</p>
                   <p><strong>Modo simples:</strong> com este toggle desligado, nada sobre sessões vai pro prompt da IA — ela só conhece o run_terminal_command de sempre.</p>
                 </div>
               </div>
@@ -1847,6 +1866,7 @@ function renderProfileRows() {
 const SCHEDULED_TASK_TOOL_LABELS = {
   run_terminal_command: 'Terminal',
   terminal_session: 'Sessões de terminal (modo avançado)',
+  send_file: 'Enviar/criar arquivos',
   web_search: 'Busca web',
   memory_chat: 'Memória do chat',
   persistent_memory: 'Memória persistente global',
@@ -3576,6 +3596,7 @@ function renderToolUse(toolUse, message = null) {
         ${approvalActions}
         ${renderUserMemoryToolCard(toolUse)}
         ${renderChatDocumentToolCard(toolUse)}
+        ${renderSendFileToolCard(toolUse)}
         ${
           command
             ? `<div><div class="message-label">Comando</div><pre>${escapeHtml(command)}</pre></div>`
@@ -3627,6 +3648,11 @@ function formatToolInputSummary(toolUse = {}) {
     if (input.action) parts.push(`ação: ${input.action}`);
     if (input.attachmentId || input.fileName) parts.push(`documento: ${input.attachmentId || input.fileName}`);
     if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
+  }
+  if (toolUse.name === 'send_file') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.fileName) parts.push(`arquivo: ${input.fileName}`);
+    if (input.path) parts.push(`origem: ${input.path}`);
   }
   if (!parts.length) {
     try {
@@ -3827,6 +3853,32 @@ function renderChatDocumentToolCard(toolUse = {}) {
       </div>
       <div class="button-row">${buttons}</div>
     </div>
+  `;
+}
+
+function renderSendFileToolCard(toolUse = {}) {
+  if (toolUse.name !== 'send_file') return '';
+  const action = toolUse.result?.action || toolUse.input?.action || 'create';
+  if (toolUse.result?.error) {
+    return `
+      <div class="user-memory-tool-card">
+        <div>
+          <strong>${escapeHtml(action === 'attach' ? 'Falha ao anexar arquivo' : 'Falha ao criar arquivo')}</strong>
+          <small>${escapeHtml(toolUse.result.error)}</small>
+        </div>
+      </div>
+    `;
+  }
+  const attachment = toolUse.result?.attachment;
+  if (!attachment?.id) return '';
+  return `
+    <div class="user-memory-tool-card">
+      <div>
+        <strong>${escapeHtml(action === 'attach' ? 'Arquivo anexado pela IA' : 'Arquivo criado pela IA')}</strong>
+        <small>${escapeHtml(action === 'attach' && toolUse.result?.sourcePath ? `Origem: ${toolUse.result.sourcePath}` : 'Novo anexo neste chat.')}</small>
+      </div>
+    </div>
+    ${renderAttachmentCard({ id: attachment.id })}
   `;
 }
 
@@ -6792,6 +6844,9 @@ async function saveGeneralSettings(event, options = {}) {
       terminalSessionOutputLines: Number(form.get('terminalSessionOutputLines') || 200),
       terminalSessionMaxPerChat: Number(form.get('terminalSessionMaxPerChat') || 3),
       terminalSessionDefaultWaitSeconds: Number(form.get('terminalSessionDefaultWaitSeconds') ?? 3),
+      terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
+      terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
+      fileDelivery: form.get('tool_fileDelivery') === 'on',
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
@@ -6980,6 +7035,9 @@ function captureSettingsDraftFromForm() {
     terminalSessionOutputLines: Number(form.get('terminalSessionOutputLines') || 200),
     terminalSessionMaxPerChat: Number(form.get('terminalSessionMaxPerChat') || 3),
     terminalSessionDefaultWaitSeconds: Number(form.get('terminalSessionDefaultWaitSeconds') ?? 3),
+    terminalSessionIdleTimeoutMinutes: Number(form.get('terminalSessionIdleTimeoutMinutes') ?? 30),
+    terminalSessionMaxGlobal: Number(form.get('terminalSessionMaxGlobal') || 12),
+    fileDelivery: form.get('tool_fileDelivery') === 'on',
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',

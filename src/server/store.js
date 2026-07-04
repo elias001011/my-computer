@@ -11,7 +11,7 @@ const fileLocks = new Map();
 const USER_MEMORY_FILE_LIMIT_BYTES = 5 * 1024 * 1024;
 const USER_MEMORY_PROMPT_TOTAL_CHARS = 60000;
 const USER_MEMORY_PROMPT_FILE_CHARS = 12000;
-const ATTACHMENT_FILE_LIMIT_BYTES = 20 * 1024 * 1024;
+export const ATTACHMENT_FILE_LIMIT_BYTES = 20 * 1024 * 1024;
 const profileScope = new AsyncLocalStorage();
 const defaultProfile = Object.freeze({
   id: 'default',
@@ -40,6 +40,9 @@ export const defaultConfig = Object.freeze({
     terminalSessionOutputLines: 200,
     terminalSessionMaxPerChat: 3,
     terminalSessionDefaultWaitSeconds: 3,
+    terminalSessionIdleTimeoutMinutes: 30,
+    terminalSessionMaxGlobal: 12,
+    fileDelivery: false,
     chatMemory: true,
     persistentMemory: true,
     autoCompact: true,
@@ -734,6 +737,7 @@ export async function searchUserMemoryFiles(keyword, options = {}) {
 const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'run_terminal_command',
   'terminal_session',
+  'send_file',
   'web_search',
   'memory_chat',
   'persistent_memory',
@@ -2107,6 +2111,9 @@ function normalizeTools(tools = {}, options = {}) {
     terminalSessionOutputLines: clampInteger(tools.terminalSessionOutputLines, 50, 2000, 200),
     terminalSessionMaxPerChat: clampInteger(tools.terminalSessionMaxPerChat, 1, 8, 3),
     terminalSessionDefaultWaitSeconds: clampInteger(tools.terminalSessionDefaultWaitSeconds, 0, 120, 3),
+    terminalSessionIdleTimeoutMinutes: clampInteger(tools.terminalSessionIdleTimeoutMinutes, 0, 720, 30),
+    terminalSessionMaxGlobal: clampInteger(tools.terminalSessionMaxGlobal, 1, 64, 12),
+    fileDelivery: tools.fileDelivery === true,
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
@@ -2811,7 +2818,7 @@ function isSupportedAttachment(mimeType, name) {
   return isTextLike(mimeType, name);
 }
 
-function isTextLike(mimeType, name) {
+export function isTextLike(mimeType, name) {
   const extension = path.extname(name || '').toLowerCase();
   return (
     mimeType.startsWith('text/') ||
@@ -2853,7 +2860,7 @@ function isTextLike(mimeType, name) {
   );
 }
 
-function guessMimeType(name) {
+export function guessMimeType(name) {
   const extension = path.extname(name || '').replace('.', '').toLowerCase();
   const byExtension = {
     md: 'text/markdown',
@@ -2881,8 +2888,24 @@ function guessMimeType(name) {
     toml: 'text/plain',
     ini: 'text/plain',
     sql: 'text/plain',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    svg: 'image/svg+xml',
+    ico: 'image/x-icon',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    m4a: 'audio/mp4',
+    pdf: 'application/pdf',
   };
-  return byExtension[extension] || 'text/plain';
+  return byExtension[extension] || 'application/octet-stream';
 }
 
 function htmlToText(html) {

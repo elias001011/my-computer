@@ -499,8 +499,10 @@ async function handleTerminalSessionsApi(request, response, parts, chatId) {
   }
   const sessionId = parts[5];
 
+  const idleTimeoutMinutes = config.tools?.terminalSessionIdleTimeoutMinutes;
+
   if (method === 'GET' && !sessionId) {
-    sendJson(response, 200, { sessions: await terminalSessions.listSessions(chatId) });
+    sendJson(response, 200, { sessions: await terminalSessions.listSessions(chatId, { idleTimeoutMinutes }) });
     return;
   }
 
@@ -510,9 +512,11 @@ async function handleTerminalSessionsApi(request, response, parts, chatId) {
       terminalMode: config.tools?.terminalMode,
       runtimeHome: (await getRuntimeInfo()).runtimeHome,
       maxSessions: config.tools?.terminalSessionMaxPerChat,
+      maxGlobalSessions: config.tools?.terminalSessionMaxGlobal,
+      idleTimeoutMinutes,
     });
     await appendEvent({ type: 'terminal.session.user_opened', chatId, details: { sessionId: session.sessionId } });
-    sendJson(response, 201, { session, sessions: await terminalSessions.listSessions(chatId) });
+    sendJson(response, 201, { session, sessions: await terminalSessions.listSessions(chatId, { idleTimeoutMinutes }) });
     return;
   }
 
@@ -546,7 +550,7 @@ async function handleTerminalSessionsApi(request, response, parts, chatId) {
   if (method === 'DELETE' && sessionId) {
     const result = await terminalSessions.closeSession(chatId, sessionId);
     await appendEvent({ type: 'terminal.session.user_closed', chatId, details: { sessionId } });
-    sendJson(response, 200, { ...result, sessions: await terminalSessions.listSessions(chatId) });
+    sendJson(response, 200, { ...result, sessions: await terminalSessions.listSessions(chatId, { idleTimeoutMinutes }) });
     return;
   }
 

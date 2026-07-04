@@ -28,6 +28,10 @@ import {
   updateMessage,
   writeContextSummary,
   writeAttachmentTextContent,
+  saveAttachment,
+  isTextLike,
+  guessMimeType,
+  ATTACHMENT_FILE_LIMIT_BYTES,
 } from './store.js';
 import {
   chatDocumentToolDefinition,
@@ -40,12 +44,16 @@ import {
   runTerminalCommand,
   runWebSearch,
   sendEmailToolDefinition,
+  sendFileToolDefinition,
   terminalSessionToolDefinition,
   terminalToolDefinition,
   webSearchToolDefinition,
 } from './tools.js';
 import * as terminalSessions from './terminal-sessions.js';
 import { sendEmail } from './email.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
@@ -1738,6 +1746,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
     ...tools,
     terminal: tools.terminal !== false && allowed.has('run_terminal_command'),
     terminalSessions: tools.terminalSessions === true && allowed.has('terminal_session'),
+    fileDelivery: tools.fileDelivery === true && allowed.has('send_file'),
     chatMemory: tools.chatMemory !== false && allowed.has('memory_chat'),
     persistentMemory: tools.persistentMemory !== false && allowed.has('persistent_memory'),
     userMemory: tools.userMemory !== false && allowed.has('persistent_memory_user'),
@@ -1845,6 +1854,15 @@ function buildSystemPrompt(
           'Persistent terminal sessions are enabled via the terminal_session tool. Use run_terminal_command for one-shot commands; use terminal_session when shell state must survive between calls: interactive programs and REPLs, long tasks you need to supervise step by step, or multi-command work sharing cwd/env.',
           'Session flow: open, then write text (Enter is pressed by default) with a waitSeconds that matches how slow the command is, and the visible screen returns. If the screen shows work still in progress, call read with a larger waitSeconds instead of typing again. Close sessions you no longer need.',
           'The user sees and types into these same sessions through the Terminal window in the panel. When a program asks for a password, sudo authentication, or any manual step you cannot perform, tell the user exactly what to do there (open the Terminal window, which session, what to type), wait for them to confirm in chat, then continue with read.',
+        ].join('\n')
+      : '',
+    // Same "not a single word when off" rule as terminal sessions above.
+    config.tools?.fileDelivery === true
+      ? [
+          'You can deliver files to the user as chat attachments via the send_file tool. Use action create to author new text content (Markdown, code, JSON, CSV, plain text) into a brand-new file.',
+          config.tools?.terminal !== false || config.tools?.terminalSessions === true
+            ? 'You can also use action attach to send a file that already exists on disk -- for example, produce it first with run_terminal_command/terminal_session (installing a library and running a script if needed, such as removing an image background) and then attach the resulting file so the user receives it.'
+            : 'Action attach (sending an existing file from disk) is unavailable because the terminal tool is off; only create (new text content) works right now.',
         ].join('\n')
       : '',
     config.provider === 'ollama'
@@ -2096,6 +2114,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executeTerminalSessionToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
   }
 
+  if (name === 'send_file') {
+    return executeSendFileToolCall(chatId, toolCall.id, normalizeToolInput(name, input), config);
+  }
+
   if (name !== 'run_terminal_command') {
     return {
       id: toolCall.id,
@@ -2279,16 +2301,19 @@ async function executeTerminalSessionToolCall(chatId, toolCallId, input, config 
   });
 
   try {
+    const idleTimeoutMinutes = clampInteger(tools.terminalSessionIdleTimeoutMinutes, 0, 720, 30);
     if (action === 'open') {
       const session = await terminalSessions.openSession(chatId, {
         terminalMode: tools.terminalMode,
         runtimeHome: config.runtimeHome,
         maxSessions: clampInteger(tools.terminalSessionMaxPerChat, 1, 8, 3),
+        maxGlobalSessions: clampInteger(tools.terminalSessionMaxGlobal, 1, 64, 12),
+        idleTimeoutMinutes,
       });
       return finish({ action, ...session });
     }
     if (action === 'list') {
-      return finish({ action, sessions: await terminalSessions.listSessions(chatId) });
+      return finish({ action, sessions: await terminalSessions.listSessions(chatId, { idleTimeoutMinutes }) });
     }
     if (action === 'close') {
       return finish({ action, ...(await terminalSessions.closeSession(chatId, input.sessionId)) });
@@ -2308,6 +2333,102 @@ async function executeTerminalSessionToolCall(chatId, toolCallId, input, config 
     });
     throwIfStopped(config.signal);
     return finish({ action, ...written });
+  } catch (error) {
+    if (isUserStopError(error)) throw error;
+    throwIfStopped(config.signal);
+    return finish({ action, error: error.message });
+  }
+}
+
+function serializeSendFileAttachmentForTool(attachment = {}) {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    kind: attachment.kind,
+  };
+}
+
+async function executeSendFileToolCall(chatId, toolCallId, input, config = {}) {
+  const action = input.action || 'create';
+  const tools = config.tools || {};
+  await appendEvent({
+    type: `tool.send_file.${action}`,
+    chatId,
+    details: {
+      fileName: input.fileName || null,
+      // Never log create's content or attach's file bytes -- only sizes end up
+      // in the saved attachment metadata itself, which is the right place for that.
+      path: action === 'attach' ? input.path || null : undefined,
+    },
+  });
+
+  const finish = (result) => ({
+    id: toolCallId,
+    name: 'send_file',
+    input,
+    result,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (!input.fileName) {
+    return finish({ action, error: 'fileName is required.' });
+  }
+
+  try {
+    if (action === 'attach') {
+      // The model already needs run_terminal_command or terminal_session to have
+      // produced/located the file in the first place; without either enabled this
+      // would be a brand-new arbitrary-disk-read capability with no precedent.
+      const canAttach = tools.terminal !== false || tools.terminalSessions === true;
+      if (!canAttach) {
+        return finish({ action, error: 'action "attach" requires the terminal or terminal_session tool to be enabled.' });
+      }
+      const rawPath = String(input.path || '').trim();
+      if (!rawPath) return finish({ action, error: 'path is required for attach.' });
+      const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.join(os.homedir(), rawPath);
+      let stat;
+      try {
+        stat = await fs.stat(resolvedPath);
+      } catch (error) {
+        return finish({ action, error: `Could not access "${resolvedPath}": ${error.message}` });
+      }
+      if (!stat.isFile()) return finish({ action, error: `"${resolvedPath}" is not a file.` });
+      if (stat.size > ATTACHMENT_FILE_LIMIT_BYTES) {
+        return finish({
+          action,
+          error: `File too large (${Math.round(stat.size / (1024 * 1024))} MB). Current limit: ${Math.round(ATTACHMENT_FILE_LIMIT_BYTES / (1024 * 1024))} MB.`,
+        });
+      }
+      const buffer = await fs.readFile(resolvedPath);
+      const mimeType = input.mimeType || guessMimeType(input.fileName);
+      const attachment = await saveAttachment(chatId, {
+        name: input.fileName,
+        mimeType,
+        size: buffer.length,
+        dataBase64: buffer.toString('base64'),
+      });
+      throwIfStopped(config.signal);
+      return finish({ action, attachment: serializeSendFileAttachmentForTool(attachment), sourcePath: resolvedPath });
+    }
+
+    const mimeType = input.mimeType || guessMimeType(input.fileName);
+    if (!isTextLike(mimeType, input.fileName)) {
+      return finish({
+        action,
+        error: `"${input.fileName}" is not a text-like format (md/txt/json/csv/code/etc). To send images or other binaries produced through the terminal, use action "attach" with the file path instead.`,
+      });
+    }
+    const buffer = Buffer.from(input.content || '', 'utf8');
+    const attachment = await saveAttachment(chatId, {
+      name: input.fileName,
+      mimeType,
+      size: buffer.length,
+      dataBase64: buffer.toString('base64'),
+    });
+    throwIfStopped(config.signal);
+    return finish({ action, attachment: serializeSendFileAttachmentForTool(attachment) });
   } catch (error) {
     if (isUserStopError(error)) throw error;
     throwIfStopped(config.signal);
@@ -2341,6 +2462,7 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
     // flag is off, so this single flag is the whole gate -- and it keeps the
     // scheduled-task mask exact per tool (a task may allow only one of the two).
     tools.terminalSessions === true ? terminalSessionToolDefinition : null,
+    tools.fileDelivery === true ? sendFileToolDefinition : null,
     getSearchMode(tools) !== 'off' ? webSearchToolDefinition : null,
     tools.chatMemory !== false ? memoryChatToolDefinition : null,
     tools.persistentMemory !== false ? persistentMemoryToolDefinition : null,
@@ -2522,6 +2644,15 @@ function normalizeToolInput(name, input = {}) {
     if (Object.hasOwn(normalizedInput, 'waitSeconds')) normalizedInput.waitSeconds = clampInteger(normalizedInput.waitSeconds, 0, 180, 0);
     if (Object.hasOwn(normalizedInput, 'lines')) normalizedInput.lines = clampInteger(normalizedInput.lines, 10, 2000, 200);
   }
+  if (name === 'send_file') {
+    normalizedInput.action = ['create', 'attach'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'create';
+    normalizedInput.fileName = String(normalizedInput.fileName || '').trim().slice(0, 200);
+    if (Object.hasOwn(normalizedInput, 'content')) normalizedInput.content = String(normalizedInput.content ?? '');
+    if (Object.hasOwn(normalizedInput, 'path')) normalizedInput.path = String(normalizedInput.path || '').trim();
+    if (Object.hasOwn(normalizedInput, 'mimeType')) normalizedInput.mimeType = String(normalizedInput.mimeType || '').trim().slice(0, 120);
+  }
   if (name === 'persistent_memory_user') {
     normalizedInput.action = ['list', 'read', 'search'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -2641,6 +2772,7 @@ function describeEnabledTools(tools = {}) {
   return [
     tools.terminal !== false ? 'run_terminal_command' : null,
     tools.terminalSessions === true ? 'terminal_session' : null,
+    tools.fileDelivery === true ? 'send_file' : null,
     getSearchMode(tools) !== 'off' ? 'web_search' : null,
     tools.chatMemory !== false ? 'memory_chat' : null,
     tools.persistentMemory !== false ? 'persistent_memory' : null,
@@ -2655,6 +2787,7 @@ function describeEnabledTools(tools = {}) {
 function isToolEnabled(name, tools = {}) {
   if (name === 'run_terminal_command') return tools.terminal !== false;
   if (name === 'terminal_session') return tools.terminalSessions === true;
+  if (name === 'send_file') return tools.fileDelivery === true;
   if (name === 'web_search') return getSearchMode(tools) !== 'off';
   if (name === 'memory_chat') return tools.chatMemory !== false;
   if (name === 'persistent_memory') return tools.persistentMemory !== false;
@@ -2681,6 +2814,13 @@ function toolRequiresApproval(toolCall, config = {}) {
     // approval prompts if they were gated too.
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action === 'write';
+  }
+  if (name === 'send_file') {
+    // create only writes brand-new text content the model itself authored (no
+    // existing data at risk). attach reads an existing file off disk into the
+    // chat, which is a real disclosure surface, so it needs a human nod.
+    const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
+    return input.action === 'attach';
   }
   if (name === 'memory_chat' || name === 'persistent_memory') {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));

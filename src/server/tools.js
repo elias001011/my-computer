@@ -335,6 +335,47 @@ export const chatDocumentToolDefinition = {
   },
 };
 
+export const sendFileToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'send_file',
+    description:
+      'Deliver a file to the user as a chat attachment they can view/download. create writes new text content you author (Markdown, code, JSON, CSV, plain text) into a brand-new file -- use it for reports, docs, data exports. attach sends an existing file already on disk (for example an image produced by a script you ran through run_terminal_command/terminal_session, such as a background-removed PNG) -- attach is only available when a terminal tool is enabled, since that is what can produce or locate the file in the first place.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'attach'],
+          description: 'create authors new text content into a new file. attach reads an existing file from disk and sends it as-is.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Name for the file shown to the user, with extension (e.g. relatorio.md, sem-fundo.png). For attach, defaults to the source file name when omitted.',
+        },
+        content: {
+          type: 'string',
+          description: 'Full text content of the new file. Required for create. Must be a text-like format (Markdown/text/JSON/CSV/code/etc), not an image or other binary -- use attach for those.',
+        },
+        path: {
+          type: 'string',
+          description: 'Absolute path (or path relative to the terminal home) of an existing file to send. Required for attach.',
+        },
+        mimeType: {
+          type: 'string',
+          description: 'Optional MIME type override. Guessed from the file extension when omitted.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true so you can confirm the file was delivered. Strings like "true" or "false" are accepted for compatibility.',
+        },
+      },
+      required: ['action', 'fileName'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const compactContextToolDefinition = {
   type: 'function',
   function: {

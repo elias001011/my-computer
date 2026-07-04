@@ -91,7 +91,39 @@ async function ensureTmuxOrThrow() {
   }
 }
 
-export async function listSessions(chatId) {
+// Best-effort idle reaper. tmux keeps session_activity current on any output or
+// input in the session, so a session stuck idle past the timeout is genuinely
+// forgotten, not just quiet mid-command. There is no background timer for this:
+// it runs opportunistically whenever list/open touches the module (AI calls,
+// panel polling, panel open), which is frequent enough to be a real cleanup path
+// while staying zero-dependency.
+async function reapIdleSessions(idleTimeoutMinutes) {
+  const minutes = Number(idleTimeoutMinutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return;
+  const all = await runTmux(['list-sessions', '-F', '#{session_name}\t#{session_activity}']);
+  if (all.code !== 0) return;
+  const cutoffMs = Date.now() - minutes * 60 * 1000;
+  const stale = all.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [name, activity] = line.split('\t');
+      return { name, activityMs: Number(activity) * 1000 };
+    })
+    .filter((session) => session.name.startsWith(`${SESSION_PREFIX}-`) && Number.isFinite(session.activityMs) && session.activityMs < cutoffMs);
+  for (const session of stale) {
+    await runTmux(['kill-session', '-t', session.name]);
+  }
+}
+
+async function countAllSessions() {
+  const all = await runTmux(['list-sessions', '-F', '#{session_name}']);
+  if (all.code !== 0) return 0;
+  return all.stdout.split('\n').filter((name) => name.startsWith(`${SESSION_PREFIX}-`)).length;
+}
+
+export async function listSessions(chatId, options = {}) {
+  await reapIdleSessions(options.idleTimeoutMinutes);
   const prefix = sessionPrefixForChat(chatId);
   const list = await runTmux(['list-sessions', '-F', '#{session_name}\t#{session_created}\t#{session_attached}']);
   // "no server running" / "no sessions" are normal empty states, not failures.
@@ -122,12 +154,20 @@ export async function listSessions(chatId) {
 
 export async function openSession(chatId, options = {}) {
   await ensureTmuxOrThrow();
-  const existing = await listSessions(chatId);
+  const existing = await listSessions(chatId, { idleTimeoutMinutes: options.idleTimeoutMinutes });
   const maxSessions = clampInteger(options.maxSessions, 1, 8, 3);
   if (existing.length >= maxSessions) {
     throw createError(
       409,
       `Limite de ${maxSessions} sessão(ões) por chat atingido. Feche uma sessão existente (close) ou aumente o limite nas configurações do Terminal.`,
+    );
+  }
+  const maxGlobalSessions = clampInteger(options.maxGlobalSessions, 1, 64, 12);
+  const globalCount = await countAllSessions();
+  if (globalCount >= maxGlobalSessions) {
+    throw createError(
+      409,
+      `Limite global de ${maxGlobalSessions} sessão(ões) de terminal (somando todos os chats) atingido. Feche alguma sessão ou aumente o limite nas configurações do Terminal.`,
     );
   }
   const prefix = sessionPrefixForChat(chatId);
