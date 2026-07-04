@@ -1844,14 +1844,17 @@ function buildSystemPrompt(
     'Never state a specific score, date, statistic, name, or other factual detail with confidence unless a tool result (web_search, terminal, etc.) you actually received confirms it. If a search failed, returned nothing relevant, or is ambiguous/outdated, say that plainly instead of inventing a plausible-looking answer.',
     'If you cannot finish cleanly, do not pretend the answer is complete. Stop with the best partial state you have; the UI will keep that attempt and expose a Continue action.',
     config.tools?.terminal
-      ? 'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Do not use terminal commands as a substitute for public web search: grep, find, rg, ls, cat, browser caches, local files, and /home searches inspect the user machine, not the internet. Do not run broad recursive searches across /home, the user profile, or filesystem root unless the user explicitly asked for a local-file search and gave a narrow scope; ask for a path or use a targeted command instead. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.'
+      ? [
+          'When local state, files, commands, or host actions matter, call run_terminal_command before your final answer. Do not use terminal commands as a substitute for public web search: grep, find, rg, ls, cat, browser caches, local files, and /home searches inspect the user machine, not the internet. Do not run broad recursive searches across /home, the user profile, or filesystem root unless the user explicitly asked for a local-file search and gave a narrow scope; ask for a path or use a targeted command instead. Avoid interactive commands unless you make them non-interactive; for package managers prefer flags like -y/--assumeyes when safe. For long-running commands and downloads, set timeoutSeconds explicitly. Use returnOutput false for fire-and-forget side effects and true only when the stdout/stderr is needed for the next reasoning step. Do not retry a failing or rate-limited command repeatedly.',
+          'A missing dependency is not a reason to stop or refuse: if a task needs something not installed (a CLI, a language runtime, a package, a library, e.g. python3 -m pip install <lib>), say plainly what is missing and that you are about to install it, name the exact command, then run it. If automatic tool execution is off the app already pauses for the user\'s approval on that command; if it is on, say it in your own text before running it anyway so the user always knows an install happened.',
+        ].join('\n')
       : 'Terminal execution is disabled by user settings.',
     // Advanced mode only: when sessions are off (or the whole terminal is off) the
     // model must not see a single word about them -- an explicit "disabled" line
     // here would still teach the tool name and invite hallucinated calls.
     config.tools?.terminalSessions === true
       ? [
-          'Persistent terminal sessions are enabled via the terminal_session tool. Use run_terminal_command for one-shot commands; use terminal_session when shell state must survive between calls: interactive programs and REPLs, long tasks you need to supervise step by step, or multi-command work sharing cwd/env.',
+          'Persistent terminal sessions are enabled via the terminal_session tool. Use run_terminal_command for one-shot commands; use terminal_session when shell state must survive between calls: interactive programs and REPLs, long tasks you need to supervise step by step, or multi-command work sharing cwd/env. Reach for terminal_session more often than a single one-shot command whenever the task is likely to need more than one related step -- installing something and then using it, running a script and reacting to its output, or anything where you cannot predict the one exact command that finishes the job.',
           'Session flow: open, then write text (Enter is pressed by default) with a waitSeconds that matches how slow the command is, and the visible screen returns. If the screen shows work still in progress, call read with a larger waitSeconds instead of typing again. Close sessions you no longer need.',
           'The user sees and types into these same sessions through the Terminal window in the panel. When a program asks for a password, sudo authentication, or any manual step you cannot perform, tell the user exactly what to do there (open the Terminal window, which session, what to type), wait for them to confirm in chat, then continue with read.',
         ].join('\n')
@@ -1870,11 +1873,14 @@ function buildSystemPrompt(
       : '',
     config.tools?.deepInvestigation
       ? [
-          'Deep investigation mode is enabled. For requests about the user machine, code, installed software, configuration, logs, scripts, provider behavior, or anything that can be inspected locally, investigate before answering.',
-          'Prefer several read-only tool calls across multiple rounds when the first result is incomplete: locate entry points, inspect referenced files/scripts/configs, and follow the chain until you understand the mechanism.',
-          'Do not ask the user to run commands that you can run with available tools. Keep risky or system-changing commands separate from inspection and explain them before choosing them.',
-          'If a tool produces useful stdout/stderr or search results, use that output in the next reasoning step before giving the final answer.',
-        ].join('\n')
+          'Deep investigation mode is enabled. This is a hard requirement, not a style preference: for any request about the user machine, code, installed software, configuration, logs, scripts, provider behavior, or anything else that a tool can actually check, you must investigate with tools before writing the final answer -- never answer straight from assumptions or general knowledge when a tool result would confirm or contradict it. You have the tools; use them before you speak, even if nothing about the model itself reminds you to think first.',
+          'One tool call is rarely enough. If the first result is incomplete, ambiguous, or raises a new question, keep going across multiple rounds: locate entry points, open the files/scripts/configs it references, follow that chain, and only stop calling tools once you actually understand the mechanism -- not once you have something plausible to say.',
+          `${config.tools?.terminalSessions === true ? 'When the investigation needs more than a couple of related steps -- reproducing a bug, testing a fix, chasing a running process, anything interactive -- open a terminal_session instead of guessing from a single command; it is built exactly for this.' : ''}`,
+          'Do not ask the user to run a command or check a file that you can run or read yourself with the tools available. Keep risky or system-changing commands separate from read-only inspection and explain them before choosing to run them.',
+          'Every tool result is an input to more reasoning, not a stopping point: read what actually came back (stdout, stderr, file contents, search hits) and use it to decide the next step, before giving the final answer.',
+        ]
+          .filter(Boolean)
+          .join('\n')
       : '',
     config.tools?.terminalMode === 'isolated'
       ? 'Terminal mode is soft-isolated: commands run from a My Computer sandbox HOME. This is not a full VM/container isolation; absolute paths can still touch the host.'
