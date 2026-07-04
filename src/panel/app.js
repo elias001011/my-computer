@@ -4660,7 +4660,7 @@ function getAttachmentWarning(attachment) {
     }
     return {
       level: 'warn',
-      text: 'Este modelo não está marcado como vision. Troque de modelo ou ative suporte para modelos personalizados.',
+      text: 'Este modelo não é vision: a imagem será enviada mesmo assim (caminho e metadados), mas a IA não vai conseguir ver o conteúdo visualmente. Ela ainda pode processá-la por outros meios (ex.: terminal).',
     };
   }
 
@@ -6163,26 +6163,23 @@ async function sendMessageFromValues(textarea, content) {
   }
   const { provider: activeProvider, model: activeModel } = getEffectiveChatRuntime();
   const activeModelMetadata = getModelMetadata(activeProvider, activeModel);
-  const unsupportedImage = state.pendingAttachments.find(
-    (attachment) =>
-      attachment.kind === 'image' &&
-      !modelSupportsImages(activeProvider, activeModel),
-  );
-  if (unsupportedImage) {
-    state.error = `O modelo atual não aceita imagens: ${unsupportedImage.name}. Troque para um modelo vision ou marque o modelo personalizado como compatível.`;
-    renderPreservingVisualState();
-    return;
-  }
+  // Sending an image to a non-vision model is intentionally allowed: the model won't see it
+  // visually, but it still gets the saved path/metadata as text and can act on it indirectly
+  // (e.g. through the terminal). The per-attachment warning already tells the user this.
+  // The count/size limits below only matter for models that actually embed the image.
   const imageAttachments = state.pendingAttachments.filter((attachment) => attachment.kind === 'image');
-  if (activeModelMetadata.maxInputImages && imageAttachments.length > activeModelMetadata.maxInputImages) {
+  const activeModelSupportsImages = modelSupportsImages(activeProvider, activeModel);
+  if (activeModelSupportsImages && activeModelMetadata.maxInputImages && imageAttachments.length > activeModelMetadata.maxInputImages) {
     state.error = `O modelo atual aceita até ${activeModelMetadata.maxInputImages} imagem(ns) por mensagem.`;
     renderPreservingVisualState();
     return;
   }
-  const oversizedImage = imageAttachments.find(
-    (attachment) =>
-      activeModelMetadata.maxFileSizeMB && attachment.size > activeModelMetadata.maxFileSizeMB * 1024 * 1024,
-  );
+  const oversizedImage = activeModelSupportsImages
+    ? imageAttachments.find(
+        (attachment) =>
+          activeModelMetadata.maxFileSizeMB && attachment.size > activeModelMetadata.maxFileSizeMB * 1024 * 1024,
+      )
+    : null;
   if (oversizedImage) {
     state.error = `${oversizedImage.name} excede o limite de ${activeModelMetadata.maxFileSizeMB} MB deste modelo.`;
     renderPreservingVisualState();

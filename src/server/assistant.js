@@ -3624,16 +3624,12 @@ async function renderProviderMessage(chat, message, config, options = {}) {
   const attachments = message.attachments || [];
   const supportsImages = modelSupportsImages(config.provider, config.model, config);
   const modelMetadata = getModelMetadata(config.provider, config.model, config);
-  if (options.strictImageSupportForMessageId === message.id) {
-    const unsupportedImage = attachments.find((attachment) => attachment.kind === 'image' && !supportsImages);
-    if (unsupportedImage) {
-      const error = new Error(
-        `O modelo ${config.model} não está marcado como compatível com imagens. Troque para um modelo vision ou ative "este modelo suporta imagens" no modelo personalizado.`,
-      );
-      error.statusCode = 400;
-      throw error;
-    }
-
+  // Unsupported-vision images are intentionally NOT blocked here: the model still gets the
+  // file's saved_path/metadata as text (see renderAttachmentsForModel), which is enough for
+  // it to process the image indirectly (e.g. running a background-removal script through the
+  // terminal) even though it cannot see the pixels. Only checks that matter when the image
+  // actually gets embedded as visual input run below.
+  if (options.strictImageSupportForMessageId === message.id && supportsImages) {
     const imageAttachments = attachments.filter((attachment) => attachment.kind === 'image');
     if (modelMetadata.maxInputImages && imageAttachments.length > modelMetadata.maxInputImages) {
       const error = new Error(
@@ -3742,6 +3738,9 @@ function renderAttachmentsForModel(attachments = []) {
           : '',
         attachment.kind === 'video'
           ? '\nVideo is available as a saved file reference, but it is not sent natively to the provider in this MVP.'
+          : '',
+        attachment.kind === 'image'
+          ? '\nIf the current model does not support vision, this image is not embedded as visual input, but the saved_path above is real -- you can still inspect or process it (e.g. via run_terminal_command/terminal_session/send_file) even without seeing it directly.'
           : '',
         attachment.extractedText
           ? `\n<document_text name="${escapeXmlAttribute(attachment.name)}">\n${truncate(attachment.extractedText, 60000)}\n</document_text>`
