@@ -1,6 +1,6 @@
 # Architecture
 
-Atualizado em 20/06/2026.
+Atualizado em 05/07/2026.
 
 ## Visão geral
 
@@ -120,7 +120,8 @@ O painel carrega uma janela recente desses eventos para a UI e para o modal de d
 
 O app tem tools locais com aprovação por UI:
 
-- `run_terminal_command`
+- `run_terminal_command` - um comando por chamada, sem estado entre chamadas.
+- `terminal_session` - sessão de terminal persistente via tmux (modo avançado, ver seção própria abaixo).
 - `web_search`
 - `memory_chat`
 - `persistent_memory`
@@ -129,7 +130,12 @@ O app tem tools locais com aprovação por UI:
 - `chat_document`
 - `compact_context`
 - `rename_chat`
-- `send_email` - só existe dentro de tarefas agendadas que a permitirem explicitamente; nunca aparece em chat normal e não tem parâmetro de destinatário (ver "Tarefas agendadas" e "Email" abaixo).
+- `send_file` - cria um arquivo de texto novo (sem aprovação) ou anexa um já existente no disco (com aprovação).
+- `edit_file` - lista/lê/edita arquivos reais da máquina (não só anexos); reads livres, escritas com aprovação. Diretório de projeto configurável.
+- `browser` - Chromium headless via spawn (auto-detectado ou caminho configurável): `screenshot` (vira anexo + reenviado como imagem se o modelo tiver visão) e `read` (DOM/texto renderizado). Sempre pede aprovação. Sem console/sessão interativa ainda.
+- `read_skill` - lê sob demanda o corpo de uma skill (ver seção própria abaixo).
+- `get_env_var` - revela o valor literal de uma secret configurada; sempre pede aprovação, mesmo com `alwaysAllow` ligado. Normalmente desnecessário (ver seção "Secrets" abaixo).
+- `send_email` - só existe dentro de tarefas agendadas/comandos personalizados que a permitirem explicitamente; nunca aparece em chat normal e não tem parâmetro de destinatário (ver "Tarefas agendadas" e "Email" abaixo).
 
 Fluxo básico:
 
@@ -148,6 +154,32 @@ Para saídas longas ou execuções demoradas:
 - a IA pode pedir `timeoutSeconds` na tool de terminal
 - o backend espera o processo terminar antes de devolver `stdout`/`stderr`
 - downloads e tarefas longas devem usar timeout maior, mas não infinito
+
+O loop de tools por mensagem tem um teto configurável (`config.tools.maxToolRounds`, padrão 8, 1-200) via `getMaxToolRounds()` em `assistant.js`. Com `deepInvestigation` ligado, o teto dobra automaticamente. Ao esgotar o teto sem o modelo parar sozinho, o app faz uma chamada final forçada sem tools (`tools: []`) pra conseguir algum texto de fechamento em vez de simplesmente cortar a execução; a tentativa fica `incomplete` com `error: 'Limite de rodadas de tools atingido.'`.
+
+## Sessões de terminal (modo avançado)
+
+`src/server/terminal-sessions.js` gerencia sessões tmux persistentes por chat, opcionais (toggle `terminalSessions`, desligado por padrão). Diferente de `run_terminal_command`, uma sessão mantém cwd/env/processo vivos entre chamadas da tool `terminal_session` (`open`/`write`/`read`/`list`/`close`). Só `write` pede aprovação. Limites configuráveis: sessões por chat, sessões globais (somando todos os chats), timeout de inatividade (reap oportunista, sem timer próprio -- roda quando `list`/`open` são chamados). O usuário vê e digita na mesma sessão através de uma janela Terminal no painel; a entrada digitada por ele ali nunca é logada nem enviada à IA. Secrets configurados (ver "Secrets" abaixo) são injetados no ambiente da sessão via `tmux new-session -e NOME=valor` na criação, nunca digitados no pane (não vazam via captura de tela).
+
+## Skills
+
+`src/server/store.js` guarda skills como arquivos Markdown com frontmatter (`name`/`description`) + corpo, em `skills/` no runtime do perfil (`skills.json` é só o índice). Só nome+descrição entram sempre no prompt (mesmo padrão de disclosure progressiva de `persistent_memory_user`); o corpo completo é lido sob demanda pela tool `read_skill`. O botão "Melhorar com IA" no editor do painel roda uma completion avulsa contra o provider/modelo padrão atual (`POST /api/skills/improve-draft`) e só sugere -- nada é salvo até o usuário confirmar.
+
+## Comandos personalizados
+
+`customCommands.json` guarda: nome, gatilho `/trigger`, prompt fixo, `systemPrompt` opcional, allowlist de tools, `skipMemoryInPrompt` -- o mesmo formato de uma tarefa agendada, menos tudo que é específico de cron (agendamento, chat próprio, histórico de execução). Digitar `/trigger` no início de uma mensagem (âncora só na posição 0) roda o comando **dentro do chat atual**, reusando o exato mecanismo `scheduledTaskContext`/`applyScheduledTaskToolMask` de tarefa agendada -- as tools do comando ficam pré-aprovadas (sem pausa interativa), e o allowlist só restringe tools já ligadas globalmente na seção, nunca concede uma nova.
+
+## Secrets
+
+`secrets.json` (0600, texto puro -- mesmo modelo das API keys em `config.json`) guarda nome+descrição+valor de cada variável de ambiente. Só nome+descrição entram no prompt; o valor nunca é enviado ao modelo por padrão. Em vez disso, todo `run_terminal_command` spawnado e toda `terminal_session` aberta recebem os secrets configurados injetados diretamente no ambiente do processo/sessão -- um comando que a IA escreve referenciando `$NOME` funciona sem o valor literal nunca entrar num prompt ou resultado de tool. `get_env_var` é o escape hatch deliberado (desligado por padrão via `secretDisclosure`) pra quando o valor literal é mesmo necessário (ex.: escrever num arquivo); sempre pede aprovação, inclusive com `alwaysAllow` ligado, e usar essa tool manda o valor pro provider de nuvem se ele não for Ollama local.
+
+## Auto continue
+
+Toggle `autoContinueOnError` (desligado por padrão). Quando uma tentativa para incompleta por erro recuperável ou limite de rodadas, o cliente dispara "Continuar" sozinho, sem esperar o usuário clicar -- é uma decisão inteiramente client-side (reusa o caminho de continue já existente) pra evitar mexer no loop do servidor. Nunca dispara durante uma pausa de aprovação de tool, nem depois de um stop explícito do usuário, e é limitado a um número máximo de continuações automáticas por turno.
+
+## Editar mensagens
+
+`editUserMessage` em `store.js` forka a conversa no ponto editado: o conteúdo antigo e tudo que veio depois (respostas, tool uses) vão pro `editHistory` da mensagem (arquivado, nunca apagado), o transcript ao vivo trunca ali, o status volta pra `pending` e a UI reusa o caminho de retry pra rodar de novo -- o contexto que a IA vê depois de uma edição é sempre coerente com o texto novo. Só mensagens do usuário são editáveis; mensagens do assistente já têm retry/continue.
 
 ## Tarefas agendadas
 

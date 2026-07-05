@@ -1,8 +1,8 @@
 # Providers
 
-Atualizado em 26/05/2026.
+Atualizado em 05/07/2026.
 
-Este arquivo descreve o catálogo que o app mostra em `Índice de modelos` e nos seletores de provider/modelo.
+Este arquivo descreve o catálogo que o app usa nos seletores de provider/modelo (a tela dedicada "Índice de modelos" existiu no painel até 2026-07-04, quando foi removida por decisão do usuário -- o catálogo em si continua existindo, só não tem mais uma tela própria).
 A fonte de verdade continua sendo `src/server/models.js`.
 
 ## Como ler o catálogo
@@ -240,4 +240,5 @@ Se você quiser usar o app sem pensar muito:
 
 - OpenAI, Anthropic, Gemini, Groq e xAI são os catálogos curados.
 - OpenRouter, Hugging Face, Ollama e OpenAI compatível são descobertos em runtime.
-- `Índice de modelos` é o lugar certo para conferir capacidade, limite e observação técnica.
+- Pra conferir capacidade/limite/observação técnica de um modelo, olhe `src/server/models.js` direto -- não tem mais uma tela própria no painel pra isso.
+- OpenAI compatível também cobre providers tipo Alibaba Model Studio, Moonshot AI e Zhipu/Z.ai -- veja o texto de ajuda ao lado do campo de provider compatível no painel para as base URLs de cada um.

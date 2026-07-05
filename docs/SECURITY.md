@@ -1,6 +1,6 @@
 # Security
 
-Atualizado em 20/06/2026.
+Atualizado em 05/07/2026.
 
 ## Posicao do projeto
 
@@ -23,19 +23,23 @@ Atualizado em 20/06/2026.
 - O updater bloqueia aplicação quando o worktree Git está sujo.
 - O catálogo de modelos tenta bloquear chamadas claramente incompatíveis antes de chegar na API.
 - A tool `send_email` não tem parâmetro de destinatário: o destino é sempre o endereço fixo configurado pelo usuário, nunca escolhido pelo modelo.
-- `send_email` só fica habilitada (`isToolEnabled`) dentro de uma tarefa agendada cuja allowlist a inclua e com o Resend configurado; em chat normal a tool nunca está habilitada, mesmo que o modelo tente chamá-la por texto malformado.
+- `send_email` só fica habilitada (`isToolEnabled`) dentro de uma tarefa agendada/comando personalizado cuja allowlist a inclua e com o Resend configurado; em chat normal a tool nunca está habilitada, mesmo que o modelo tente chamá-la por texto malformado.
+- Secrets (variáveis de ambiente/tokens configurados pelo usuário): só nome+descrição entram no prompt por padrão, nunca o valor. O valor é injetado direto no ambiente de processos de terminal spawnados, nunca passa pelo modelo nesse caminho. A tool `get_env_var` (que expõe o valor literal) sempre pede aprovação, mesmo com `Sempre permitir qualquer tool` ligado -- é a única exceção onde `alwaysAllow` não pula a confirmação.
+- `edit_file` (escritas em arquivos reais da máquina): reads/listagem são livres; `write`/`replace`/`create` sempre pedem aprovação, mesma barra do terminal.
 
 ## Riscos conhecidos
 
-- `Sempre permitir qualquer tool` faz `run_terminal_command` rodar sem confirmacao manual.
+- `Sempre permitir qualquer tool` faz `run_terminal_command`, `edit_file`, `browser` e praticamente tudo mais rodar sem confirmação manual -- é um override global, não por tool (a única exceção real é `get_env_var`, que sempre pede aprovação).
 - O terminal isolado é isolamento leve, não sandbox forte.
-- API keys (incluindo a do Resend) ficam em texto claro no runtime local e também podem ir para export.
+- `edit_file` alcança qualquer arquivo que o próprio usuário do sistema operacional consiga acessar -- não é uma fronteira nova (o terminal já tinha esse alcance), mas vale lembrar que não há confinamento de path.
+- A tool `browser` faz requisições de rede reais de saída (abre a URL de verdade via Chromium) a partir da máquina.
+- API keys (incluindo a do Resend) e valores de secrets configurados pelo usuário ficam em texto claro no runtime local (mesmo modelo, sem criptografia própria da aplicação) e também podem ir para export -- exceto secrets, que ainda **não** entram no export/import.
 - Endpoint customizado compatível com OpenAI pode ver prompt, memórias e tool outputs.
 - Anexos exportados podem conter dados sensíveis.
 - Search via terminal pode vazar a query para o motor de busca usado.
 - Parâmetros técnicos errados podem quebrar chamada, elevar custo ou gerar rate limit.
 - Ollama install/remove pode pedir `sudo`.
-- Tarefas agendadas rodam sem humano presente: a allowlist de tools da própria tarefa substitui a aprovação manual normal (tool fora da lista é negada, tool dentro executa direto, mesmo as que normalmente pediriam confirmação). Configure a allowlist de cada tarefa pensando nisso.
+- Tarefas agendadas e comandos personalizados rodam sem humano presente pra aprovar nada: a allowlist de tools da própria tarefa/comando substitui a aprovação manual normal (tool fora da lista é negada, tool dentro executa direto, mesmo as que normalmente pediriam confirmação). O allowlist só restringe tools já ligadas globalmente na seção, nunca concede uma tool que estiver desligada. Configure a allowlist de cada tarefa/comando pensando nisso.
 
 ## Como usar sudo de forma sensata
 
@@ -79,6 +83,8 @@ Boas práticas:
 - Classificacao de risco antes de executar comandos locais.
 - Mascaramento de segredos em logs e UI.
 - Proteção melhor para API keys.
-- Criptografia para secrets locais.
+- Criptografia própria da aplicação para secrets locais (hoje o armazenamento é texto claro, protegido só por permissão de arquivo -- mesmo modelo das API keys, deliberadamente sem cripto nova).
+- Confinamento de path para `edit_file` (hoje alcança o que o usuário do SO alcança, igual o terminal).
+- Console e navegação interativa com sessão pra tool `browser` (hoje é stateless: screenshot/read por chamada).
 - Permissões mais granulares por tool.
 - Parsers dedicados e sandbox real para arquivos complexos.

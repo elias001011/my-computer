@@ -1,6 +1,6 @@
 # My Computer - Infraestrutura Explicada
 
-Atualizado em 26/05/2026.
+Atualizado em 05/07/2026.
 
 Este arquivo é o guia mais didático do projeto. A ideia é responder a pergunta:
 
@@ -109,7 +109,9 @@ Tools são a forma da IA fazer alguma coisa de verdade no seu computador.
 
 As principais são:
 
-- `run_terminal_command`
+- `run_terminal_command` -- um comando de terminal por chamada, sem estado entre chamadas.
+- `terminal_session` -- sessão de terminal persistente via tmux (modo avançado, desligado por
+  padrão): mantém cwd/env/processo vivo entre chamadas, com janela própria no painel.
 - `web_search`
 - `memory_chat`
 - `persistent_memory`
@@ -118,6 +120,15 @@ As principais são:
 - `chat_document`
 - `compact_context`
 - `rename_chat`
+- `send_file` -- cria um arquivo de texto novo ou anexa um já existente no disco como anexo do chat.
+- `edit_file` -- lê, lista e edita arquivos reais da máquina (não só anexos), com aprovação nas escritas.
+- `browser` -- abre um Chromium headless pra tirar print (reenviado como imagem se o modelo tiver
+  visão) ou ler o DOM/texto renderizado de uma página.
+- `read_skill` -- lê o corpo de uma skill (instrução salva pelo usuário) sob demanda.
+- `get_env_var` -- revela o valor literal de uma variável de ambiente/segredo configurada (desligado
+  por padrão, sempre pede aprovação; normalmente desnecessário, já que comandos de terminal recebem
+  os segredos injetados direto no ambiente do processo via `$NOME`).
+- `send_email` -- só disponível dentro de tarefas agendadas/comandos personalizados com allowlist.
 
 Fluxo simples:
 
@@ -179,7 +190,7 @@ O catálogo tem dois tipos de entrada:
 - curada pelo projeto
 - descoberta dinâmica no provider
 
-Isso é o motivo do `Índice de modelos`: ele mostra o que é realmente útil, o que é só índice técnico e o que muda em runtime.
+Esses dois tipos convivem em `src/server/models.js` -- o painel não tem mais uma tela dedicada de índice de modelos (removida em 2026-07-04), então pra conferir capacidade/limites de um modelo específico, olhe o catálogo direto no código ou os seletores de provider/modelo do painel.
 
 ## 8. Rotação
 
@@ -249,7 +260,7 @@ Fluxo:
 Se algo quebrar:
 
 - veja o `events.jsonl`
-- confira o `Índice de modelos`
+- confira o catálogo em `src/server/models.js`
 - abra o `metadata.json` do chat
 - confira `config.json`
 - veja se a provider key está correta

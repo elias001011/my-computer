@@ -1,6 +1,6 @@
 # UI Spec
 
-Atualizado em 26/05/2026.
+Atualizado em 05/07/2026.
 
 O painel é uma single-page app local, feita para abrir, configurar e usar sem precisar entender a estrutura interna do projeto.
 
@@ -90,7 +90,6 @@ Se o provider for Ollama, o setup mostra um bloco próprio com:
 - Trocar provider ou modelo durante o chat é permitido e gera evento.
 - Cada seletor tem `Modelo personalizado`.
 - Em Ollama, modelos instalados aparecem marcados e o app pode fazer pull automático quando necessário.
-- O painel mostra `Índice de modelos` para comparar capacidade, limite e observações técnicas.
 
 ## General settings
 
@@ -100,7 +99,7 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Idioma da interface: inglês é o padrão para instalações novas; português continua disponível em `Identidade` sem alterar o idioma das respostas da IA.
 - Providers e APIs: provider padrão, endpoint/base URL e múltiplas API keys.
 - Rotação: rotatória de modelos e rotatória de providers com fallback.
-- Models: modelo padrão, catálogo curado e índice técnico.
+- Models: modelo padrão e catálogo curado (a seção "Índice de modelos" foi removida em 2026-07-04; o catálogo técnico completo ainda vive em `src/server/models.js`, só deixou de ter uma tela própria no painel).
 - Ollama: verificação, pull, remoção e desinstalação.
 - Tools: terminal local, search mode, memória, compactação e rename.
 - Rede: abertura em LAN com senha única e Basic Auth.
@@ -112,23 +111,6 @@ O modal de configuração geral concentra o que o usuário precisa para operar o
 - Salvar apenas aparência, identidade, memória, tools, contexto ou rede não exige API key do provider padrão; validação de key/base URL acontece quando provider, modelo, settings do provider ou rotatórias mudam.
 - Segurança: avisos de sudo e de acesso remoto.
 - Modo offline: UI fica focada em Ollama local; o backend rejeita endpoint Ollama remoto, não descobre catálogo online e exige aprovação para busca web terminal mesmo com tools automáticas.
-
-## Índice de modelos
-
-O `Índice de modelos` mostra, para cada entrada do catálogo:
-
-- provider
-- id do modelo
-- nome legivel
-- se o modelo é selecionável
-- se é apenas índice técnico
-- visão
-- raciocínio
-- limite de contexto
-- limite de saída
-- observações de API
-
-Esse índice existe para evitar adivinhação. O nome bonito do modelo não é suficiente para saber se ele aceita imagem, reasoning, áudio, vídeo ou rotação.
 
 ## Model settings
 

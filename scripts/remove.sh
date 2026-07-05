@@ -25,12 +25,13 @@ Uso: ./uninstall.sh [--keep-data|--remove-data] [--no-deps]
 
 --keep-data     remove dependências e preserva ~/.my-computer (padrão)
 --remove-data   remove dependências e apaga runtime, chats, config, anexos e memórias
---no-deps       pula a etapa interativa de dependências opcionais (tmux/ollama)
+--no-deps       pula a etapa interativa de dependências opcionais (tmux/ollama/chromium)
 
 A etapa de dependências opcionais só roda em terminal interativo. O MC nunca instala
-tmux/ollama sozinho -- eles são detectados no sistema e a remoção é sempre perguntada,
-nunca automática, porque o script não tem como saber se você instalou isso só por
-causa do MC ou se já usa em outra coisa.
+tmux/ollama/Chromium sozinho -- eles são detectados no sistema e a remoção é sempre
+perguntada, nunca automática, porque o script não tem como saber se você instalou isso
+só por causa do MC ou se já usa em outra coisa. python3 é deixado de fora de propósito
+(dependência do próprio sistema operacional).
 HELP
       exit 0
       ;;
@@ -186,6 +187,32 @@ if command -v ollama >/dev/null 2>&1; then
       fi
     fi
   done
+fi
+
+# Chromium/Chrome: usado só pela tool de navegador (seção Tools, desligada por padrão).
+# Mesmo tratamento do tmux -- o MC nunca instala isso sozinho, só detecta e pergunta.
+chromium_bin=""
+for candidate in google-chrome-stable google-chrome chromium chromium-browser chrome; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    chromium_bin="$candidate"
+    break
+  fi
+done
+if [ -n "$chromium_bin" ]; then
+  echo ""
+  echo "$chromium_bin encontrado no sistema. O MC usa Chromium/Chrome só na tool de"
+  echo "navegador (opcional, desligada por padrão, screenshot/leitura de páginas). Se"
+  echo "você não usa esse navegador pra mais nada, pode remover com segurança."
+  if confirm "Remover $chromium_bin também?"; then
+    if remove_via_package_manager "$chromium_bin"; then
+      echo "$chromium_bin removido."
+    else
+      echo "Não consegui remover $chromium_bin automaticamente neste sistema (gerenciador"
+      echo "de pacotes não reconhecido, ou foi instalado de outra forma, ex.: .deb baixado"
+      echo "à parte). Remova manualmente se quiser, ex.: sudo apt-get remove $chromium_bin"
+      echo "/ brew uninstall --cask google-chrome."
+    fi
+  fi
 fi
 
 echo ""

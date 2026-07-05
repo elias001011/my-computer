@@ -1,6 +1,6 @@
 # Technology Stack
 
-Atualizado em 26/05/2026.
+Atualizado em 05/07/2026.
 
 ## Stack do MVP
 
@@ -66,9 +66,11 @@ Quando a UI e o fluxo de tools ficarem mais complexos, essas escolhas podem ser 
 
 - `./install.sh` instala dependências, prepara o runtime e pode abrir o painel.
 - `./uninstall.sh` remove o projeto local e, em terminal interativo, detecta dependências
-  opcionais presentes no sistema (tmux, ollama) e pergunta se quer remover também --
-  nunca remove sozinho, já que o MC nunca instala essas ferramentas por conta própria e
-  não há como saber se foram instaladas só por causa do MC. `--no-deps` pula essa etapa.
+  opcionais presentes no sistema (tmux, ollama, Chromium/Chrome) e pergunta se quer remover
+  também -- nunca remove sozinho, já que o MC nunca instala essas ferramentas por conta
+  própria e não há como saber se foram instaladas só por causa do MC. Trata separadamente
+  o binário/serviço do ollama e os modelos baixados (podem somar vários GB). `--no-deps`
+  pula essa etapa toda.
 - `./uninstall.sh --remove-data` apaga também o runtime do usuário.
 
 Use os scripts da raiz como entrypoint do usuário final. `install.sh` chama `scripts/bootstrap.sh` por baixo; o arquivo em `scripts/` é implementação interna para manutenção/desenvolvimento, não um comando que o usuário precisa decorar.

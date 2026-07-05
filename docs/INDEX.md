@@ -1,6 +1,6 @@
 # Docs
 
-Este diretório documenta o MVP real do projeto em 26/05/2026.
+Este diretório documenta o MVP real do projeto, atualizado em 05/07/2026.
 
 Se você só quiser colocar o sistema para rodar, leia primeiro o [README](../README.md).
 
@@ -17,7 +17,7 @@ Se você só quiser colocar o sistema para rodar, leia primeiro o [README](../RE
 ## O que está aqui
 
 - `ARCHITECTURE.md` explica como Browser, servidor, providers e runtime conversam.
-- `PROVIDERS.md` explica o índice de modelos e como lidar com providers dinâmicos.
+- `PROVIDERS.md` explica o catálogo de modelos (curado + dinâmico) e como lidar com providers dinâmicos.
 - `UI_SPEC.md` descreve as telas, o modal de configuração e o painel de modelo.
 - `SECURITY.md` mostra os limites de segurança reais e o que não confiar cegamente.
 - `TECH_STACK.md` resume a stack usada no MVP.
