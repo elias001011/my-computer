@@ -129,6 +129,8 @@ export async function ensureRuntime() {
   await ensureJsonFile(paths.userMemoryIndexPath, []);
   await ensureJsonFile(paths.scheduledTasksPath, []);
   await ensureJsonFile(paths.skillsIndexPath, []);
+  await ensureJsonFile(paths.customCommandsPath, []);
+  await ensureJsonFile(paths.secretsPath, []);
 
   try {
     await fs.access(paths.configPath);
@@ -1083,6 +1085,117 @@ export async function deleteScheduledTask(id) {
     }
     await writeJson(paths.scheduledTasksPath, next, 0o600);
     await appendEvent({ type: 'scheduledTask.deleted', details: { id } });
+    return { id };
+  });
+}
+
+// Custom commands: item 9 of the roadmap -- "keyword -> fixed prompt, pre-approved tools",
+// deliberately ~90% the same shape as a scheduled task (fixed prompt, systemPrompt,
+// allowedTools, skipMemoryInPrompt) minus everything cron-specific (schedule, own
+// dedicated chat, lastRun tracking). The trigger is a `/slug` typed in the composer,
+// and unlike a scheduled task it runs inline in whatever chat the user already has open.
+function sanitizeCommandTrigger(value) {
+  const slug = String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || 'comando';
+}
+
+function normalizeCustomCommand(input = {}, existing = null) {
+  const now = new Date().toISOString();
+  const allowedTools = Array.isArray(input.allowedTools)
+    ? input.allowedTools.filter((name) => KNOWN_SCHEDULED_TASK_TOOL_NAMES.includes(name))
+    : existing?.allowedTools || [];
+  return {
+    id: existing?.id || crypto.randomUUID(),
+    name: String(input.name ?? existing?.name ?? 'Comando').trim().slice(0, 200) || 'Comando',
+    trigger: sanitizeCommandTrigger(input.trigger ?? existing?.trigger),
+    prompt: String(input.prompt ?? existing?.prompt ?? '').trim(),
+    systemPrompt: String(input.systemPrompt ?? existing?.systemPrompt ?? '').trim().slice(0, 4000),
+    allowedTools,
+    skipMemoryInPrompt: input.skipMemoryInPrompt === undefined ? existing?.skipMemoryInPrompt ?? false : input.skipMemoryInPrompt === true,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export async function listCustomCommands() {
+  await ensureRuntime();
+  const commands = await readJson(getActivePaths().customCommandsPath, []);
+  return Array.isArray(commands) ? commands : [];
+}
+
+export async function getCustomCommand(identifier) {
+  const commands = await listCustomCommands();
+  const value = String(identifier || '').trim();
+  const command = commands.find((item) => item.id === value || item.trigger === value);
+  if (!command) {
+    const error = new Error('Comando não encontrado.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return command;
+}
+
+export async function createCustomCommand(input = {}) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  return withFileLock(paths.customCommandsPath, async () => {
+    const commands = await readJson(paths.customCommandsPath, []);
+    const command = normalizeCustomCommand(input);
+    if (commands.some((item) => item.trigger === command.trigger)) {
+      const error = new Error(`Já existe um comando com o gatilho "/${command.trigger}".`);
+      error.statusCode = 409;
+      throw error;
+    }
+    await writeJson(paths.customCommandsPath, [...commands, command], 0o600);
+    await appendEvent({ type: 'customCommand.created', details: { id: command.id, trigger: command.trigger } });
+    return command;
+  });
+}
+
+export async function updateCustomCommand(id, patch = {}) {
+  const paths = getActivePaths();
+  return withFileLock(paths.customCommandsPath, async () => {
+    const commands = await readJson(paths.customCommandsPath, []);
+    let updated = null;
+    const next = commands.map((command) => {
+      if (command.id !== id) return command;
+      updated = normalizeCustomCommand({ ...command, ...patch }, command);
+      return updated;
+    });
+    if (!updated) {
+      const error = new Error('Comando não encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (commands.some((item) => item.id !== id && item.trigger === updated.trigger)) {
+      const error = new Error(`Já existe um comando com o gatilho "/${updated.trigger}".`);
+      error.statusCode = 409;
+      throw error;
+    }
+    await writeJson(paths.customCommandsPath, next, 0o600);
+    await appendEvent({ type: 'customCommand.updated', details: { id } });
+    return updated;
+  });
+}
+
+export async function deleteCustomCommand(id) {
+  const paths = getActivePaths();
+  return withFileLock(paths.customCommandsPath, async () => {
+    const commands = await readJson(paths.customCommandsPath, []);
+    const next = commands.filter((command) => command.id !== id);
+    if (next.length === commands.length) {
+      const error = new Error('Comando não encontrado.');
+      error.statusCode = 404;
+      throw error;
+    }
+    await writeJson(paths.customCommandsPath, next, 0o600);
+    await appendEvent({ type: 'customCommand.deleted', details: { id } });
     return { id };
   });
 }
@@ -2217,6 +2330,8 @@ function buildProfilePaths(profileId = 'default') {
     scheduledTasksPath: path.join(profileRuntimeHome, 'scheduledTasks.json'),
     skillsDir: path.join(profileRuntimeHome, 'skills'),
     skillsIndexPath: path.join(profileRuntimeHome, 'skills.json'),
+    customCommandsPath: path.join(profileRuntimeHome, 'customCommands.json'),
+    secretsPath: path.join(profileRuntimeHome, 'secrets.json'),
   };
 }
 

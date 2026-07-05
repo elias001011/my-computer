@@ -15,11 +15,13 @@ import {
   appendEvent,
   activateProfile,
   createChat,
+  createCustomCommand,
   createProfile,
   createScheduledTask,
   deleteAllChats,
   deleteChat,
   deleteAttachment,
+  deleteCustomCommand,
   deleteProfile,
   deleteScheduledTask,
   deleteSkill,
@@ -27,10 +29,12 @@ import {
   editUserMessage,
   ensureRuntime,
   exportRuntimeData,
+  getCustomCommand,
   getRuntimeInfo,
   getServerLocalTimezone,
   importRuntimeData,
   listChats,
+  listCustomCommands,
   listScheduledTasks,
   listSkills,
   listUserMemoryFilesWithHints,
@@ -50,6 +54,7 @@ import {
   saveConfig,
   updateProfile,
   updateChatMetadata,
+  updateCustomCommand,
   updateScheduledTask,
   updateSkill,
   withProfileScope,
@@ -139,6 +144,11 @@ async function handleApiScoped(request, response, url) {
 
   if (parts[1] === 'scheduled-tasks') {
     await handleScheduledTasksApi(request, response, parts);
+    return;
+  }
+
+  if (parts[1] === 'custom-commands') {
+    await handleCustomCommandsApi(request, response, parts);
     return;
   }
 
@@ -448,10 +458,19 @@ async function handleChatsApi(request, response, parts) {
 
   if (method === 'POST' && chatId && parts[3] === 'messages') {
     const body = await readBody(request);
+    // A /command message runs inline in this same chat (unlike a scheduled task's own
+    // dedicated chat) with the command's own tool allowlist pre-approved and no interactive
+    // approval pause -- reusing the exact same scheduledTaskContext mechanism verbatim.
+    let commandContext = null;
+    if (body.commandId) {
+      const command = await getCustomCommand(body.commandId);
+      commandContext = { allowedTools: command.allowedTools || [], skipMemory: command.skipMemoryInPrompt === true, systemPrompt: command.systemPrompt || '' };
+    }
     const result = await sendUserMessage(chatId, body.content || '', {
       retryMessageId: body.retryMessageId || null,
       continueMessageId: body.continueMessageId || null,
       attachmentIds: body.attachmentIds || [],
+      scheduledTaskContext: commandContext,
     });
     sendJson(response, 200, { ...result, activeChatEvents: await readChatEvents(chatId) });
     return;
@@ -665,6 +684,38 @@ async function handleScheduledTasksApi(request, response, parts) {
   sendJson(response, 404, { error: 'Endpoint de tarefa agendada não encontrado.' });
 }
 
+async function handleCustomCommandsApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const commandId = parts[2];
+
+  if (method === 'GET' && !commandId) {
+    sendJson(response, 200, { customCommands: await listCustomCommands() });
+    return;
+  }
+
+  if (method === 'POST' && !commandId) {
+    const body = await readBody(request);
+    const command = await createCustomCommand(body);
+    sendJson(response, 201, { customCommand: command, customCommands: await listCustomCommands() });
+    return;
+  }
+
+  if (method === 'PUT' && commandId) {
+    const body = await readBody(request);
+    const command = await updateCustomCommand(commandId, body);
+    sendJson(response, 200, { customCommand: command, customCommands: await listCustomCommands() });
+    return;
+  }
+
+  if (method === 'DELETE' && commandId) {
+    await deleteCustomCommand(commandId);
+    sendJson(response, 200, { customCommands: await listCustomCommands() });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de comando não encontrado.' });
+}
+
 async function handleEmailTestApi(request, response) {
   const body = await readBody(request);
   const config = await loadConfig();
@@ -801,6 +852,7 @@ async function buildBootstrapPayload() {
     userMemoryFiles: await listUserMemoryFilesWithHints(),
     skills: await listSkills(),
     scheduledTasks: await listScheduledTasks(),
+    customCommands: await listCustomCommands(),
     serverLocalTimezone: getServerLocalTimezone(),
     runtimeHome: runtimeInfo.runtimeHome,
     rootRuntimeHome: runtimeInfo.rootRuntimeHome,

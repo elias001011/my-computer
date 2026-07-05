@@ -11,6 +11,10 @@ const state = {
   userMemoryFiles: [],
   skills: [],
   skillEditor: null,
+  customCommands: [],
+  commandEditorId: null,
+  secrets: [],
+  secretEditorId: null,
   profiles: [],
   activeProfile: null,
   runtimeHome: '',
@@ -539,6 +543,8 @@ function applyBootstrapData(data = {}) {
   Object.assign(state, data);
   state.userMemoryFiles = data.userMemoryFiles || state.userMemoryFiles || [];
   state.skills = data.skills || state.skills || [];
+  state.customCommands = data.customCommands || state.customCommands || [];
+  state.secrets = data.secrets || state.secrets || [];
   state.scheduledTasks = data.scheduledTasks || state.scheduledTasks || [];
   state.profiles = data.profiles || state.profiles || [];
   state.activeProfile = data.activeProfile || state.activeProfile || null;
@@ -1753,6 +1759,34 @@ function renderSettingsModal() {
               ${state.scheduledTaskEditorId ? renderScheduledTaskEditor() : ''}
             </section>
 
+            <section class="modal-section settings-panel ${activeSection === 'customCommands' ? 'active' : ''}" data-section="customCommands">
+              <h3>Comandos</h3>
+              <p class="help-text">Digite <code>/nome-do-comando</code> no início de uma mensagem, em qualquer chat, pra disparar um prompt fixo com tools pré-aprovadas (sem parar pra pedir permissão a cada uma) -- diferente de tarefa agendada, roda dentro do chat atual, na hora, não num horário. Qualquer texto depois do comando vira contexto extra pra ele.</p>
+              <div class="custom-command-list">
+                ${renderCustomCommandRows()}
+              </div>
+              <div class="button-row">
+                <button type="button" id="create-custom-command" ${state.busy ? 'disabled' : ''}>Criar comando</button>
+              </div>
+              ${state.commandEditorId ? renderCustomCommandEditor() : ''}
+            </section>
+
+            <section class="modal-section settings-panel ${activeSection === 'secrets' ? 'active' : ''}" data-section="secrets">
+              <h3>Variáveis de ambiente</h3>
+              <p class="help-text">Guarda segredos (tokens, chaves) que ferramentas de linha de comando já sabem usar via variável de ambiente -- ex.: <code>gh</code> lê <code>GITHUB_TOKEN</code> sozinho. Só o <strong>nome</strong> de cada variável entra no prompt da IA; o valor nunca é mostrado a ela. Quando ela roda um comando no terminal, o app injeta o valor real no ambiente do processo por trás dos panos -- ela referencia <code>$NOME</code> no comando sem nunca ver o segredo. Isso significa que o valor nunca vai pro provider de nuvem por esse caminho.</p>
+              <div class="secret-list">
+                ${renderSecretRows()}
+              </div>
+              <div class="button-row">
+                <button type="button" id="create-secret" ${state.busy ? 'disabled' : ''}>Nova variável</button>
+              </div>
+              ${state.secretEditorId ? renderSecretEditor() : ''}
+              <div class="settings-subpanel">
+                <h4>Tool get_env_var (opcional)</h4>
+                ${renderToolToggle('secretDisclosure', 'Permitir que a IA veja o valor quando pedir explicitamente', 'Só pra quando o valor precisa ser escrito literalmente em algum lugar (ex.: um arquivo .env) e o comando de terminal não resolve sozinho. Cada chamada pede sua aprovação e o valor entra na conversa -- se o provider não for Ollama local, o segredo VAI para a nuvem nesse caso. Desligado por padrão.')}
+              </div>
+            </section>
+
             <section class="modal-section settings-panel ${activeSection === 'email' ? 'active' : ''}" data-section="email">
               <h3>Email</h3>
               <p class="help-text">Envio de email via Resend, só envio por enquanto (sem receber/responder ainda). O destino é sempre o endereço configurado abaixo — nunca um endereço escolhido pela IA.</p>
@@ -1880,6 +1914,8 @@ function renderSettingsNav(activeSection) {
     ['terminal', 'Terminal'],
     ['context', 'Contexto'],
     ['scheduledTasks', 'Tarefas agendadas'],
+    ['customCommands', 'Comandos'],
+    ['secrets', 'Variáveis de ambiente'],
     ['email', 'Email'],
     ['network', 'Rede'],
     ['updates', 'Atualizações'],
@@ -2183,6 +2219,135 @@ function renderScheduledTaskEditor() {
       <div class="button-row">
         <button type="button" id="save-scheduled-task" ${state.busy ? 'disabled' : ''}>${isNew ? 'Criar' : 'Salvar'}</button>
         <button type="button" id="cancel-scheduled-task-edit">Cancelar</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderCustomCommandRows() {
+  const commands = state.customCommands || [];
+  if (!commands.length) return '<p class="help-text">Nenhum comando criado ainda.</p>';
+  return commands
+    .map(
+      (command) => `
+        <div class="profile-row">
+          <div>
+            <strong>/${escapeHtml(command.trigger)}</strong>
+            <span>${escapeHtml(command.name)}</span>
+            <small>Tools: ${command.allowedTools?.length ? escapeHtml(command.allowedTools.map((name) => SCHEDULED_TASK_TOOL_LABELS[name] || name).join(', ')) : 'nenhuma'}</small>
+          </div>
+          <div class="profile-row-actions">
+            <button type="button" class="edit-custom-command" data-command-id="${escapeAttr(command.id)}" ${state.busy ? 'disabled' : ''}>Editar</button>
+            <button type="button" class="delete-custom-command danger-button" data-command-id="${escapeAttr(command.id)}" ${state.busy ? 'disabled' : ''}>Apagar</button>
+          </div>
+        </div>
+      `,
+    )
+    .join('');
+}
+
+function renderCustomCommandEditor() {
+  const editingId = state.commandEditorId;
+  const isNew = editingId === 'new';
+  const command = isNew ? null : (state.customCommands || []).find((item) => item.id === editingId);
+  if (!isNew && !command) return '';
+  const allowedTools = new Set(command?.allowedTools || []);
+  return `
+    <div class="custom-command-editor notice-card">
+      <h4>${isNew ? 'Novo comando' : 'Editar comando'}</h4>
+      <div class="setup-grid">
+        <label>
+          Nome
+          <input id="cmd-name" value="${escapeAttr(command?.name || '')}" placeholder="Ex.: Revisar PR" />
+        </label>
+        <label>
+          Gatilho (após a /)
+          <input id="cmd-trigger" value="${escapeAttr(command?.trigger || '')}" placeholder="revisar-pr" />
+        </label>
+      </div>
+      <label>
+        Prompt fixo
+        <textarea id="cmd-prompt" rows="4" placeholder="O que a IA deve fazer quando este comando for usado?">${escapeHtml(command?.prompt || '')}</textarea>
+        <small class="help-text">Texto digitado depois do comando (ex.: "/revisar-pr foco em segurança") é anexado ao final deste prompt.</small>
+      </label>
+      <label>
+        System prompt (opcional)
+        <textarea id="cmd-system-prompt" rows="2" placeholder="Instruções fixas de tom/formato pra este comando.">${escapeHtml(command?.systemPrompt || '')}</textarea>
+      </label>
+      <label class="toggle-row switch-row">
+        <input type="checkbox" id="cmd-skip-memory" ${command?.skipMemoryInPrompt === true ? 'checked' : ''} />
+        <span class="switch" aria-hidden="true"></span>
+        <span>
+          <strong>Não incluir memórias neste comando</strong>
+          <small>Pula memória persistente global e arquivos de memória do usuário no prompt, pra economizar tokens.</small>
+        </span>
+      </label>
+      <fieldset class="scheduled-task-tools">
+        <legend>Tools permitidas (pré-aprovadas, sem parar pra pedir permissão)</legend>
+        ${Object.entries(SCHEDULED_TASK_TOOL_LABELS)
+          .map(
+            ([name, label]) => `
+              <label class="toggle-row">
+                <input type="checkbox" class="cmd-tool-checkbox" value="${escapeAttr(name)}" ${allowedTools.has(name) ? 'checked' : ''} />
+                ${escapeHtml(label)}
+              </label>
+            `,
+          )
+          .join('')}
+      </fieldset>
+      <div class="button-row">
+        <button type="button" id="save-custom-command" ${state.busy ? 'disabled' : ''}>${isNew ? 'Criar' : 'Salvar'}</button>
+        <button type="button" id="cancel-custom-command-edit">Cancelar</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSecretRows() {
+  const secrets = state.secrets || [];
+  if (!secrets.length) return '<p class="help-text">Nenhuma variável cadastrada ainda.</p>';
+  return secrets
+    .map(
+      (secret) => `
+        <div class="profile-row">
+          <div>
+            <strong>${escapeHtml(secret.name)}</strong>
+            <span>${escapeHtml(secret.description)}</span>
+            <small>Referencie como <code>$${escapeHtml(secret.name)}</code> em comandos de terminal.</small>
+          </div>
+          <div class="profile-row-actions">
+            <button type="button" class="edit-secret" data-secret-id="${escapeAttr(secret.id)}" ${state.busy ? 'disabled' : ''}>Editar</button>
+            <button type="button" class="delete-secret danger-button" data-secret-id="${escapeAttr(secret.id)}" ${state.busy ? 'disabled' : ''}>Apagar</button>
+          </div>
+        </div>
+      `,
+    )
+    .join('');
+}
+
+function renderSecretEditor() {
+  const editingId = state.secretEditorId;
+  const isNew = editingId === 'new';
+  const secret = isNew ? null : (state.secrets || []).find((item) => item.id === editingId);
+  if (!isNew && !secret) return '';
+  return `
+    <div class="secret-editor notice-card">
+      <h4>${isNew ? 'Nova variável de ambiente' : 'Editar variável'}</h4>
+      <label>
+        Nome (maiúsculas, sem espaço)
+        <input id="secret-name" value="${escapeAttr(secret?.name || '')}" placeholder="GITHUB_TOKEN" />
+      </label>
+      <label>
+        Descrição (a IA vê isso, nunca o valor)
+        <input id="secret-description" value="${escapeAttr(secret?.description || '')}" placeholder="Token de acesso ao GitHub, pra usar com gh/git" />
+      </label>
+      <label>
+        Valor ${isNew ? '' : '(deixe em branco pra manter o valor atual)'}
+        <input id="secret-value" type="password" placeholder="${isNew ? '' : '••••••••'}" autocomplete="off" />
+      </label>
+      <div class="button-row">
+        <button type="button" id="save-secret" ${state.busy ? 'disabled' : ''}>${isNew ? 'Criar' : 'Salvar'}</button>
+        <button type="button" id="cancel-secret-edit">Cancelar</button>
       </div>
     </div>
   `;
@@ -5317,6 +5482,24 @@ function bindAppEvents() {
     });
     document.querySelector('#save-scheduled-task')?.addEventListener('click', saveScheduledTaskFromEditor);
     document.querySelector('#cancel-scheduled-task-edit')?.addEventListener('click', closeScheduledTaskEditor);
+    document.querySelector('#create-custom-command')?.addEventListener('click', () => openCustomCommandEditor('new'));
+    document.querySelectorAll('.edit-custom-command').forEach((button) => {
+      button.addEventListener('click', () => openCustomCommandEditor(button.dataset.commandId));
+    });
+    document.querySelectorAll('.delete-custom-command').forEach((button) => {
+      button.addEventListener('click', () => deleteCustomCommandFromButton(button.dataset.commandId));
+    });
+    document.querySelector('#save-custom-command')?.addEventListener('click', saveCustomCommandFromEditor);
+    document.querySelector('#cancel-custom-command-edit')?.addEventListener('click', closeCustomCommandEditor);
+    document.querySelector('#create-secret')?.addEventListener('click', () => openSecretEditor('new'));
+    document.querySelectorAll('.edit-secret').forEach((button) => {
+      button.addEventListener('click', () => openSecretEditor(button.dataset.secretId));
+    });
+    document.querySelectorAll('.delete-secret').forEach((button) => {
+      button.addEventListener('click', () => deleteSecretFromButton(button.dataset.secretId));
+    });
+    document.querySelector('#save-secret')?.addEventListener('click', saveSecretFromEditor);
+    document.querySelector('#cancel-secret-edit')?.addEventListener('click', closeSecretEditor);
     document.querySelector('#send-test-email')?.addEventListener('click', sendTestEmail);
     document.querySelector('#sched-task-schedule-type')?.addEventListener('change', toggleScheduledTaskScheduleFields);
     document.querySelector('#sched-task-provider')?.addEventListener('change', (event) => {
@@ -5806,6 +5989,108 @@ async function runScheduledTaskNowFromButton(taskId) {
     const data = await api(`/api/scheduled-tasks/${encodeURIComponent(taskId)}/run`, { method: 'POST' });
     state.scheduledTasks = data.scheduledTasks || state.scheduledTasks;
     state.status = data.started === false ? 'Tarefa já estava em execução.' : 'Tarefa executada agora.';
+  });
+}
+
+function openCustomCommandEditor(id) {
+  if (state.busy) return;
+  state.commandEditorId = id;
+  renderPreservingVisualState();
+}
+
+function closeCustomCommandEditor() {
+  state.commandEditorId = null;
+  renderPreservingVisualState();
+}
+
+function readCustomCommandFormValues() {
+  return {
+    name: document.getElementById('cmd-name')?.value || 'Comando',
+    trigger: document.getElementById('cmd-trigger')?.value || '',
+    prompt: document.getElementById('cmd-prompt')?.value || '',
+    systemPrompt: document.getElementById('cmd-system-prompt')?.value || '',
+    skipMemoryInPrompt: document.getElementById('cmd-skip-memory')?.checked === true,
+    allowedTools: Array.from(document.querySelectorAll('.cmd-tool-checkbox:checked')).map((el) => el.value),
+  };
+}
+
+async function saveCustomCommandFromEditor() {
+  if (state.busy) return;
+  const editingId = state.commandEditorId;
+  if (!editingId) return;
+  const payload = readCustomCommandFormValues();
+  await runAction(editingId === 'new' ? 'Criando comando...' : 'Salvando comando...', async () => {
+    const data =
+      editingId === 'new'
+        ? await api('/api/custom-commands', { method: 'POST', body: payload })
+        : await api(`/api/custom-commands/${encodeURIComponent(editingId)}`, { method: 'PUT', body: payload });
+    state.customCommands = data.customCommands || state.customCommands;
+    state.commandEditorId = null;
+    state.status = 'Comando salvo.';
+  });
+}
+
+async function deleteCustomCommandFromButton(commandId) {
+  if (state.busy) return;
+  const command = (state.customCommands || []).find((item) => item.id === commandId);
+  if (!command) return;
+  const confirmed = confirmUi(`Apagar o comando "/${command.trigger}"?`);
+  if (!confirmed) return;
+  await runAction('Apagando comando...', async () => {
+    const data = await api(`/api/custom-commands/${encodeURIComponent(commandId)}`, { method: 'DELETE' });
+    state.customCommands = data.customCommands || state.customCommands;
+    if (state.commandEditorId === commandId) state.commandEditorId = null;
+  });
+}
+
+function openSecretEditor(id) {
+  if (state.busy) return;
+  state.secretEditorId = id;
+  renderPreservingVisualState();
+}
+
+function closeSecretEditor() {
+  state.secretEditorId = null;
+  renderPreservingVisualState();
+}
+
+async function saveSecretFromEditor() {
+  if (state.busy) return;
+  const editingId = state.secretEditorId;
+  if (!editingId) return;
+  const name = document.getElementById('secret-name')?.value || '';
+  const description = document.getElementById('secret-description')?.value || '';
+  const value = document.getElementById('secret-value')?.value || '';
+  if (editingId === 'new' && !value.trim()) {
+    state.error = 'Valor é obrigatório pra criar uma variável nova.';
+    renderPreservingVisualState();
+    return;
+  }
+  const payload = { name, description };
+  // Blank value on edit means "keep the current value" -- never overwrite a secret with
+  // an accidental empty string just because the field was left blank on save.
+  if (value.trim() || editingId === 'new') payload.value = value;
+  await runAction(editingId === 'new' ? 'Criando variável...' : 'Salvando variável...', async () => {
+    const data =
+      editingId === 'new'
+        ? await api('/api/secrets', { method: 'POST', body: payload })
+        : await api(`/api/secrets/${encodeURIComponent(editingId)}`, { method: 'PUT', body: payload });
+    state.secrets = data.secrets || state.secrets;
+    state.secretEditorId = null;
+    state.status = 'Variável salva.';
+  });
+}
+
+async function deleteSecretFromButton(secretId) {
+  if (state.busy) return;
+  const secret = (state.secrets || []).find((item) => item.id === secretId);
+  if (!secret) return;
+  const confirmed = confirmUi(`Apagar a variável "${secret.name}"? Comandos que a referenciam vão parar de encontrá-la.`);
+  if (!confirmed) return;
+  await runAction('Apagando variável...', async () => {
+    const data = await api(`/api/secrets/${encodeURIComponent(secretId)}`, { method: 'DELETE' });
+    state.secrets = data.secrets || state.secrets;
+    if (state.secretEditorId === secretId) state.secretEditorId = null;
   });
 }
 
@@ -6586,6 +6871,9 @@ async function sendMessageFromComposerDraft() {
 async function sendMessageFromValues(textarea, content) {
   if (!state.activeChat) return;
   content = expandMentionsForSend(content);
+  const detectedCommand = detectCustomCommand(content);
+  const commandId = detectedCommand?.command.id || null;
+  if (detectedCommand) content = expandCustomCommandForSend(detectedCommand);
   const chatId = state.activeChat?.id;
   if (chatHasActiveToolApproval(state.activeChat)) {
     state.error = 'Aprove ou negue a tool pendente antes de enviar outra mensagem neste chat.';
@@ -6626,7 +6914,7 @@ async function sendMessageFromValues(textarea, content) {
   autoResizeComposer();
   const attachments = state.pendingAttachments;
   state.pendingAttachments = [];
-  const sendResult = await sendMessageContent(content || 'Analise os anexos enviados.', { attachments });
+  const sendResult = await sendMessageContent(content || 'Analise os anexos enviados.', { attachments, commandId });
   if (state.error && !sendResult?.messageAccepted && state.activeChat?.id === chatId) {
     state.pendingAttachments = attachments;
     setComposerDraft(chatId, content);
@@ -6676,6 +6964,7 @@ async function sendMessageContent(content, options = {}) {
             retryMessageId: options.retryMessageId,
             continueMessageId: options.continueMessageId,
             attachmentIds: attachments.map((attachment) => attachment.id),
+            commandId: options.commandId || null,
           },
         });
         messageAccepted = true;
@@ -6898,6 +7187,12 @@ function getComposerMentionContext(textarea) {
   let start = cursor;
   while (start > 0 && !/\s/.test(value[start - 1])) start -= 1;
   const token = value.slice(start, cursor);
+  // Slash commands only trigger at the very start of the message (Discord/Slack
+  // convention), never mid-sentence -- that keeps a stray "/" elsewhere from popping a menu.
+  if (token.startsWith('/') && start === 0 && token.length <= 60) {
+    const raw = token.slice(1);
+    return { start, end: cursor, token, raw, query: raw.toLowerCase(), isSlash: true };
+  }
   // Longer cap than a tool name so a `@path:/some/long/path` token still counts.
   if (!token.startsWith('@') || token.length > 300) return null;
   const raw = token.slice(1);
@@ -6909,6 +7204,18 @@ function updateMentionSuggestions() {
   const context = getComposerMentionContext(textarea);
   if (!context) {
     closeMentionSuggestions();
+    return;
+  }
+  if (context.isSlash) {
+    const matches = (state.customCommands || [])
+      .filter((command) => !context.query || command.trigger.includes(context.query) || command.name.toLowerCase().includes(context.query))
+      .map((command) => ({ name: command.trigger, isCommand: true, label: command.name }));
+    if (!matches.length) {
+      closeMentionSuggestions();
+      return;
+    }
+    mentionState = { ...context, matches, activeIndex: 0 };
+    renderMentionSuggestions();
     return;
   }
   // Path-citation mode: the user is typing `@path:<file or dir>`.
@@ -6950,7 +7257,7 @@ function renderMentionSuggestions() {
     .map(
       (item, index) => `
         <button type="button" class="mention-suggestion ${index === mentionState.activeIndex ? 'active' : ''}" data-tool-name="${escapeAttr(item.name)}">
-          <strong>${item.isPath ? '📁 Caminho de arquivo/diretório' : `@${escapeHtml(item.name)}`}</strong>
+          <strong>${item.isPath ? '📁 Caminho de arquivo/diretório' : item.isCommand ? `/${escapeHtml(item.name)}` : `@${escapeHtml(item.name)}`}</strong>
           <span>${escapeHtml(item.label)}</span>
         </button>
       `,
@@ -6997,7 +7304,7 @@ function applyMentionSuggestion(toolName) {
     return;
   }
 
-  const insertText = `@${item.name} `;
+  const insertText = item.isCommand ? `/${item.name} ` : `@${item.name} `;
   textarea.value = `${value.slice(0, mentionState.start)}${insertText}${value.slice(mentionState.end)}`;
   const nextPosition = mentionState.start + insertText.length;
   textarea.selectionStart = nextPosition;
@@ -7026,6 +7333,23 @@ function expandMentionsForSend(content) {
     return `(usuário sugere usar a tool "${normalizedName}" -- ${label})`;
   });
   return out;
+}
+
+// A message starting with /trigger (optionally followed by extra text) runs a saved
+// custom command: its fixed prompt (+ the extra text, if any) becomes the actual message
+// content, with its own tool allowlist pre-approved for that turn -- same mechanism a
+// scheduled task uses, just triggered live instead of by a cron tick.
+function detectCustomCommand(content) {
+  const match = /^\/([a-z0-9-]+)(?:\s+([\s\S]*))?$/i.exec(String(content).trim());
+  if (!match) return null;
+  const trigger = match[1].toLowerCase();
+  const command = (state.customCommands || []).find((item) => item.trigger === trigger);
+  if (!command) return null;
+  return { command, extra: (match[2] || '').trim() };
+}
+
+function expandCustomCommandForSend({ command, extra }) {
+  return extra ? `${command.prompt}\n\n${extra}` : command.prompt;
 }
 
 function insertTextAtCursor(textarea, text) {
