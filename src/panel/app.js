@@ -21,6 +21,7 @@ const state = {
   rootRuntimeHome: '',
   networkStatus: null,
   busy: false,
+  mobileSidebarOpen: false,
   settingsOpen: false,
   settingsSection: 'identity',
   settingsDraft: null,
@@ -1094,7 +1095,9 @@ function renderApp() {
       : 'Digite para criar o primeiro chat...';
   app.innerHTML = `
     <div class="app-shell">
-      <aside class="sidebar">
+      ${state.mobileSidebarOpen ? '<div class="mobile-sidebar-backdrop" id="mobile-sidebar-backdrop"></div>' : ''}
+      <aside class="sidebar ${state.mobileSidebarOpen ? 'mobile-open' : ''}">
+        <button type="button" class="icon-button small-icon mobile-sidebar-close" id="close-mobile-sidebar" aria-label="Fechar histórico de chats" title="Fechar">×</button>
         <div class="brand">
           <h1>My Computer</h1>
           <span>${escapeHtml(providerLabel(state.config.provider))} · ${escapeHtml(state.config.model || '')}</span>
@@ -1124,6 +1127,7 @@ function renderApp() {
 
       <main class="chat-main">
         <header class="chat-header">
+          <button type="button" class="icon-button small-icon mobile-sidebar-toggle" id="toggle-mobile-sidebar" aria-label="Abrir histórico de chats" title="Histórico de chats">☰</button>
           <div>
             <h2 class="chat-title">${escapeHtml(displayChatTitle(chat?.title || 'Chat'))}</h2>
             <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(providerLabel(chatProviderId))} - ${escapeHtml(chatModel)}` : 'Sem chat ativo'}</div>
@@ -5292,6 +5296,9 @@ function getUserMemoryAccept() {
 function bindAppEvents() {
   document.querySelector('#new-chat').addEventListener('click', createNewChat);
   document.querySelector('#open-settings').addEventListener('click', openSettings);
+  document.querySelector('#toggle-mobile-sidebar')?.addEventListener('click', toggleMobileSidebar);
+  document.querySelector('#close-mobile-sidebar')?.addEventListener('click', closeMobileSidebar);
+  document.querySelector('#mobile-sidebar-backdrop')?.addEventListener('click', closeMobileSidebar);
   document.querySelector('#active-profile-select')?.addEventListener('change', (event) => switchProfile(event.target.value));
   document.querySelector('#quick-create-profile')?.addEventListener('click', createProfileFromPrompt);
   document.querySelector('#chat-search-input')?.addEventListener('input', updateChatSearch);
@@ -6802,10 +6809,15 @@ function applyCreatedChat(data = {}) {
   state.messageDetailsMessageId = null;
   state.chatSettingsDraft = null;
   state.chatSettingsDirty = false;
+  state.mobileSidebarOpen = false;
 }
 
 async function loadChat(chatId) {
-  if (state.activeChat?.id === chatId) return;
+  if (state.activeChat?.id === chatId) {
+    state.mobileSidebarOpen = false;
+    renderPreservingVisualState();
+    return;
+  }
   if (!canLeaveActiveChatDraft()) return;
   await runAction('Abrindo chat...', async () => {
     const data = await api(`/api/chats/${chatId}`);
@@ -6815,7 +6827,19 @@ async function loadChat(chatId) {
     state.messageDetailsMessageId = null;
     state.chatSettingsDraft = null;
     state.chatSettingsDirty = false;
+    state.mobileSidebarOpen = false;
   });
+}
+
+function toggleMobileSidebar() {
+  state.mobileSidebarOpen = !state.mobileSidebarOpen;
+  renderPreservingVisualState();
+}
+
+function closeMobileSidebar() {
+  if (!state.mobileSidebarOpen) return;
+  state.mobileSidebarOpen = false;
+  renderPreservingVisualState();
 }
 
 function canLeaveActiveChatDraft() {
@@ -8498,6 +8522,7 @@ function openSettings() {
   state.settingsDirty = false;
   state.settingsProvider = isOfflineMode(state.settingsDraft.config) ? 'ollama' : state.settingsDraft.config.provider;
   state.settingsSection = state.settingsSection || 'identity';
+  state.mobileSidebarOpen = false;
   renderPreservingVisualState();
 }
 

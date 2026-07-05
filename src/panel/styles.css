@@ -1133,6 +1133,19 @@ pre {
   font-size: 16px;
 }
 
+/* Mobile-only chrome: the hamburger that opens the chat-history drawer, the drawer's
+   own close button, and its backdrop. Hidden on desktop, where the sidebar is always
+   visible in the grid and none of this applies -- see the max-width: 760px block below
+   for what turns them on. */
+.mobile-sidebar-toggle,
+.mobile-sidebar-close {
+  display: none;
+}
+
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
 .attach-button,
 .file-button {
   min-height: 36px;
@@ -2179,39 +2192,53 @@ pre {
   }
 
   .app-shell {
-    grid-template-rows: 184px minmax(0, 1fr) auto;
+    /* The sidebar no longer reserves a row -- it's a floating drawer now (below),
+       opened by the hamburger button next to the chat title. */
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .sidebar,
   .inspector {
     height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
+  /* Sidebar becomes an off-canvas drawer: hidden until the hamburger button in the
+     chat header opens it, then it floats over the chat as a fixed panel with its own
+     backdrop -- everything that isn't chat (new chat, seções, busca, histórico) lives
+     here instead of a permanent strip eating the top of the screen. */
   .sidebar {
-    max-height: none;
-    overflow: auto;
-    padding: 12px;
+    display: none;
   }
 
-  .sidebar .brand,
-  .runtime {
-    display: none;
+  .sidebar.mobile-open {
+    display: flex;
+    position: fixed;
+    inset: 0 14% 0 0;
+    z-index: 60;
+    height: 100dvh;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .mobile-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .mobile-sidebar-toggle,
+  .mobile-sidebar-close {
+    display: inline-flex;
+  }
+
+  .mobile-sidebar-close {
+    align-self: flex-end;
   }
 
   .sidebar-actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .chat-list {
-    display: flex;
-    overflow-x: auto;
-    gap: 8px;
-  }
-
-  .chat-item {
-    min-width: 220px;
   }
 
   .chat-main {
@@ -2233,9 +2260,18 @@ pre {
   }
 
   .chat-header {
-    align-items: flex-start;
-    padding: 12px;
-    gap: 10px;
+    min-height: 0;
+    align-items: center;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .chat-header .chat-title {
+    font-size: 15px;
+  }
+
+  .chat-header .meta {
+    font-size: 11px;
   }
 
   .chat-header-actions {
