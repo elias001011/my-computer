@@ -4,6 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>My Computer</title>
+    <script>
+      // Sets data-theme before first paint so there's no flash of the light theme
+      // while app.js is still fetching the real config over the network -- the
+      // stylesheet below is what actually blocks rendering, so this has to run first.
+      (function () {
+        try {
+          var cached = localStorage.getItem('mc-theme-preference');
+          var resolved = cached;
+          if (!cached || cached === 'system') {
+            resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.dataset.theme = resolved === 'dark' ? 'dark' : 'light';
+          if (cached) document.documentElement.dataset.themePreference = cached;
+        } catch (error) {
+          // localStorage/matchMedia can throw in locked-down contexts; falling back
+          // to the default light :root is harmless, app.js still re-applies shortly.
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>

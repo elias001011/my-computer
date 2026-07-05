@@ -571,6 +571,14 @@ function applyTheme(theme = 'light') {
     : selected;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = selected;
+  // Cached so the inline script in index.html can set data-theme before first paint on
+  // the next load, instead of waiting for the config fetch and flashing the light
+  // :root defaults in the meantime.
+  try {
+    localStorage.setItem('mc-theme-preference', selected);
+  } catch {
+    // Best-effort only; a failure here just means the next load re-flashes once.
+  }
 }
 
 function getUiLanguage() {
