@@ -2843,7 +2843,7 @@ function normalizeAppearanceSettings(appearance = {}) {
   const theme = String(appearance.theme || 'light').trim();
   const uiLanguage = String(appearance.uiLanguage || 'en-US').trim();
   return {
-    theme: ['light', 'dark', 'system'].includes(theme) ? theme : 'light',
+    theme: ['light', 'dark', 'black', 'system'].includes(theme) ? theme : 'light',
     uiLanguage: ['en-US', 'pt-BR'].includes(uiLanguage) ? uiLanguage : 'en-US',
   };
 }

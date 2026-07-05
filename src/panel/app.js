@@ -238,6 +238,7 @@ const EN_TEXT = new Map([
   ['Alterações não salvas', 'Unsaved changes'],
   ['Claro', 'Light'],
   ['Escuro', 'Dark'],
+  ['Escuro 100% (preto)', '100% black'],
   ['Sistema', 'System'],
   ['Automático', 'Automatic'],
   ['Português brasileiro', 'Brazilian Portuguese'],
@@ -565,7 +566,7 @@ function render() {
 }
 
 function applyTheme(theme = 'light') {
-  const selected = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+  const selected = ['light', 'dark', 'black', 'system'].includes(theme) ? theme : 'light';
   const resolved = selected === 'system'
     ? window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
     : selected;
@@ -4781,6 +4782,7 @@ function renderThemeOptions(selectedTheme = 'light') {
   const themes = [
     ['light', 'Claro'],
     ['dark', 'Escuro'],
+    ['black', 'Escuro 100% (preto)'],
     ['system', 'Sistema'],
   ];
   return themes

@@ -15,7 +15,7 @@
           if (!cached || cached === 'system') {
             resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
           }
-          document.documentElement.dataset.theme = resolved === 'dark' ? 'dark' : 'light';
+          document.documentElement.dataset.theme = resolved === 'dark' || resolved === 'black' ? resolved : 'light';
           if (cached) document.documentElement.dataset.themePreference = cached;
         } catch (error) {
           // localStorage/matchMedia can throw in locked-down contexts; falling back
