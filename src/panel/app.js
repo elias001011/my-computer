@@ -1533,6 +1533,13 @@ function renderSettingsModal() {
                 ${renderToolToggle('chatTitle', 'Título do chat', 'Permite que a IA renomeie o chat com rename_chat, normalmente depois da primeira mensagem.')}
               </div>
               <div class="settings-subpanel">
+                <label>
+                  Rodadas máximas de tools por mensagem
+                  <input type="number" name="maxToolRounds" id="max-tool-rounds" min="1" max="200" value="${escapeAttr(draftConfig.tools?.maxToolRounds ?? 8)}" />
+                </label>
+                <p class="help-text">Quantas vezes seguidas a IA pode chamar uma tool antes de ser forçada a responder (ou parar incompleta, com opção de Continuar) dentro de uma mesma mensagem. Com "Incentivar investigações mais profundas" ligado, esse número dobra automaticamente. Padrão 8 -- suba se tarefas complexas estiverem parando no meio por atingir o limite.</p>
+              </div>
+              <div class="settings-subpanel">
                 <label class="toggle-row switch-row">
                   <input type="checkbox" name="tool_fileDelivery" id="tool-fileDelivery" ${draftConfig.tools?.fileDelivery === true ? 'checked' : ''} />
                   <span class="switch" aria-hidden="true"></span>
@@ -5317,6 +5324,11 @@ function bindAppEvents() {
     applyMentionSuggestion(button.dataset.toolName);
   });
   document.querySelector('#file-input')?.addEventListener('change', uploadSelectedFiles);
+  const composerEl = document.querySelector('#composer');
+  composerEl?.addEventListener('dragenter', handleComposerDragEnter);
+  composerEl?.addEventListener('dragover', handleComposerDragOver);
+  composerEl?.addEventListener('dragleave', handleComposerDragLeave);
+  composerEl?.addEventListener('drop', handleComposerDrop);
   document.querySelectorAll('.remove-pending-attachment').forEach((button) => {
     button.addEventListener('click', () => removePendingAttachment(button.dataset.attachmentId));
   });
@@ -6152,6 +6164,12 @@ async function deleteUserMemoryFile(fileId) {
 async function uploadSelectedFiles(event) {
   const files = [...(event.target.files || [])];
   event.target.value = '';
+  await uploadFiles(files);
+}
+
+// Shared by the file-picker input and drag-and-drop onto the composer: same
+// per-file validation, same one-attachment-per-request upload loop.
+async function uploadFiles(files) {
   if (!files.length || state.busy) return;
   if (!state.activeChat) {
     const draftContent = document.querySelector('#composer textarea')?.value || getComposerDraft();
@@ -6192,6 +6210,35 @@ async function uploadSelectedFiles(event) {
       state.pendingAttachments = [...state.pendingAttachments, data.attachment];
     });
   }
+}
+
+let dragDepth = 0;
+
+function handleComposerDragEnter(event) {
+  event.preventDefault();
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+  dragDepth += 1;
+  document.querySelector('#composer')?.classList.add('drag-over');
+}
+
+function handleComposerDragOver(event) {
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+}
+
+function handleComposerDragLeave(event) {
+  event.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) document.querySelector('#composer')?.classList.remove('drag-over');
+}
+
+async function handleComposerDrop(event) {
+  event.preventDefault();
+  dragDepth = 0;
+  document.querySelector('#composer')?.classList.remove('drag-over');
+  const files = [...(event.dataTransfer?.files || [])];
+  await uploadFiles(files);
 }
 
 async function openAttachmentViewer(attachmentId) {
@@ -7913,6 +7960,7 @@ async function saveGeneralSettings(event, options = {}) {
       autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
       skills: form.get('tool_skills') === 'on',
       secretDisclosure: form.get('tool_secretDisclosure') === 'on',
+      maxToolRounds: Number(form.get('maxToolRounds') || 8),
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
@@ -8111,6 +8159,7 @@ function captureSettingsDraftFromForm() {
     autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
     skills: form.get('tool_skills') === 'on',
     secretDisclosure: form.get('tool_secretDisclosure') === 'on',
+    maxToolRounds: Number(form.get('maxToolRounds') || 8),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',

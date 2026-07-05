@@ -1,0 +1,129 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+function toolCallResponse(round) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: `r${round}`, type: 'function', function: { name: 'read_skill', arguments: JSON.stringify({ action: 'list', reason: 'test' }) } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: {},
+    }),
+  };
+}
+
+async function baseConfig(store, extraTools = {}) {
+  await store.ensureRuntime();
+  await store.saveConfig({
+    setupComplete: true,
+    provider: 'openai-compatible',
+    model: 'gpt-5.5',
+    tools: { terminal: false, searchMode: 'off', webSearch: false, alwaysAllow: true, ...extraTools },
+    providerSettings: {
+      'openai-compatible': { baseUrl: 'https://example.test/v1', apiKeys: [{ value: 'test-key' }] },
+    },
+  });
+}
+
+test('a low maxToolRounds stops the run after exactly that many rounds', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-tool-rounds-low-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let round = 0;
+  global.fetch = async (url) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch in test: ${url}`);
+    round += 1;
+    return toolCallResponse(round); // never stops calling tools on its own
+  };
+
+  try {
+    const token = `${Date.now()}-tool-rounds-low`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    await baseConfig(store, { maxToolRounds: 2 });
+    const chat = await store.createChat('Tool rounds low', { provider: 'openai-compatible', model: 'gpt-5.5' });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Continue chamando tools.');
+    assert.equal(result.assistantMessage.status, 'incomplete');
+    assert.match(result.assistantMessage.content, /limite de rodadas de tools/);
+    assert.equal(result.assistantMessage.toolUses.length, 2, 'exactly maxToolRounds tool rounds should have run');
+    // +1: after exhausting the round budget, the app makes one final forced
+    // no-tools call to get a wrap-up message instead of just cutting off.
+    assert.equal(round, 3);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('a higher configured maxToolRounds lets a task that needed more rounds finish normally', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-tool-rounds-high-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let round = 0;
+  const TOTAL_TOOL_ROUNDS = 5; // would already exceed the old hardcoded default of 8? no -- exceeds a tight custom limit below
+  global.fetch = async (url) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch in test: ${url}`);
+    round += 1;
+    if (round <= TOTAL_TOOL_ROUNDS) return toolCallResponse(round);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { role: 'assistant', content: 'concluído' }, finish_reason: 'stop' }], usage: {} }),
+    };
+  };
+
+  try {
+    const token = `${Date.now()}-tool-rounds-high`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    // 3 would be too tight for 5 tool rounds + 1 final answer; 10 is generous enough.
+    await baseConfig(store, { maxToolRounds: 10 });
+    const chat = await store.createChat('Tool rounds high', { provider: 'openai-compatible', model: 'gpt-5.5' });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Tarefa longa com várias tools.');
+    assert.equal(result.assistantMessage.status, 'sent');
+    assert.equal(result.assistantMessage.content, 'concluído');
+    assert.equal(result.assistantMessage.toolUses.length, TOTAL_TOOL_ROUNDS);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('deepInvestigation doubles whatever maxToolRounds is configured', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-tool-rounds-deep-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let round = 0;
+  global.fetch = async (url) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch in test: ${url}`);
+    round += 1;
+    return toolCallResponse(round);
+  };
+
+  try {
+    const token = `${Date.now()}-tool-rounds-deep`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    await baseConfig(store, { maxToolRounds: 3, deepInvestigation: true });
+    const chat = await store.createChat('Tool rounds deep', { provider: 'openai-compatible', model: 'gpt-5.5' });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Investigue a fundo.');
+    assert.equal(result.assistantMessage.toolUses.length, 6, 'deepInvestigation should double the configured 3 to 6 tool rounds');
+    // +1 forced final no-tools call once the (doubled) budget runs out, same as above.
+    assert.equal(round, 7);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

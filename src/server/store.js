@@ -64,6 +64,7 @@ export const defaultConfig = Object.freeze({
     chatDocuments: true,
     skills: true,
     secretDisclosure: false,
+    maxToolRounds: 8,
   },
   userMemory: {
     sendFilesToPrompt: false,
@@ -2686,6 +2687,10 @@ function normalizeTools(tools = {}, options = {}) {
     chatDocuments: tools.chatDocuments !== false,
     skills: tools.skills !== false,
     secretDisclosure: tools.secretDisclosure === true,
+    // Generous ceiling (200) because the whole point of raising this is letting deep
+    // investigation genuinely chain as many rounds as a task needs; deepInvestigation
+    // already doubles whatever is configured here (see getMaxToolRounds in assistant.js).
+    maxToolRounds: clampInteger(tools.maxToolRounds, 1, 200, 8),
   };
 }
 

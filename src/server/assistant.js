@@ -69,7 +69,6 @@ import path from 'node:path';
 const MAX_CONTEXT_CHARS = 28000;
 const MAX_CONTEXT_SAVE_CHARS = 120000;
 const MAX_TOOL_ROUNDS = 8;
-const MAX_DEEP_INVESTIGATION_TOOL_ROUNDS = 16;
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const INCOMPLETE_FINISH_REASONS = new Set(['length', 'max_tokens', 'model_length', 'token_limit']);
 const MEMORY_TOOL_ACTIONS = new Set(['read', 'write', 'append']);
@@ -1302,7 +1301,11 @@ function createToolTraceEntry(toolUse) {
 }
 
 function getMaxToolRounds(config = {}) {
-  return config.tools?.deepInvestigation ? MAX_DEEP_INVESTIGATION_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+  const base = Number(config.tools?.maxToolRounds) || MAX_TOOL_ROUNDS;
+  // Deep investigation asks the model to keep chaining tool calls until it actually
+  // understands the mechanism, not just until the first round runs out -- so it gets
+  // double whatever the user configured, same ratio as the old fixed 8/16 default.
+  return config.tools?.deepInvestigation ? base * 2 : base;
 }
 
 function getMessageContinuationGroupId(message = {}) {

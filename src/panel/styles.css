@@ -1052,6 +1052,28 @@ pre {
   display: grid;
   gap: 10px;
   background: var(--bg);
+  position: relative;
+}
+
+.composer.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background: var(--surface-accent-soft);
+}
+
+.composer.drag-over::after {
+  content: 'Solte para anexar';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: var(--surface-accent-soft);
+  opacity: 0.92;
+  pointer-events: none;
 }
 
 .composer-main {
