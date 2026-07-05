@@ -184,6 +184,12 @@ export async function openSession(chatId, options = {}) {
 
   const args = ['new-session', '-d', '-s', sessionId, '-x', '220', '-y', '50', '-c', cwd, '-e', `MC_TERMINAL_MODE=session-${terminalMode}`];
   if (terminalMode === 'isolated') args.push('-e', `HOME=${isolatedHome}`);
+  // Set once at session creation via tmux's own -e flag -- never typed into the pane, so a
+  // configured secret's value never shows up in captured screen text (which does get sent
+  // back to the model as the write/read tool result). Persists for the session's lifetime.
+  for (const [name, value] of Object.entries(options.secretsEnv || {})) {
+    args.push('-e', `${name}=${value}`);
+  }
   const created = await runTmux(args);
   if (created.code !== 0) {
     throw createError(500, `Falha ao criar sessão tmux: ${created.stderr || created.stdout || `exit ${created.code}`}`);

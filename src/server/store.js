@@ -63,6 +63,7 @@ export const defaultConfig = Object.freeze({
     userMemoryEdit: false,
     chatDocuments: true,
     skills: true,
+    secretDisclosure: false,
   },
   userMemory: {
     sendFilesToPrompt: false,
@@ -839,6 +840,7 @@ const KNOWN_SCHEDULED_TASK_TOOL_NAMES = [
   'rename_chat',
   'send_email',
   'read_skill',
+  'get_env_var',
 ];
 const SCHEDULED_TASK_LEASE_STALE_MS = 10 * 60 * 1000;
 
@@ -1196,6 +1198,150 @@ export async function deleteCustomCommand(id) {
     }
     await writeJson(paths.customCommandsPath, next, 0o600);
     await appendEvent({ type: 'customCommand.deleted', details: { id } });
+    return { id };
+  });
+}
+
+// Secrets: item 7 of the roadmap. Same "disclosure progressiva" shape as skills -- only
+// name+description ever sit in the system prompt -- but the value is never handed to the
+// model as a matter of course either: run_terminal_command/terminal_session get every
+// configured secret injected straight into the spawned process/session environment (see
+// getSecretsEnvMap, used only in assistant.js's terminal dispatch), so a command the model
+// writes can reference $NAME and have the shell resolve it without the value ever entering
+// a prompt or tool-result JSON. get_env_var is the deliberate, always-approved escape hatch
+// for the rarer case of needing the literal value (e.g. writing it into a file) -- using it
+// does send the value to the cloud provider unless the provider is local Ollama, and the
+// tool description says so. Values are stored in plaintext (0600, same as provider API keys
+// in config.json) -- this app has no separate secrets-at-rest crypto beyond file
+// permissions and, on the VPS, the gocryptfs volume it already lives in.
+function sanitizeSecretName(name) {
+  const upper = String(name || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, '_')
+    .replace(/^[0-9_]+/, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return upper || 'SECRET';
+}
+
+function normalizeSecret(input = {}, existing = null) {
+  const now = new Date().toISOString();
+  return {
+    id: existing?.id || crypto.randomUUID(),
+    name: sanitizeSecretName(input.name ?? existing?.name),
+    description: String(input.description ?? existing?.description ?? '').trim().slice(0, 400),
+    value: input.value !== undefined ? String(input.value) : existing?.value ?? '',
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function sanitizeSecretForClient(secret = {}) {
+  return {
+    id: secret.id,
+    name: secret.name,
+    description: secret.description,
+    createdAt: secret.createdAt,
+    updatedAt: secret.updatedAt,
+  };
+}
+
+async function listSecretsRaw() {
+  await ensureRuntime();
+  const secrets = await readJson(getActivePaths().secretsPath, []);
+  return Array.isArray(secrets) ? secrets : [];
+}
+
+// Client/API-facing: never includes the value.
+export async function listSecrets() {
+  return (await listSecretsRaw()).map(sanitizeSecretForClient);
+}
+
+// Server-only: {NAME: value} for injecting into a spawned terminal process/session env.
+export async function getSecretsEnvMap() {
+  const secrets = await listSecretsRaw();
+  const map = {};
+  for (const secret of secrets) {
+    if (secret.name) map[secret.name] = secret.value || '';
+  }
+  return map;
+}
+
+// Server-only: used by the get_env_var tool, the one deliberate path that hands the
+// literal value back to the model.
+export async function readSecretValue(identifier) {
+  const secrets = await listSecretsRaw();
+  const value = String(identifier || '').trim();
+  const secret = secrets.find((item) => item.id === value || item.name === sanitizeSecretName(value));
+  if (!secret) {
+    const error = new Error(`Variável "${value}" não encontrada.`);
+    error.statusCode = 404;
+    throw error;
+  }
+  return secret;
+}
+
+export async function createSecret(input = {}) {
+  await ensureRuntime();
+  const paths = getActivePaths();
+  return withFileLock(paths.secretsPath, async () => {
+    const secrets = await readJson(paths.secretsPath, []);
+    const secret = normalizeSecret(input);
+    if (!secret.value) {
+      const error = new Error('Valor é obrigatório para criar uma variável.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (secrets.some((item) => item.name === secret.name)) {
+      const error = new Error(`Já existe uma variável chamada "${secret.name}".`);
+      error.statusCode = 409;
+      throw error;
+    }
+    await writeJson(paths.secretsPath, [...secrets, secret], 0o600);
+    await appendEvent({ type: 'secret.created', details: { name: secret.name } });
+    return sanitizeSecretForClient(secret);
+  });
+}
+
+export async function updateSecret(id, patch = {}) {
+  const paths = getActivePaths();
+  return withFileLock(paths.secretsPath, async () => {
+    const secrets = await readJson(paths.secretsPath, []);
+    let updated = null;
+    const next = secrets.map((secret) => {
+      if (secret.id !== id) return secret;
+      updated = normalizeSecret(patch, secret);
+      return updated;
+    });
+    if (!updated) {
+      const error = new Error('Variável não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (secrets.some((item) => item.id !== id && item.name === updated.name)) {
+      const error = new Error(`Já existe uma variável chamada "${updated.name}".`);
+      error.statusCode = 409;
+      throw error;
+    }
+    await writeJson(paths.secretsPath, next, 0o600);
+    await appendEvent({ type: 'secret.updated', details: { id, name: updated.name } });
+    return sanitizeSecretForClient(updated);
+  });
+}
+
+export async function deleteSecret(id) {
+  const paths = getActivePaths();
+  return withFileLock(paths.secretsPath, async () => {
+    const secrets = await readJson(paths.secretsPath, []);
+    const next = secrets.filter((secret) => secret.id !== id);
+    if (next.length === secrets.length) {
+      const error = new Error('Variável não encontrada.');
+      error.statusCode = 404;
+      throw error;
+    }
+    await writeJson(paths.secretsPath, next, 0o600);
+    await appendEvent({ type: 'secret.deleted', details: { id } });
     return { id };
   });
 }
@@ -2539,6 +2685,7 @@ function normalizeTools(tools = {}, options = {}) {
     userMemoryEdit: tools.userMemory !== false && tools.userMemoryEdit === true,
     chatDocuments: tools.chatDocuments !== false,
     skills: tools.skills !== false,
+    secretDisclosure: tools.secretDisclosure === true,
   };
 }
 

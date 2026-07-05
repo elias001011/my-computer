@@ -38,6 +38,8 @@ O projeto favorece simplicidade, instalação fácil e desinstalação limpa.
 - Runtime do usuário em `~/.my-computer` por padrão, com seções novas em `~/.my-computer/profiles/<id>`.
 - Configurações, chats, memória, arquivos adicionais de memória, skills e eventos ficam separados do código do projeto.
 - Skills: arquivos Markdown curtos com frontmatter (`name`/`description`) + corpo, em `skills/`. Só nome+descrição entram no prompt; o corpo completo é lido sob demanda pela tool `read_skill` (mesmo padrão de disclosure progressiva da memória de arquivos do usuário).
+- Comandos personalizados (`customCommands.json`): gatilho `/nome`, prompt fixo, tools pré-aprovadas -- mesmo mecanismo (`scheduledTaskContext`) de tarefa agendada, mas disparado ao vivo dentro do chat atual em vez de por cron.
+- Segredos/variáveis de ambiente (`secrets.json`, 0600, texto puro -- mesmo modelo das chaves de API em `config.json`): só nome+descrição entram no prompt; o valor nunca é enviado ao modelo por padrão -- é injetado direto no ambiente do processo/sessão de terminal (`spawn`/`tmux -e`), então um comando referenciando `$NOME` funciona sem o valor nunca aparecer num prompt ou resultado de tool. A tool `get_env_var` é a única via deliberada de expor o valor literal (ex.: escrever num arquivo), sempre com aprovação.
 - O backend usa escopo async por requisição para resolver qual seção atende cada chamada.
 - Export/import trabalha sobre a seção ativa e cobre configuração, memória persistente, arquivos adicionais, chats, anexos e eventos selecionados.
 

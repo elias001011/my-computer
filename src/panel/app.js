@@ -1985,6 +1985,7 @@ const SCHEDULED_TASK_TOOL_LABELS = {
   rename_chat: 'Renomear chat',
   send_email: 'Enviar email',
   read_skill: 'Skills',
+  get_env_var: 'Ver valor de variável de ambiente',
 };
 
 // Every tool a normal chat message can mention with @ -- mirrors isToolEnabled() in
@@ -4054,6 +4055,9 @@ function formatToolInputSummary(toolUse = {}) {
   if (toolUse.name === 'browser') {
     if (input.action) parts.push(`ação: ${input.action}`);
     if (input.url) parts.push(input.url);
+  }
+  if (toolUse.name === 'get_env_var') {
+    if (input.name) parts.push(`variável: ${input.name}`);
   }
   if (!parts.length) {
     try {
@@ -7884,6 +7888,7 @@ async function saveGeneralSettings(event, options = {}) {
       browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
       autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
       skills: form.get('tool_skills') === 'on',
+      secretDisclosure: form.get('tool_secretDisclosure') === 'on',
     };
     tools.webSearch = tools.searchMode !== 'off';
     tools.searchTerminal = tools.searchMode === 'terminal' || tools.searchMode === 'both';
@@ -8081,6 +8086,7 @@ function captureSettingsDraftFromForm() {
     browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
     autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
     skills: form.get('tool_skills') === 'on',
+    secretDisclosure: form.get('tool_secretDisclosure') === 'on',
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',

@@ -18,12 +18,14 @@ import {
   createCustomCommand,
   createProfile,
   createScheduledTask,
+  createSecret,
   deleteAllChats,
   deleteChat,
   deleteAttachment,
   deleteCustomCommand,
   deleteProfile,
   deleteScheduledTask,
+  deleteSecret,
   deleteSkill,
   deleteUserMemoryFile,
   editUserMessage,
@@ -36,6 +38,7 @@ import {
   listChats,
   listCustomCommands,
   listScheduledTasks,
+  listSecrets,
   listSkills,
   listUserMemoryFilesWithHints,
   loadConfig,
@@ -56,6 +59,7 @@ import {
   updateChatMetadata,
   updateCustomCommand,
   updateScheduledTask,
+  updateSecret,
   updateSkill,
   withProfileScope,
   writeAttachmentTextContent,
@@ -149,6 +153,11 @@ async function handleApiScoped(request, response, url) {
 
   if (parts[1] === 'custom-commands') {
     await handleCustomCommandsApi(request, response, parts);
+    return;
+  }
+
+  if (parts[1] === 'secrets') {
+    await handleSecretsApi(request, response, parts);
     return;
   }
 
@@ -716,6 +725,38 @@ async function handleCustomCommandsApi(request, response, parts) {
   sendJson(response, 404, { error: 'Endpoint de comando não encontrado.' });
 }
 
+async function handleSecretsApi(request, response, parts) {
+  const method = request.method || 'GET';
+  const secretId = parts[2];
+
+  if (method === 'GET' && !secretId) {
+    sendJson(response, 200, { secrets: await listSecrets() });
+    return;
+  }
+
+  if (method === 'POST' && !secretId) {
+    const body = await readBody(request);
+    const secret = await createSecret(body);
+    sendJson(response, 201, { secret, secrets: await listSecrets() });
+    return;
+  }
+
+  if (method === 'PUT' && secretId) {
+    const body = await readBody(request);
+    const secret = await updateSecret(secretId, body);
+    sendJson(response, 200, { secret, secrets: await listSecrets() });
+    return;
+  }
+
+  if (method === 'DELETE' && secretId) {
+    await deleteSecret(secretId);
+    sendJson(response, 200, { secrets: await listSecrets() });
+    return;
+  }
+
+  sendJson(response, 404, { error: 'Endpoint de variável não encontrado.' });
+}
+
 async function handleEmailTestApi(request, response) {
   const body = await readBody(request);
   const config = await loadConfig();
@@ -853,6 +894,7 @@ async function buildBootstrapPayload() {
     skills: await listSkills(),
     scheduledTasks: await listScheduledTasks(),
     customCommands: await listCustomCommands(),
+    secrets: await listSecrets(),
     serverLocalTimezone: getServerLocalTimezone(),
     runtimeHome: runtimeInfo.runtimeHome,
     rootRuntimeHome: runtimeInfo.rootRuntimeHome,

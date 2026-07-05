@@ -9,6 +9,9 @@ import {
   buildSkillsPromptContext,
   listSkills,
   readSkill,
+  listSecrets,
+  getSecretsEnvMap,
+  readSecretValue,
   getRuntimeInfo,
   getServerLocalTimezone,
   listUserMemoryFilesWithHints,
@@ -42,6 +45,7 @@ import {
   compactContextToolDefinition,
   editPersistentMemoryUserToolDefinition,
   fileEditToolDefinition,
+  getEnvVarToolDefinition,
   memoryChatToolDefinition,
   persistentMemoryToolDefinition,
   persistentMemoryUserToolDefinition,
@@ -149,6 +153,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo, { modelSettings: chat.modelSettings || {} });
   const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
   const skillsContext = await buildSkillsPromptContext();
+  const secretsContext = { secrets: (await listSecrets()).map((secret) => ({ name: secret.name, description: secret.description })) };
   const toolUses = [];
   const executionTrace = [];
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools, scheduledTaskContext);
@@ -169,6 +174,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
       strictImageSupportForMessageId: userMessage.id,
       userMemoryContext,
       skillsContext,
+      secretsContext,
       skipMemory: scheduledTaskContext?.skipMemory === true,
       scheduledTaskContext,
     });
@@ -1740,6 +1746,7 @@ async function buildProviderMessages(chat, config, persistentMemory, options = {
     skipMemory: options.skipMemory === true,
     scheduledTaskContext: options.scheduledTaskContext || null,
     skillsContext: options.skillsContext || null,
+    secretsContext: options.secretsContext || null,
   });
   return [{ role: 'system', content: systemPrompt }, ...(await selectRecentMessages(chat, config, options))];
 }
@@ -1768,6 +1775,7 @@ function applyScheduledTaskToolMask(tools = {}, scheduledTaskContext) {
     chatTitle: tools.chatTitle !== false && allowed.has('rename_chat'),
     sendEmail: tools.sendEmail !== false && allowed.has('send_email'),
     skills: tools.skills !== false && allowed.has('read_skill'),
+    secretDisclosure: tools.secretDisclosure === true && allowed.has('get_env_var'),
     searchMode,
     webSearch: searchMode !== 'off',
     searchTerminal: searchMode === 'terminal' || searchMode === 'both',
@@ -1818,7 +1826,7 @@ function buildSystemPrompt(
   config,
   persistentMemory,
   userMemoryContext = null,
-  { skipMemory = false, scheduledTaskContext = null, skillsContext = null } = {},
+  { skipMemory = false, scheduledTaskContext = null, skillsContext = null, secretsContext = null } = {},
 ) {
   if (scheduledTaskContext) {
     config = { ...config, tools: applyScheduledTaskToolMask(config.tools, scheduledTaskContext) };
@@ -1980,6 +1988,8 @@ function buildSystemPrompt(
     '',
     renderSkillsPromptSection(skillsContext, config),
     '',
+    renderSecretsPromptSection(secretsContext, config),
+    '',
     '<chat_memory_md>',
     chat.memory || 'Sem memória de chat.',
     '</chat_memory_md>',
@@ -2018,6 +2028,32 @@ function renderSkillsPromptSection(skillsContext, config = {}) {
     lines.push(`  description: ${skill.description}`);
   }
   lines.push('</skills>');
+  return lines.join('\n');
+}
+
+function renderSecretsPromptSection(secretsContext, config = {}) {
+  // Meaningless without a way to run shell commands -- $NAME only resolves in a spawned
+  // terminal process/session, so skip the section entirely rather than list names nobody
+  // can use yet.
+  const terminalAvailable = config.tools?.terminal !== false || config.tools?.terminalSessions === true;
+  if (!terminalAvailable) return '';
+  const secrets = secretsContext?.secrets || [];
+  if (!secrets.length) {
+    return ['<secrets mode="empty">', 'Nenhuma variável de ambiente/segredo foi cadastrada pelo usuário.', '</secrets>'].join('\n');
+  }
+  const lines = [`<secrets count="${secrets.length}">`];
+  lines.push(
+    'Configured secrets/environment variables. Only name and description are listed here -- the value itself is never in this prompt. Every one of these is already injected into the terminal/session process environment automatically, so a shell command you write can reference it as $NAME directly (e.g. gh auth login --with-token <<< "$GITHUB_TOKEN") without you ever seeing the literal value.',
+    config.tools?.secretDisclosure === true
+      ? 'If you genuinely need the literal value for something a $NAME shell reference cannot do (e.g. writing it into a file), call get_env_var -- it always requires the user\'s approval and sends the value into this conversation (and to the cloud provider unless local Ollama), so prefer the $NAME reference whenever it would work instead.'
+      : 'get_env_var (revealing the literal value to you) is disabled by user settings -- rely on the $NAME shell reference for these.',
+  );
+  lines.push('');
+  for (const secret of secrets) {
+    lines.push(`- name: ${secret.name}`);
+    lines.push(`  description: ${secret.description}`);
+  }
+  lines.push('</secrets>');
   return lines.join('\n');
 }
 
@@ -2153,6 +2189,10 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     return executeReadSkillToolCall(chatId, toolCall.id, input);
   }
 
+  if (name === 'get_env_var') {
+    return executeGetEnvVarToolCall(chatId, toolCall.id, normalizeToolInput(name, input));
+  }
+
   if (name === 'chat_document') {
     return executeChatDocumentToolCall(chatId, toolCall.id, input);
   }
@@ -2213,6 +2253,7 @@ async function executeToolCall(chatId, toolCall, config = {}) {
     timeoutSeconds: terminalInput.timeoutSeconds,
     terminalMode: config.tools?.terminalMode,
     runtimeHome: config.runtimeHome,
+    secretsEnv: await getSecretsEnvMap(),
     signal: config.signal,
   });
   throwIfStopped(config.signal);
@@ -2380,6 +2421,7 @@ async function executeTerminalSessionToolCall(chatId, toolCallId, input, config 
         maxSessions: clampInteger(tools.terminalSessionMaxPerChat, 1, 8, 3),
         maxGlobalSessions: clampInteger(tools.terminalSessionMaxGlobal, 1, 64, 12),
         idleTimeoutMinutes,
+        secretsEnv: await getSecretsEnvMap(),
       });
       return finish({ action, ...session });
     }
@@ -2733,6 +2775,7 @@ function buildEnabledToolDefinitions(tools = {}, scheduledTaskContext = null) {
     tools.chatTitle !== false ? renameChatToolDefinition : null,
     tools.sendEmail === true ? sendEmailToolDefinition : null,
     tools.skills !== false ? readSkillToolDefinition : null,
+    tools.secretDisclosure === true ? getEnvVarToolDefinition : null,
   ].filter(Boolean);
   if (!scheduledTaskContext) return definitions;
   const allowed = new Set(scheduledTaskContext.allowedTools || []);
@@ -2928,6 +2971,9 @@ function normalizeToolInput(name, input = {}) {
     if (Object.hasOwn(normalizedInput, 'skillId')) normalizedInput.skillId = String(normalizedInput.skillId || '').trim();
     if (Object.hasOwn(normalizedInput, 'name')) normalizedInput.name = String(normalizedInput.name || '').trim();
   }
+  if (name === 'get_env_var') {
+    normalizedInput.name = String(normalizedInput.name || '').trim();
+  }
   if (name === 'edit_file') {
     normalizedInput.action = ['list', 'read', 'replace', 'write', 'create'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -3074,6 +3120,7 @@ function describeEnabledTools(tools = {}) {
     tools.autoCompact !== false ? 'compact_context' : null,
     tools.chatTitle !== false ? 'rename_chat' : null,
     tools.skills !== false ? 'read_skill' : null,
+    tools.secretDisclosure === true ? 'get_env_var' : null,
   ].filter(Boolean);
 }
 
@@ -3092,6 +3139,7 @@ function isToolEnabled(name, tools = {}) {
   if (name === 'compact_context') return tools.autoCompact !== false;
   if (name === 'rename_chat') return tools.chatTitle !== false;
   if (name === 'read_skill') return tools.skills !== false;
+  if (name === 'get_env_var') return tools.secretDisclosure === true;
   // send_email has no global on/off flag -- tools.sendEmail only ever becomes true via
   // applyScheduledTaskToolMask (allowlist + isEmailConfigured), so outside that masked
   // context this is always false, structurally blocking it from regular chats.
@@ -3137,7 +3185,7 @@ function toolRequiresApproval(toolCall, config = {}) {
     const input = normalizeToolInput(name, parseToolArguments(toolCall?.function?.arguments));
     return input.action === 'read';
   }
-  if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat' || name === 'send_email') {
+  if (name === 'edit_persistent_memory_user' || name === 'compact_context' || name === 'rename_chat' || name === 'send_email' || name === 'get_env_var') {
     return true;
   }
   if (name === 'chat_document') {
@@ -3679,6 +3727,30 @@ function serializeSkillForTool(skill = {}) {
     description: skill.description,
     size: skill.size,
   };
+}
+
+// The one deliberate path that hands a secret's literal value back to the model (see the
+// getSecretsEnvMap comment above readSecretValue in store.js for why this is the exception,
+// not the default). Always requires approval regardless of alwaysAllow's per-tool
+// exceptions elsewhere, since this is the single point where a configured secret can leave
+// the app into a prompt/tool-result that reaches the cloud provider.
+async function executeGetEnvVarToolCall(chatId, toolCallId, input) {
+  const finish = (result) => ({
+    id: toolCallId,
+    name: 'get_env_var',
+    input,
+    ...(result.error ? { status: 'failed' } : {}),
+    result,
+    createdAt: new Date().toISOString(),
+  });
+  if (!input.name) return finish({ error: 'name is required.' });
+  try {
+    const secret = await readSecretValue(input.name);
+    await appendEvent({ type: 'tool.get_env_var', chatId, details: { reason: input.reason, name: secret.name } });
+    return finish({ name: secret.name, value: secret.value });
+  } catch (error) {
+    return finish({ name: input.name, error: error.message });
+  }
 }
 
 // "Melhorar com IA": a plain one-off completion using the user's current default

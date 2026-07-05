@@ -514,6 +514,34 @@ export const readSkillToolDefinition = {
   },
 };
 
+export const getEnvVarToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'get_env_var',
+    description:
+      'Reveal the literal value of a configured secret/environment variable. Do NOT use this to run terminal commands -- every configured variable is already injected into the terminal/session process environment automatically, so a command you write can reference it as $NAME directly without ever calling this tool (e.g. gh auth login --with-token <<< "$GITHUB_TOKEN" just works). Only call get_env_var when you genuinely need the literal value for something a shell reference cannot do, such as writing it into a file with edit_file/send_file. Calling this sends the actual secret value into this conversation, and therefore to the cloud provider unless the provider is local Ollama -- avoid it whenever a $NAME reference in a terminal command would do the job instead.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Name of the variable to reveal, exactly as listed in the system prompt index.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Short reason this needs the literal value instead of a $NAME shell reference.',
+        },
+        returnOutput: {
+          anyOf: [{ type: 'boolean' }, { type: 'string' }],
+          description: 'Usually true, since the value is meant to inform the next step (e.g. writing it somewhere).',
+        },
+      },
+      required: ['name', 'reason'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export const compactContextToolDefinition = {
   type: 'function',
   function: {
@@ -611,8 +639,8 @@ export async function runTerminalCommand(command, options = {}) {
   const cwd = options.cwd || (terminalMode === 'isolated' ? isolatedHome : process.env.HOME || os.homedir());
   const env =
     terminalMode === 'isolated'
-      ? { ...process.env, CI: process.env.CI || '1', HOME: isolatedHome, MC_TERMINAL_MODE: 'isolated' }
-      : { ...process.env, CI: process.env.CI || '1', MC_TERMINAL_MODE: 'standard' };
+      ? { ...process.env, CI: process.env.CI || '1', HOME: isolatedHome, MC_TERMINAL_MODE: 'isolated', ...options.secretsEnv }
+      : { ...process.env, CI: process.env.CI || '1', MC_TERMINAL_MODE: 'standard', ...options.secretsEnv };
   let stdout = '';
   let stderr = '';
   let stdoutTruncated = false;
