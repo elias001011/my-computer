@@ -979,8 +979,8 @@ function renderSetup() {
                 <input type="checkbox" name="userMemoryEditTool" id="setup-user-memory-edit-tool" ${setupUserMemoryEditEnabled ? 'checked' : ''} ${setupUserMemoryReadEnabled ? '' : 'disabled'} />
                 <span class="switch" aria-hidden="true"></span>
                 <span>
-                  <strong>Permitir edição de arquivos de memória</strong>
-                  <small>Habilita <code>edit_persistent_memory_user</code>. A IA propõe substituições em arquivos texto; você aprova ou nega antes de aplicar.</small>
+                  <strong>Permitir criação e edição de arquivos de memória</strong>
+                  <small>Habilita <code>edit_persistent_memory_user</code>. A IA propõe um arquivo novo ou uma substituição em um existente; você aprova ou nega antes de aplicar.</small>
                 </span>
               </label>
               <label class="toggle-row switch-row">
@@ -1137,14 +1137,14 @@ function renderApp() {
       <main class="chat-main">
         <header class="chat-header">
           <button type="button" class="icon-button small-icon mobile-sidebar-toggle" id="toggle-mobile-sidebar" aria-label="Abrir histórico de chats" title="Histórico de chats">☰</button>
-          <div>
+          <div class="chat-header-title">
             <h2 class="chat-title">${escapeHtml(displayChatTitle(chat?.title || 'Chat'))}</h2>
             <div class="meta">${chat ? `${escapeHtml(chat.id)} - ${escapeHtml(providerLabel(chatProviderId))} - ${escapeHtml(chatModel)}` : 'Sem chat ativo'}</div>
           </div>
           <div class="chat-header-actions">
-            ${state.config.tools?.terminalSessions === true ? `<button id="open-terminal" ${!chat ? 'disabled' : ''}>Terminal</button>` : ''}
-            <button id="save-context" ${!chat || state.busy ? 'disabled' : ''}>Salvar snapshot</button>
-            <button id="compact-context" ${!chat || state.busy ? 'disabled' : ''}>Compactar contexto</button>
+            ${state.config.tools?.terminalSessions === true ? `<button id="open-terminal" title="Terminal" aria-label="Terminal" ${!chat ? 'disabled' : ''}>Terminal</button>` : ''}
+            <button id="save-context" title="Salvar snapshot" aria-label="Salvar snapshot" ${!chat || state.busy ? 'disabled' : ''}>Salvar snapshot</button>
+            <button id="compact-context" title="Compactar contexto" aria-label="Compactar contexto" ${!chat || state.busy ? 'disabled' : ''}>Compactar contexto</button>
             <button class="icon-button small-icon" id="edit-context" ${!chat || state.busy ? 'disabled' : ''} title="Editar contexto compactado" aria-label="Editar contexto compactado">✎</button>
           </div>
         </header>
@@ -1482,8 +1482,8 @@ function renderSettingsModal() {
                   <input type="checkbox" name="tool_userMemoryEdit" id="memory-user-edit-toggle" ${userMemoryEditEnabled ? 'checked' : ''} ${userMemoryReadEnabled ? '' : 'disabled'} />
                   <span class="switch" aria-hidden="true"></span>
                   <span>
-                    <strong>Permitir que a IA edite arquivos adicionais</strong>
-                    <small>Habilita a tool <code>edit_persistent_memory_user</code>. Ela substitui um trecho exato em arquivos de texto/Markdown e pede aprovação quando tools automáticas estão desligadas.</small>
+                    <strong>Permitir que a IA crie e edite arquivos adicionais</strong>
+                    <small>Habilita a tool <code>edit_persistent_memory_user</code>. Ela cria um arquivo novo de memória ou substitui um trecho exato em um arquivo de texto/Markdown existente, e pede aprovação quando tools automáticas estão desligadas.</small>
                   </span>
                 </label>
                 <label class="toggle-row switch-row">
@@ -2820,8 +2820,8 @@ function renderTerminalModal() {
               ${renderTerminalSessionTabs(viewer)}
             </div>
             <div class="terminal-toolbar-actions">
-              <button type="button" id="new-terminal-session" ${viewer.busy ? 'disabled' : ''}>Nova sessão</button>
-              <button type="button" id="kill-terminal-session" class="danger-button" ${!viewer.activeSessionId || viewer.busy ? 'disabled' : ''}>Encerrar sessão</button>
+              <button type="button" id="new-terminal-session" title="Nova sessão" ${viewer.busy ? 'disabled' : ''}>Nova sessão</button>
+              <button type="button" id="kill-terminal-session" class="danger-button" title="Encerrar sessão" ${!viewer.activeSessionId || viewer.busy ? 'disabled' : ''}>Encerrar sessão</button>
             </div>
           </div>
           ${viewer.error ? `<p class="error terminal-error" id="terminal-error">${escapeHtml(viewer.error)}</p>` : '<p class="error terminal-error hidden" id="terminal-error"></p>'}
@@ -4050,6 +4050,8 @@ function formatToolInputSummary(toolUse = {}) {
     if (input.fileId) parts.push(`arquivo: ${input.fileId}`);
   }
   if (toolUse.name === 'edit_persistent_memory_user') {
+    if (input.action) parts.push(`ação: ${input.action}`);
+    if (input.action === 'create' && input.fileName) parts.push(`novo arquivo: ${input.fileName}`);
     if (input.fileId) parts.push(`arquivo: ${input.fileId}`);
     if (input.oldText) parts.push(`trocar trecho de ${String(input.oldText).length} caractere(s)`);
   }
@@ -4137,12 +4139,16 @@ function renderUserMemoryToolCard(toolUse = {}) {
   const file = getUserMemoryToolFile(toolUse);
   const isEdit = toolUse.name === 'edit_persistent_memory_user';
   const title = isEdit
-    ? toolUse.result?.action === 'replace'
-      ? 'Arquivo de memória atualizado'
-      : 'Alteração de memória proposta'
+    ? toolUse.result?.action === 'create'
+      ? 'Arquivo de memória criado'
+      : toolUse.result?.action === 'replace'
+        ? 'Arquivo de memória atualizado'
+        : 'Alteração de memória proposta'
     : 'Arquivo de memória consultado';
   const detail = isEdit
-    ? 'Veja o diff antes/depois da substituição exata.'
+    ? toolUse.result?.action === 'create'
+      ? 'Veja o conteúdo do novo arquivo.'
+      : 'Veja o diff antes/depois da substituição exata.'
     : getUserMemoryReadRangeLabel(toolUse) || 'Abra a cópia atual salva dentro do My Computer.';
   const buttons = renderUserMemoryToolButtons(toolUse);
   const missingFileNote = file.identifier && !resolveKnownUserMemoryFile(file.identifier)

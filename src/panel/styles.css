@@ -1685,7 +1685,11 @@ pre {
   width: min(1120px, 100%);
 }
 
-.modal form {
+/* Direct child only: this lays out a modal's own header/body/footer form as a
+   3-row grid. It must not match forms nested deeper inside a modal's body
+   (e.g. the terminal's input-row form) -- a descendant selector here made the
+   terminal "Enviar" button stretch to fill a 1fr grid row and look enormous. */
+.modal > form {
   max-height: inherit;
   height: 100%;
   min-height: 0;
@@ -2329,20 +2333,59 @@ pre {
     min-height: 0;
     align-items: center;
     padding: 8px 10px;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  /* Grows to fill the leftover space on the hamburger's row so the title sits
+     right next to it instead of being pushed to the far edge by the header's
+     justify-content: space-between (which only has two items on that line
+     once the actions row below wraps onto its own line). */
+  .chat-header-title {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .chat-header .chat-title {
     font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chat-header .meta {
     font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
+  /* Actions drop to their own full-width row so they never compete with the
+     hamburger/title for space, then wrap to at most two compact rows instead
+     of the three cramped rows text buttons produced at full size. */
   .chat-header-actions {
+    flex-basis: 100%;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .chat-header-actions button:not(.icon-button) {
+    flex: 1 1 calc(50% - 6px);
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chat-header-actions .icon-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    font-size: 15px;
   }
 
   .messages {
@@ -2402,6 +2445,28 @@ pre {
 
   .modal {
     max-height: calc(100vh - 20px);
+  }
+
+  /* Forms felt oversized on phones mostly because of desktop mouse-target
+     spacing (generous gaps/padding meant for a pointer, not a thumb). Tighten
+     it up so a short form (e.g. chat settings: 3 fields + 2 buttons) doesn't
+     read as if it needed the whole screen. */
+  .modal-header,
+  .modal-footer {
+    padding: 12px 14px;
+  }
+
+  .modal-body {
+    padding: 14px;
+    gap: 16px;
+  }
+
+  .settings-block {
+    gap: 10px;
+  }
+
+  .button-row {
+    gap: 6px;
   }
 
   .settings-layout,
@@ -2533,4 +2598,71 @@ pre {
 
 .terminal-error {
   margin: 0;
+}
+
+@media (max-width: 760px) {
+  /* The terminal modal was the buggiest one on mobile: a fixed-height output
+     pane plus a form plus a row of key buttons could add up to more than the
+     viewport, and since the whole modal-body scrolled as one block, the
+     input/send row could end up needing a scroll to reach. Turn it into a
+     full-screen sheet with the toolbar and input pinned and only the output
+     pane scrolling, like a real terminal. */
+  .terminal-modal {
+    width: 100%;
+    height: calc(100dvh - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .terminal-modal-body {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .terminal-toolbar {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .terminal-session-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  .terminal-toolbar-actions {
+    flex-shrink: 0;
+  }
+
+  .terminal-toolbar-actions button {
+    font-size: 12px;
+    padding: 0 8px;
+    min-height: 30px;
+    white-space: nowrap;
+  }
+
+  .terminal-output {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .terminal-input-row,
+  .terminal-keys,
+  .terminal-meta,
+  .terminal-error {
+    flex-shrink: 0;
+  }
+
+  .terminal-keys {
+    gap: 4px;
+  }
+
+  .terminal-key {
+    padding: 4px 8px;
+  }
 }

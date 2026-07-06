@@ -243,36 +243,47 @@ export const editPersistentMemoryUserToolDefinition = {
   function: {
     name: 'edit_persistent_memory_user',
     description:
-      'Edit a user-added persistent memory text file by replacing an exact oldText snippet with newText. Use only when user memory files should be kept up to date and the edit tool is enabled.',
+      'Create a new user-added persistent memory text file, or edit an existing one by replacing an exact oldText snippet with newText. Use only when user memory files should be kept up to date and this tool is enabled.',
     parameters: {
       type: 'object',
       properties: {
+        action: {
+          type: 'string',
+          enum: ['replace', 'create'],
+          description:
+            'replace edits an existing file: provide fileId or fileName plus oldText and newText. create adds a brand-new file: provide fileName and content. Defaults to replace when omitted.',
+        },
         fileId: {
           type: 'string',
-          description: 'ID of the file to edit. Prefer fileId from persistent_memory_user list.',
+          description: 'ID of the file to edit with action replace. Prefer fileId from persistent_memory_user list.',
         },
         fileName: {
           type: 'string',
-          description: 'Name of the file to edit when fileId is not available.',
+          description:
+            'Name of the file to edit when fileId is not available (action replace), or the file name to create (action create, e.g. "project-x-notes.md"). Use a Markdown or plain-text extension.',
         },
         oldText: {
           type: 'string',
-          description: 'Exact text currently present in the file. The app replaces only the first exact match.',
+          description: 'Exact text currently present in the file. Required for action replace. The app replaces only the first exact match.',
         },
         newText: {
           type: 'string',
-          description: 'Replacement text.',
+          description: 'Replacement text. Required for action replace.',
+        },
+        content: {
+          type: 'string',
+          description: 'Full Markdown/text content for the new file. Required for action create.',
         },
         reason: {
           type: 'string',
-          description: 'Short reason for this memory-file edit.',
+          description: 'Short reason for this memory-file change.',
         },
         returnOutput: {
           anyOf: [{ type: 'boolean' }, { type: 'string' }],
           description: 'Whether the app should send the edit result back to the model. Usually true when you will continue reasoning.',
         },
       },
-      required: ['oldText', 'newText', 'reason'],
+      required: ['reason'],
       additionalProperties: false,
     },
   },

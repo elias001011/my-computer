@@ -23,6 +23,7 @@ import {
   readUserMemoryFile,
   replaceTextInAttachment,
   replaceTextInUserMemoryFile,
+  saveUserMemoryFile,
   searchUserMemoryFiles,
   loadConfig,
   readAttachmentFile,
@@ -1947,10 +1948,10 @@ function buildSystemPrompt(
       ? 'User-added persistent memory files are managed by the app. When their index suggests useful context and full content was not injected, use persistent_memory_user to list or read files. Prefer this tool over terminal for those files. If a read result has truncated=true, continue reading with offset=nextOffset before relying on the missing part.'
       : 'Reading user-added persistent memory files through tools is disabled by user settings.',
     config.tools?.userMemoryEdit
-      ? 'The edit_persistent_memory_user tool is enabled. Use it to keep user-added Markdown/text memory files current when the conversation creates durable facts, decisions, preferences, project state, or TODOs that belong in those files.'
-      : 'Editing user-added persistent memory files through tools is disabled by user settings.',
+      ? 'The edit_persistent_memory_user tool is enabled, with two actions: create (add a brand-new Markdown/text memory file with a fileName and full content) and replace (edit an existing file by swapping an exact oldText for newText). Use create when a durable topic has no file yet and deserves its own; use replace to keep an existing file current when the conversation creates durable facts, decisions, preferences, project state, or TODOs that belong there.'
+      : 'Creating or editing user-added persistent memory files through tools is disabled by user settings.',
     config.tools?.userMemoryEdit && config.userMemory?.remindModelToUpdateFiles
-      ? 'Before a final answer, briefly consider whether any user-added memory file should be updated. If yes, call edit_persistent_memory_user with exact oldText and newText; the user can approve or deny the change in the UI.'
+      ? 'Before a final answer, briefly consider whether any user-added memory file should be created or updated. If yes, call edit_persistent_memory_user (action create with fileName+content, or action replace with exact oldText and newText); the user can approve or deny the change in the UI.'
       : '',
     config.tools?.chatDocuments !== false
       ? 'Chat attachments are copied into the app runtime. For user requests to inspect or edit Markdown/text/HTML/JSON/YAML/code attachments, use chat_document instead of terminal. The tool edits only the saved chat copy and supports list/read/replace/write; if a read result is truncated, continue with offset=nextOffset.'
@@ -2967,6 +2968,15 @@ function normalizeToolInput(name, input = {}) {
     if (Object.hasOwn(normalizedInput, 'offset')) normalizedInput.offset = clampInteger(normalizedInput.offset, 0, 2_000_000, 0);
     if (Object.hasOwn(normalizedInput, 'limit')) normalizedInput.limit = clampInteger(normalizedInput.limit, 1000, 50000, 20000);
   }
+  if (name === 'edit_persistent_memory_user') {
+    normalizedInput.action = ['replace', 'create'].includes(String(normalizedInput.action || '').trim())
+      ? String(normalizedInput.action).trim()
+      : 'replace';
+    if (Object.hasOwn(normalizedInput, 'fileName')) normalizedInput.fileName = String(normalizedInput.fileName || '').trim();
+    if (Object.hasOwn(normalizedInput, 'oldText')) normalizedInput.oldText = String(normalizedInput.oldText ?? '');
+    if (Object.hasOwn(normalizedInput, 'newText')) normalizedInput.newText = String(normalizedInput.newText ?? '');
+    if (Object.hasOwn(normalizedInput, 'content')) normalizedInput.content = String(normalizedInput.content ?? '');
+  }
   if (name === 'read_skill') {
     normalizedInput.action = ['list', 'read'].includes(String(normalizedInput.action || '').trim())
       ? String(normalizedInput.action).trim()
@@ -3787,6 +3797,51 @@ export async function improveSkillWithAI({ name = '', description = '', body = '
 }
 
 async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input) {
+  const action = ['replace', 'create'].includes(String(input.action || '').trim()) ? String(input.action).trim() : 'replace';
+
+  if (action === 'create') {
+    const fileName = String(input.fileName || '').trim();
+    if (!fileName) {
+      return {
+        id: toolCallId,
+        name: 'edit_persistent_memory_user',
+        input,
+        status: 'failed',
+        result: { action, error: 'fileName is required for action create' },
+        createdAt: new Date().toISOString(),
+      };
+    }
+    const content = String(input.content ?? '');
+    if (!content.trim()) {
+      return {
+        id: toolCallId,
+        name: 'edit_persistent_memory_user',
+        input,
+        status: 'failed',
+        result: { action, error: 'content is required for action create' },
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    const file = await saveUserMemoryFile({ name: fileName, content });
+    await appendEvent({
+      type: 'tool.edit_persistent_memory_user.create',
+      chatId,
+      details: { reason: input.reason, fileId: file.id, name: file.name },
+    });
+    return {
+      id: toolCallId,
+      name: 'edit_persistent_memory_user',
+      input,
+      result: {
+        action,
+        file: serializeUserMemoryFileForTool(file),
+        content: truncate(content, 12000),
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   const identifier = input.fileId || input.fileName;
   if (!identifier) {
     return {
@@ -3794,7 +3849,7 @@ async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input
       name: 'edit_persistent_memory_user',
       input,
       status: 'failed',
-      result: { error: 'fileId or fileName is required' },
+      result: { action, error: 'fileId or fileName is required for action replace' },
       createdAt: new Date().toISOString(),
     };
   }
@@ -3805,7 +3860,7 @@ async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input
       name: 'edit_persistent_memory_user',
       input,
       status: 'failed',
-      result: { error: 'oldText is required' },
+      result: { action, error: 'oldText is required for action replace' },
       createdAt: new Date().toISOString(),
     };
   }
@@ -3826,7 +3881,7 @@ async function executeEditPersistentMemoryUserToolCall(chatId, toolCallId, input
     name: 'edit_persistent_memory_user',
     input,
     result: {
-      action: 'replace',
+      action,
       file: serializeUserMemoryFileForTool(update.file),
       previousContent: truncate(update.previousContent, 4000),
       content: truncate(update.content, 12000),
