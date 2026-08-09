@@ -2666,3 +2666,79 @@ pre {
     padding: 4px 8px;
   }
 }
+
+/* Chips above the send button: run chronometer and queued follow-up counter. Absolutely
+   positioned so showing/hiding them never nudges the composer, and painted on a solid dark
+   background so they stay readable over the message list (transparent chips disappeared on
+   mobile, where the composer sits right on top of the conversation). */
+.composer-overlay {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #000;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.82;
+}
+
+.queue-chip {
+  opacity: 0.9;
+}
+
+.custom-model-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.custom-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.custom-model-row input.custom-model-id {
+  min-width: 0;
+}
+
+.complement-trace {
+  border-color: var(--accent);
+}
+
+.attempt-duration {
+  font-variant-numeric: tabular-nums;
+}
+
+.narrow-modal {
+  width: min(520px, 100%);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+@media (max-width: 720px) {
+  .custom-model-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-overlay {
+    right: 0;
+    bottom: calc(100% + 4px);
+  }
+}

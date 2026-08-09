@@ -77,6 +77,13 @@ const DEFAULT_RUNNING_TOOL_STALE_MS = 20 * 60 * 1000;
 const chatTurnLocks = new Map();
 const toolApprovalLocks = new Map();
 const activeChatRuns = new Map();
+// Follow-up messages the user typed while a run was still going. They never interrupt it: each
+// round drains whatever is queued and hands it to the model as one extra user turn right before
+// the next provider call. In-memory and scoped to the run -- the queue is dropped when the run
+// ends, and anything left undelivered goes back to the client to be sent as a normal message.
+const chatComplementQueues = new Map();
+const MAX_QUEUED_COMPLEMENTS = 20;
+const MAX_COMPLEMENT_CHARS = 8000;
 const GENERIC_CHAT_TITLES = new Set(['Novo chat', 'New chat']);
 
 export async function sendUserMessage(chatId, content, options = {}) {
@@ -115,8 +122,77 @@ export async function stopChatRun(chatId, options = {}) {
   };
 }
 
+// Queue a follow-up message for a run that is already in flight. Deliberately does NOT abort
+// anything: the run keeps going and picks the text up on its next provider call. Returns
+// queued:false when there is nothing running, so the caller can just send it as a normal message.
+export async function queueChatComplement(chatId, options = {}) {
+  const key = String(chatId || '');
+  const content = String(options.content || '').trim().slice(0, MAX_COMPLEMENT_CHARS);
+  if (!content) {
+    const error = new Error('Complemento vazio.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!activeChatRuns.has(key)) {
+    return { queued: false, message: 'Nenhuma execução em andamento neste chat.' };
+  }
+  const queue = chatComplementQueues.get(key) || [];
+  if (queue.length >= MAX_QUEUED_COMPLEMENTS) {
+    const error = new Error(`Máximo de ${MAX_QUEUED_COMPLEMENTS} complementos na fila.`);
+    error.statusCode = 429;
+    throw error;
+  }
+  const item = {
+    id: String(options.id || crypto.randomUUID()),
+    content,
+    queuedAt: new Date().toISOString(),
+  };
+  queue.push(item);
+  chatComplementQueues.set(key, queue);
+  await appendEvent({
+    type: 'chat.complement.queued',
+    chatId,
+    details: { queueId: item.id, chars: content.length, pending: queue.length },
+  });
+  return { queued: true, id: item.id, pending: queue.length };
+}
+
+// Drains the queue into the conversation the model is about to see. Called right before every
+// provider call so a complement lands at most one round after it was typed.
+async function applyQueuedComplements(chatId, workingMessages, executionTrace, consumedIds, round) {
+  const key = String(chatId || '');
+  const queue = chatComplementQueues.get(key);
+  if (!queue?.length) return 0;
+  chatComplementQueues.set(key, []);
+  const contents = queue.map((item) => item.content);
+  workingMessages.push({
+    role: 'user',
+    content: [
+      'Complementos do usuário (enviados enquanto você trabalhava, sem interromper a execução).',
+      'Leve em conta antes de seguir; se mudarem o rumo da tarefa, siga o rumo novo.',
+      '',
+      ...contents.map((text) => `- ${text}`),
+    ].join('\n'),
+  });
+  executionTrace.push({
+    type: 'user_complement',
+    round,
+    contents,
+    createdAt: new Date().toISOString(),
+  });
+  for (const item of queue) consumedIds.push(item.id);
+  await appendEvent({
+    type: 'chat.complement.delivered',
+    chatId,
+    details: { count: queue.length, round },
+  });
+  return queue.length;
+}
+
 async function sendUserMessageLocked(chatId, content, options = {}) {
   const operationSignal = options.signal;
+  const runStartedAtMs = Date.now();
+  const consumedComplementIds = [];
   const scheduledTaskContext = options.scheduledTaskContext || null;
   const config = await loadConfig();
   throwIfStopped(operationSignal);
@@ -151,6 +227,14 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const persistentMemory = scheduledTaskContext?.skipMemory ? null : await readPersistentMemory();
   const runtimeInfo = await getRuntimeInfo();
   const effectiveConfig = buildEffectiveConfig(config, chat, runtimeInfo, { modelSettings: chat.modelSettings || {} });
+  if (!String(effectiveConfig.model || '').trim()) {
+    // Providers with no fixed catalog (openai-compatible) can end up with an empty model when
+    // the user never finished registering one. Fail loudly here instead of firing a request
+    // with model:"" and letting the provider return an opaque error.
+    const error = new Error('Nenhum modelo configurado para este chat. Escolha ou cadastre um modelo antes de enviar.');
+    error.statusCode = 400;
+    throw error;
+  }
   const userMemoryContext = scheduledTaskContext?.skipMemory ? null : await buildUserMemoryPromptContext(effectiveConfig);
   const skillsContext = await buildSkillsPromptContext();
   const secretsContext = { secrets: (await listSecrets()).map((secret) => ({ name: secret.name, description: secret.description })) };
@@ -186,6 +270,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     }
     for (let round = 0; round < getMaxToolRounds(effectiveConfig); round += 1) {
       throwIfStopped(operationSignal);
+      await applyQueuedComplements(chatId, workingMessages, executionTrace, consumedComplementIds, round + 1);
       const assistantMessage = await callProviderChat({
         config: effectiveConfig,
         provider: effectiveConfig.provider,
@@ -305,6 +390,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           continuationReason,
           retryOfMessageId,
           continuedFromMessageId,
+          durationMs: Date.now() - runStartedAtMs,
         });
         await appendMessages(chatId, [pendingAssistantMessage]);
         await updateMessage(chatId, userMessage.id, {
@@ -331,6 +417,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           userMessage,
           assistantMessage: pendingAssistantMessage,
           awaitingApproval: true,
+          queuedComplementIds: consumedComplementIds,
           chat: await readChat(chatId),
         };
       }
@@ -364,6 +451,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     if (!assistantOutcome) {
       try {
         throwIfStopped(operationSignal);
+        await applyQueuedComplements(chatId, workingMessages, executionTrace, consumedComplementIds, executionTrace.length + 1);
         const assistantMessage = await callProviderChat({
           config: effectiveConfig,
           provider: effectiveConfig.provider,
@@ -453,6 +541,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     attemptIndex,
     retryOfMessageId,
     continuedFromMessageId,
+    durationMs: Date.now() - runStartedAtMs,
   });
   await appendMessages(chatId, [savedAssistantMessage]);
   await appendEvent({
@@ -492,6 +581,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     autoCompact,
     continuationAvailable: assistantOutcome.continuationAvailable,
     assistantStatus: assistantOutcome.status,
+    queuedComplementIds: consumedComplementIds,
     chat: await readChat(chatId),
   };
 }
@@ -510,13 +600,15 @@ export async function continueToolApproval(chatId, messageId, decision = 'approv
 
 async function continueToolApprovalLocked(chatId, messageId, decision = 'approve', options = {}) {
   const operationSignal = options.signal;
+  const runStartedAtMs = Date.now();
+  const consumedComplementIds = [];
   throwIfStopped(operationSignal);
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
   if (pendingMessage?.status === 'running_tools') {
     if (isStaleRunningToolApproval(pendingMessage)) {
       await resetStaleRunningToolApproval(chatId, pendingMessage);
-      return { chat: await readChat(chatId) };
+      return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
     }
     return { chat };
   }
@@ -544,7 +636,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       chatId,
       details: { messageId, toolCount: approvalToolCalls.length },
     });
-    return { chat: await readChat(chatId) };
+    return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
   }
   const decisions = { ...(pendingState.decisions || {}) };
   const targetToolCall =
@@ -556,7 +648,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
     throw error;
   }
   if (options.toolCallId && decisions[targetToolCall.id]) {
-    return { chat: await readChat(chatId) };
+    return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
   }
   const normalizedDecision = decision === 'approve' ? 'approve' : 'deny';
   decisions[targetToolCall.id] = normalizedDecision;
@@ -598,7 +690,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
         decisions,
       },
     });
-    return { chat: await readChat(chatId) };
+    return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
   }
 
   const config = await loadConfig();
@@ -652,6 +744,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       appendToolResultForModel(workingMessages, toolCall, toolUse);
       if (toolUseHasExecutionFailure(toolUse)) {
         await finalizeApprovedToolMessage({
+          durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
           chatId,
           messageId,
           effectiveConfig: selectedConfig,
@@ -666,7 +759,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
           approvedToolCount: toolUses.filter((item) => item.status !== 'denied').length,
           failedToolUse: toolUse,
         });
-        return { chat: await readChat(chatId) };
+        return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
       }
     }
 
@@ -677,6 +770,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       const cleanedPendingContent = cleanAssistantContent(pendingMessage.content || '');
       throwIfStopped(operationSignal);
       await finalizeApprovedToolMessage({
+        durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
         chatId,
         messageId,
         effectiveConfig: selectedConfig,
@@ -701,7 +795,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
         approvedToolCount: toolUses.filter((toolUse) => toolUse.status !== 'denied').length,
         skippedFollowup: true,
       });
-      return { chat: await readChat(chatId) };
+      return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
     }
 
     const followup = await continueAssistantToolLoop({
@@ -721,10 +815,12 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       continuedFromMessageId,
       baseThinking: pendingMessage.thinking,
       signal: operationSignal,
+      consumedComplementIds,
     });
     if (followup.awaitingApproval) return { chat: await readChat(chatId) };
     throwIfStopped(operationSignal);
     await finalizeApprovedToolMessage({
+      durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
       chatId,
       messageId,
       effectiveConfig: selectedConfig,
@@ -760,6 +856,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
             error: error.message || 'Erro ao finalizar a resposta.',
           };
     await finalizeApprovedToolMessage({
+      durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
       chatId,
       messageId,
       effectiveConfig: selectedConfig,
@@ -774,7 +871,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       approvedToolCount: toolUses.length,
     });
   }
-  return { chat: await readChat(chatId) };
+  return { chat: await readChat(chatId), queuedComplementIds: consumedComplementIds };
 }
 
 async function finalizeApprovedToolMessage({
@@ -792,6 +889,7 @@ async function finalizeApprovedToolMessage({
   approvedToolCount,
   failedToolUse = null,
   skippedFollowup = false,
+  durationMs = null,
 }) {
   const status = outcome.status || 'sent';
   const finalTimestamp = new Date().toISOString();
@@ -804,6 +902,7 @@ async function finalizeApprovedToolMessage({
     pendingToolApproval: null,
     modelUsed: modelUsed || effectiveConfig.model,
     providerUsed: providerUsed || effectiveConfig.provider,
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined,
     finishReason: outcome.finishReason || null,
     continuationAvailable: Boolean(outcome.continuationAvailable),
     error: outcome.error || null,
@@ -869,7 +968,12 @@ async function withActiveChatRun(chatId, operation, action) {
     return await run;
   } finally {
     const activeRun = activeChatRuns.get(key);
-    if (activeRun?.controller === controller) activeChatRuns.delete(key);
+    if (activeRun?.controller === controller) {
+      activeChatRuns.delete(key);
+      // Whatever was queued but never delivered dies with the run; the client re-sends it as a
+      // normal message using the consumed-id list this run reports back.
+      chatComplementQueues.delete(key);
+    }
   }
 }
 
@@ -930,6 +1034,9 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
       providerUsed: options.providerUsed || assistantMessage.providerUsed || config.provider,
       thinking: mergeThinkingSections(options.thinking, cleanedContent.thinking) || undefined,
       toolUses,
+      // Machine time only: the clock stops while the message sits waiting for a human decision
+      // and the continuation adds its own elapsed time on top when it finalizes the attempt.
+      durationMs: Number.isFinite(options.durationMs) ? Math.max(0, Math.round(options.durationMs)) : null,
       pendingToolApproval: {
         toolCalls,
         approvalToolCalls,
@@ -978,6 +1085,7 @@ async function continueAssistantToolLoop({
   continuedFromMessageId,
   baseThinking = '',
   signal = null,
+  consumedComplementIds = [],
 }) {
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let currentProviderUsed = providerUsed || effectiveConfig.provider;
@@ -988,6 +1096,7 @@ async function continueAssistantToolLoop({
 
   for (let round = startingRound; round < maxRounds; round += 1) {
     throwIfStopped(signal);
+    await applyQueuedComplements(chatId, workingMessages, executionTrace, consumedComplementIds, round + 1);
     const assistantMessage = await callProviderChat({
       config: effectiveConfig,
       provider: effectiveConfig.provider,
@@ -1535,6 +1644,7 @@ function buildAssistantAttemptMessage({
   retryOfMessageId = null,
   continuedFromMessageId = null,
   pendingToolApproval = null,
+  durationMs = null,
 }) {
   const cleanedContent = cleanAssistantContent(content || '');
   const safeContent = cleanedContent.content;
@@ -1558,6 +1668,7 @@ function buildAssistantAttemptMessage({
     executionTrace: executionTrace.length ? executionTrace : undefined,
     pendingToolApproval,
     finishReason: finishReason || null,
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : null,
     error: error ? String(error) : null,
     completedAt: completed ? timestamp : undefined,
     failedAt: status === 'failed' ? timestamp : undefined,

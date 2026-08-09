@@ -62,6 +62,10 @@ const state = {
   toolDecisionInFlight: new Set(),
   activeAgentChatId: null,
   stopInFlight: false,
+  customModelDialog: null,
+  runTimer: null,
+  runTimerInterval: null,
+  queuedMessages: [],
   status: '',
   error: '',
 };
@@ -1095,13 +1099,21 @@ function renderApp() {
   const { provider: chatProviderId, model: chatModel } = getEffectiveChatRuntime(chat);
   const toolApprovalBlocksComposer = chatHasActiveToolApproval(chat);
   const agentRunning = Boolean(chat?.id && state.busy && state.activeAgentChatId === chat.id);
-  const composerDisabled = state.busy || toolApprovalBlocksComposer;
+  // While the agent is running the box stays writable on purpose: what you type becomes a
+  // queued follow-up instead of being blocked (see enqueueComposerMessage).
+  const composerDisabled = (state.busy && !agentRunning) || toolApprovalBlocksComposer;
   const composerActionDisabled = toolApprovalBlocksComposer || (state.busy && !agentRunning) || state.stopInFlight;
   const composerPlaceholder = toolApprovalBlocksComposer
     ? 'Aprove ou negue a tool pendente antes de enviar outra mensagem.'
-    : chat
-      ? 'Digite uma mensagem...'
-      : 'Digite para criar o primeiro chat...';
+    : agentRunning
+      ? 'Escreva para complementar sem interromper...'
+      : chat
+        ? 'Digite uma mensagem...'
+        : 'Digite para criar o primeiro chat...';
+  // With the agent running, the action button is "stop" while the box is empty and flips to
+  // "send" (queue) as soon as there is something to send. updateComposerActionButton() keeps
+  // that in sync as the user types, without a re-render.
+  const composerActionMode = agentRunning && !getComposerDraft(chat?.id).trim() ? 'stop' : 'send';
   app.innerHTML = `
     <div class="app-shell">
       ${state.mobileSidebarOpen ? '<div class="mobile-sidebar-backdrop" id="mobile-sidebar-backdrop"></div>' : ''}
@@ -1160,13 +1172,14 @@ function renderApp() {
           </div>
           <div class="composer-main">
             <div class="mention-suggestions" id="mention-suggestions" hidden></div>
+            ${renderComposerOverlay(agentRunning)}
             <label class="attach-button icon-button" title="Anexar arquivo" aria-label="Anexar arquivo">
               <span aria-hidden="true">+</span>
               <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${composerDisabled ? 'disabled' : ''} />
             </label>
             <textarea name="content" placeholder="${escapeAttr(composerPlaceholder)}" ${composerDisabled ? 'disabled' : ''}>${escapeHtml(getComposerDraft(chat?.id))}</textarea>
-            <button class="primary icon-button ${agentRunning ? 'danger-button' : ''}" id="${agentRunning ? 'stop-agent' : 'send-message'}" type="${agentRunning ? 'button' : 'submit'}" aria-label="${agentRunning ? 'Parar agente' : 'Enviar'}" title="${agentRunning ? 'Parar agente' : 'Enviar'}" ${composerActionDisabled ? 'disabled' : ''}>
-              <span aria-hidden="true">${agentRunning ? '■' : '↑'}</span>
+            <button class="primary icon-button ${composerActionMode === 'stop' ? 'danger-button' : ''}" id="composer-action" data-action-mode="${composerActionMode}" type="submit" aria-label="${composerActionMode === 'stop' ? 'Parar agente' : 'Enviar'}" title="${composerActionMode === 'stop' ? 'Parar agente' : 'Enviar'}" ${composerActionDisabled ? 'disabled' : ''}>
+              <span aria-hidden="true">${composerActionMode === 'stop' ? '■' : '↑'}</span>
             </button>
           </div>
         </form>
@@ -1247,11 +1260,32 @@ function renderApp() {
     ${state.userMemoryDiff ? renderUserMemoryDiffModal() : ''}
     ${state.userMemoryViewer ? renderUserMemoryViewerModal() : ''}
     ${state.skillEditor ? renderSkillEditorModal() : ''}
+    ${state.customModelDialog ? renderCustomModelDialog() : ''}
     ${state.importModalOpen ? renderImportModal() : ''}
     ${state.confirmDialog ? renderConfirmDialog() : ''}
   `;
 
   bindAppEvents();
+  syncRunTimerToState();
+}
+
+// Small chips that sit just above the send button: the run chronometer and the queued
+// follow-up counter. Kept out of the normal flow (absolute) so showing/hiding them never
+// nudges the composer layout, and painted on a solid background so they stay readable over
+// the message list on mobile.
+function renderComposerOverlay(agentRunning) {
+  const timerEnabled = state.config?.appearance?.showRunTimer !== false;
+  const activeChatId = state.activeChat?.id;
+  const queuedCount = state.queuedMessages.filter((item) => item.chatId === activeChatId).length;
+  const chips = [];
+  if (queuedCount) {
+    chips.push(`<span class="composer-chip queue-chip" id="queue-chip">${escapeHtml(String(queuedCount))} na fila · ${escapeHtml(describeQueueMode())}</span>`);
+  }
+  if (timerEnabled && agentRunning) {
+    chips.push(`<span class="composer-chip run-timer-chip" id="run-timer" title="Tempo desta tarefa">${escapeHtml(formatRunTimerValue(getRunTimerElapsedMs()))}</span>`);
+  }
+  if (!chips.length) return '';
+  return `<div class="composer-overlay">${chips.join('')}</div>`;
 }
 
 function renderSettingsModal() {
@@ -1347,6 +1381,14 @@ function renderSettingsModal() {
                   ${renderUiLanguageOptions(draftConfig.appearance?.uiLanguage || DEFAULT_UI_LANGUAGE)}
                 </select>
               </label>
+              <label class="toggle-row switch-row">
+                <input type="checkbox" name="showRunTimer" ${draftConfig.appearance?.showRunTimer !== false ? 'checked' : ''} />
+                <span class="switch" aria-hidden="true"></span>
+                <span>
+                  <strong>Cronômetro durante o trabalho da IA</strong>
+                  <small>Mostra um contador discreto acima do botão de enviar enquanto o modelo trabalha. O tempo de cada tentativa fica salvo em Ver detalhes mesmo com isso desligado.</small>
+                </span>
+              </label>
               <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
                 Modelo personalizado
                 <input name="customModel" id="default-custom-model-input" value="${isKnownModel(defaultProvider, defaultModel) ? '' : escapeAttr(defaultModel)}" placeholder="provider/model ou nome local" />
@@ -1411,6 +1453,18 @@ function renderSettingsModal() {
                     <div class="button-row">
                       <button type="button" id="add-api-key">Adicionar API key</button>
                       <button type="button" id="toggle-api-key">${state.apiKeyVisible ? 'Ocultar keys' : 'Ver keys'}</button>
+                    </div>
+                  `
+              }
+              ${
+                apiProviderInfo.id === 'ollama'
+                  ? ''
+                  : `
+                    <div class="settings-subpanel">
+                      <h4>Modelos personalizados</h4>
+                      <p class="help-text">Modelos que você cadastra na mão para ${escapeHtml(providerLabel(apiProvider))}. Eles passam a aparecer como opção normal no seletor de modelo do chat, no modelo padrão e nas rotatórias. Use quando o provider não expõe <code>/models</code> ou quando o modelo que você quer não vem na descoberta automática.</p>
+                      <div class="custom-model-list">${renderCustomModelRows(apiProvider, draftConfig)}</div>
+                      <button type="button" id="add-custom-model">Adicionar modelo</button>
                     </div>
                   `
               }
@@ -1598,6 +1652,22 @@ function renderSettingsModal() {
                     <small>Quando uma resposta para no meio por erro ou limite (e daria pra "Continuar" sem recomeçar do zero), a IA continua sozinha, sem te pedir. Não pula aprovação de tools, e tem um limite de continuações automáticas por mensagem pra não rodar sem parar.</small>
                   </span>
                 </label>
+              </div>
+              <div class="settings-subpanel">
+                <h4>Mensagens enviadas durante o trabalho do modelo</h4>
+                <p class="help-text">A caixa de mensagem continua editável enquanto o modelo trabalha. Com algo escrito, o botão de interromper vira botão de enviar, e o que você mandar entra na fila em vez de cortar a execução. Anexos não entram na fila: ficam na bandeja para a próxima mensagem normal.</p>
+                <label>
+                  Modo da fila
+                  <select name="queueMode" id="queue-mode">
+                    <option value="nextTool" ${draftConfig.tools?.queueMode !== 'sequential' ? 'selected' : ''}>Na próxima tool (padrão)</option>
+                    <option value="sequential" ${draftConfig.tools?.queueMode === 'sequential' ? 'selected' : ''}>Sequencial</option>
+                  </select>
+                </label>
+                <div class="explain-list">
+                  <p><strong>Na próxima tool:</strong> não interrompe nada. Tudo o que estiver na fila vai junto da próxima chamada à API, numa caixinha de "Complementos do usuário". Serve para complementar ou mudar o rumo de um trabalho demorado sem perder o que já foi feito. Cada complemento entregue fica registrado em Ver detalhes.</p>
+                  <p><strong>Sequencial:</strong> espera a saída final do modelo e só então envia a fila como mensagem normal. Se houver mais de uma na fila, elas vão juntas nesse envio.</p>
+                  <p>Nos dois modos, se o modelo terminar antes de consumir a fila, o que sobrou é enviado como mensagem normal logo depois.</p>
+                </div>
               </div>
               <div class="settings-subpanel">
                 <h4>Como o app decide o que a IA pode usar</h4>
@@ -3600,7 +3670,8 @@ function formatAttemptTraceSummary(message = {}) {
   const toolUses = Array.isArray(message.toolUses) ? message.toolUses : [];
   const modelSteps = trace.filter((entry) => entry.type === 'assistant_output').length;
   const toolCount = toolUses.length || trace.filter((entry) => entry.type === 'tool_result').length;
-  return [`${modelSteps} saída(s)`, `${toolCount} tool(s)`].join(' · ');
+  const duration = formatDurationLabel(message.durationMs);
+  return [`${modelSteps} saída(s)`, `${toolCount} tool(s)`, duration].filter(Boolean).join(' · ');
 }
 
 function isLatestAssistantAttempt(message) {
@@ -3932,6 +4003,7 @@ function renderExecutionTraceEntry(entry, message) {
   if (entry.type === 'tool_result') {
     return renderToolUse(entry.toolUse || {}, message);
   }
+  if (entry.type === 'user_complement') return renderUserComplementTraceEntry(entry);
   if (entry.type !== 'assistant_output') return '';
   const title = entry.phase === 'final' ? 'Resposta final do modelo' : 'Saída intermediária da IA';
   const toolCalls = Array.isArray(entry.toolCalls) ? entry.toolCalls : [];
@@ -3962,6 +4034,25 @@ function renderExecutionTraceEntry(entry, message) {
                 .join('')}</div>`
             : ''
         }
+      </div>
+    </details>
+  `;
+}
+
+// A message the user typed while this attempt was still running and that was handed to the
+// model mid-run (queue mode "na próxima tool").
+function renderUserComplementTraceEntry(entry) {
+  const contents = Array.isArray(entry.contents) ? entry.contents : [];
+  if (!contents.length) return '';
+  const metadata = [entry.round ? `rodada ${entry.round}` : '', `${contents.length} mensagem(ns)`].filter(Boolean).join(' · ');
+  return `
+    <details class="trace-entry complement-trace" open>
+      <summary class="trace-title">
+        <strong>Complemento do usuário</strong>
+        <span>${escapeHtml(metadata)}</span>
+      </summary>
+      <div class="trace-body">
+        ${contents.map((text) => `<div class="bubble user">${formatContent(text, 'user')}</div>`).join('')}
       </div>
     </details>
   `;
@@ -4603,6 +4694,7 @@ function renderMessageDetailsModal() {
                 ${selectedAttempt.providerUsed ? `<span class="message-model">${escapeHtml(providerLabel(selectedAttempt.providerUsed))}${selectedAttempt.modelUsed ? ` · ${escapeHtml(selectedAttempt.modelUsed)}` : ''}</span>` : ''}
                 <span class="message-status ${escapeAttr(selectedAttempt.status || '')}">${escapeHtml(selectedStatus)}</span>
                 ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
+                ${formatDurationLabel(selectedAttempt.durationMs) ? `<span class="message-status attempt-duration" title="Tempo de trabalho da IA nesta tentativa (não conta o tempo parado esperando você aprovar uma tool)">⏱ ${escapeHtml(formatDurationLabel(selectedAttempt.durationMs))}</span>` : ''}
               </div>
               ${renderThinkingBlock(getMessageThinking(selectedAttempt))}
               <div class="bubble assistant details-selected-output ${escapeAttr(selectedAttempt.status || '')}">
@@ -4815,9 +4907,16 @@ function renderUiLanguageOptions(selectedLanguage = DEFAULT_UI_LANGUAGE) {
 function renderModelOptions(providerId, selectedModel) {
   const provider = getProvider(providerId);
   const models = getSelectableModels(providerId);
+  // openai-compatible ships no static catalog, so an empty list is a legitimate state here --
+  // never synthesize a fake option out of an empty defaultModel.
   const selectableModels = models.length
     ? models
-    : [{ id: provider.defaultModel, label: provider.defaultModel, kind: 'Padrão' }];
+    : provider.defaultModel
+      ? [{ id: provider.defaultModel, label: provider.defaultModel, kind: 'Padrão' }]
+      : [];
+  const emptyOption = selectableModels.length
+    ? ''
+    : `<option value="" ${selectedModel ? '' : 'selected'} disabled>${escapeHtml(uiText('Nenhum modelo cadastrado neste provider'))}</option>`;
   const known = new Set(selectableModels.map((model) => model.id));
   const options = selectableModels
     .map((model) => {
@@ -4832,7 +4931,7 @@ function renderModelOptions(providerId, selectedModel) {
   const customLabel = provider.id === 'ollama' ? uiText('Modelo personalizado ou ainda não instalado') : uiText('Modelo personalizado');
   const customOption = `<option value="${CUSTOM_MODEL_VALUE}" ${customSelected}>${escapeHtml(customLabel)}</option>`;
 
-  return `${options}${customOption}`;
+  return `${emptyOption}${options}${customOption}`;
 }
 
 function renderModelOptionsWithPlaceholder(providerId, selectedModel, placeholder) {
@@ -5123,6 +5222,356 @@ function withCustomModelCapabilities(modelCapabilities, providerId, model, suppo
   return next;
 }
 
+// ---------------------------------------------------------------------------
+// Run chronometer
+// ---------------------------------------------------------------------------
+
+function getRunTimerElapsedMs() {
+  if (!state.runTimer) return 0;
+  return Math.max(0, Date.now() - state.runTimer.startedAt);
+}
+
+function formatRunTimerValue(ms) {
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value) => String(value).padStart(2, '0');
+  return hours ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+// Human-readable version of the duration saved on a finished attempt (View details).
+function formatDurationLabel(ms) {
+  const numeric = Number(ms);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '';
+  if (numeric < 1000) return `${Math.round(numeric)} ms`;
+  return formatRunTimerValue(numeric);
+}
+
+function startRunTimer(chatId) {
+  state.runTimer = { chatId, startedAt: Date.now() };
+  syncRunTimerToState();
+}
+
+function stopRunTimer() {
+  state.runTimer = null;
+  syncRunTimerToState();
+}
+
+// The chip is updated by hand every second instead of re-rendering the app: a full render
+// during a run would rebuild the composer under the user's cursor.
+function syncRunTimerToState() {
+  const shouldTick = Boolean(state.runTimer) && state.config?.appearance?.showRunTimer !== false;
+  if (shouldTick && !state.runTimerInterval) {
+    state.runTimerInterval = window.setInterval(updateRunTimerUi, 1000);
+  }
+  if (!shouldTick && state.runTimerInterval) {
+    window.clearInterval(state.runTimerInterval);
+    state.runTimerInterval = null;
+  }
+  updateRunTimerUi();
+}
+
+function updateRunTimerUi() {
+  const chip = document.querySelector('#run-timer');
+  if (!chip) return;
+  chip.textContent = formatRunTimerValue(getRunTimerElapsedMs());
+}
+
+// ---------------------------------------------------------------------------
+// Queued follow-up messages
+// ---------------------------------------------------------------------------
+
+function getQueueMode() {
+  return state.config?.tools?.queueMode === 'sequential' ? 'sequential' : 'nextTool';
+}
+
+function describeQueueMode() {
+  return getQueueMode() === 'sequential' ? 'sequencial' : 'na próxima tool';
+}
+
+function isAgentRunningForActiveChat() {
+  return Boolean(state.activeChat?.id && state.busy && state.activeAgentChatId === state.activeChat.id);
+}
+
+// Keeps the single composer button in sync with what typing means right now, without a
+// re-render (which would blow away focus/selection while the user is mid-sentence).
+function updateComposerActionButton() {
+  const button = document.querySelector('#composer-action');
+  if (!button) return;
+  const textarea = document.querySelector('#composer textarea');
+  const mode = isAgentRunningForActiveChat() && !textarea?.value.trim() ? 'stop' : 'send';
+  if (button.dataset.actionMode === mode) return;
+  button.dataset.actionMode = mode;
+  button.classList.toggle('danger-button', mode === 'stop');
+  button.setAttribute('aria-label', mode === 'stop' ? 'Parar agente' : 'Enviar');
+  button.title = mode === 'stop' ? 'Parar agente' : 'Enviar';
+  const icon = button.querySelector('span');
+  if (icon) icon.textContent = mode === 'stop' ? '■' : '↑';
+}
+
+// Takes what is in the composer and parks it instead of sending it. In "next tool" mode it also
+// hands the text to the running loop right away, so the model sees it on its next provider call;
+// in "sequential" mode it just waits here until the run finishes.
+async function enqueueComposerMessage() {
+  const chatId = state.activeChat?.id;
+  const textarea = document.querySelector('#composer textarea');
+  const raw = (textarea?.value || '').trim();
+  if (!chatId || !raw) return;
+  const content = expandMentionsForSend(raw);
+  const item = { id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, content, chatId };
+  state.queuedMessages = [...state.queuedMessages, item];
+  if (textarea) textarea.value = '';
+  clearComposerDraft(chatId);
+  autoResizeComposer();
+  state.status =
+    getQueueMode() === 'sequential'
+      ? 'Mensagem na fila: será enviada quando o modelo terminar.'
+      : 'Mensagem na fila: entra como complemento na próxima chamada do modelo.';
+  renderQueueChip();
+  updateComposerActionButton();
+  updateStatusUi();
+
+  if (getQueueMode() !== 'nextTool') return;
+  try {
+    const result = await api(`/api/chats/${encodeURIComponent(chatId)}/queue`, {
+      method: 'POST',
+      body: { id: item.id, content },
+    });
+    if (!result?.queued) {
+      // The run ended between typing and sending -- fall back to the sequential path, which
+      // flushes the queue as a normal message right after the run settles.
+      state.status = 'O modelo terminou antes: a mensagem será enviada como mensagem normal.';
+      updateStatusUi();
+    }
+  } catch (error) {
+    state.queuedMessages = state.queuedMessages.filter((queued) => queued.id !== item.id);
+    state.error = error.message || 'Falha ao enfileirar a mensagem.';
+    setComposerDraft(chatId, raw);
+    renderPreservingVisualState();
+  }
+}
+
+// Redraws only the chips row, so queueing does not disturb the textarea.
+function renderQueueChip() {
+  const overlay = document.querySelector('.composer-overlay');
+  const container = document.querySelector('.composer-main');
+  const markup = renderComposerOverlay(isAgentRunningForActiveChat());
+  if (overlay) overlay.outerHTML = markup;
+  else if (container && markup) container.insertAdjacentHTML('afterbegin', markup);
+  updateRunTimerUi();
+}
+
+// Anything the running loop did not pick up is sent as a plain message once it settles. This is
+// the whole of "sequential" mode, and also the safety net for "next tool" when the model
+// answered before reaching another provider call.
+async function flushQueuedMessages(chatId, consumedIds = []) {
+  if (consumedIds.length) {
+    state.queuedMessages = state.queuedMessages.filter((item) => !consumedIds.includes(item.id));
+  }
+  const pending = state.queuedMessages.filter((item) => item.chatId === chatId);
+  if (!pending.length) return;
+  if (state.activeChat?.id !== chatId) {
+    // The user navigated away mid-run; drop instead of stranding items that would never flush.
+    state.queuedMessages = state.queuedMessages.filter((item) => item.chatId !== chatId);
+    return;
+  }
+  // Still paused on a tool decision: keep them queued, the approval path flushes afterwards.
+  if (chatHasActiveToolApproval(state.activeChat)) return;
+  state.queuedMessages = state.queuedMessages.filter((item) => item.chatId !== chatId);
+  renderQueueChip();
+  await sendMessageContent(pending.map((item) => item.content).join('\n\n'), {});
+}
+
+// ---------------------------------------------------------------------------
+// Custom models
+// ---------------------------------------------------------------------------
+
+function renderCustomModelRows(providerId, config = state.config) {
+  const models = config?.customModels?.[providerId] || [];
+  if (!models.length) {
+    return `<div class="empty-routing-state">Nenhum modelo personalizado em ${escapeHtml(providerLabel(providerId))}.</div>`;
+  }
+  return models
+    .map((modelId, index) => {
+      const capabilities = config?.modelCapabilities?.[providerId]?.[modelId] || {};
+      return `
+        <div class="custom-model-row" data-custom-model-index="${index}">
+          <label>
+            ID do modelo
+            <input class="custom-model-id" value="${escapeAttr(modelId)}" placeholder="ex.: glm-4.6, kimi-k2.5, qwen-max" />
+          </label>
+          <label class="toggle-row switch-row">
+            <input type="checkbox" class="custom-model-images" ${capabilities.images ? 'checked' : ''} />
+            <span class="switch" aria-hidden="true"></span>
+            <span>
+              <strong>Aceita imagens</strong>
+              <small>Ligue apenas se o endpoint aceitar entrada multimodal. Desligado, o app bloqueia anexos de imagem nesse modelo.</small>
+            </span>
+          </label>
+          <button type="button" class="remove-custom-model danger-button" data-custom-model-index="${index}">Remover</button>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+// Reads the rows of the provider currently open in the Providers panel back into the draft.
+// Only that provider is touched -- the other providers' custom models stay untouched in draft.
+function syncCustomModelRowsToDraft() {
+  if (!state.settingsOpen) return;
+  if (!document.querySelector('.custom-model-list')) return;
+  if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  const draftConfig = state.settingsDraft.config;
+  const provider = state.settingsProvider || draftConfig.provider;
+  const models = [];
+  const capabilities = { ...(draftConfig.modelCapabilities?.[provider] || {}) };
+  for (const row of document.querySelectorAll('.custom-model-row')) {
+    const modelId = row.querySelector('.custom-model-id')?.value.trim() || '';
+    if (!modelId || models.includes(modelId)) continue;
+    models.push(modelId);
+    capabilities[modelId] = {
+      ...(capabilities[modelId] || {}),
+      images: row.querySelector('.custom-model-images')?.checked === true,
+    };
+  }
+  draftConfig.customModels = { ...(draftConfig.customModels || {}), [provider]: models };
+  draftConfig.modelCapabilities = { ...(draftConfig.modelCapabilities || {}), [provider]: capabilities };
+}
+
+function addCustomModelRow() {
+  captureSettingsDraftFromForm();
+  if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  const draftConfig = state.settingsDraft.config;
+  const provider = state.settingsProvider || draftConfig.provider;
+  draftConfig.customModels = {
+    ...(draftConfig.customModels || {}),
+    [provider]: [...(draftConfig.customModels?.[provider] || []), ''],
+  };
+  state.settingsDirty = true;
+  renderPreservingVisualState();
+}
+
+function removeCustomModelRow(index) {
+  captureSettingsDraftFromForm();
+  if (!state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  const draftConfig = state.settingsDraft.config;
+  const provider = state.settingsProvider || draftConfig.provider;
+  draftConfig.customModels = {
+    ...(draftConfig.customModels || {}),
+    [provider]: (draftConfig.customModels?.[provider] || []).filter((_, itemIndex) => itemIndex !== index),
+  };
+  state.settingsDirty = true;
+  renderPreservingVisualState();
+}
+
+// Picking "Modelo personalizado" in a chat's model selector opens this instead of revealing a
+// text field that is easy to leave empty -- an empty custom model used to mean the chat sent
+// with no model at all. Confirming registers the model for the provider and selects it, so the
+// very next message already uses it.
+function renderCustomModelDialog() {
+  const dialog = state.customModelDialog;
+  const providerId = dialog.providerId;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal narrow-modal" role="dialog" aria-modal="true" aria-labelledby="custom-model-dialog-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="custom-model-dialog-title">Novo modelo personalizado</h2>
+            <p>Cadastre um modelo em ${escapeHtml(providerLabel(providerId))} e use ele agora mesmo neste chat.</p>
+          </div>
+          <button type="button" id="close-custom-model-dialog" aria-label="Fechar">×</button>
+        </header>
+        <form class="modal-body" id="custom-model-dialog-form">
+          <label>
+            ID exato do modelo
+            <input id="custom-model-dialog-id" value="${escapeAttr(dialog.modelId || '')}" placeholder="ex.: glm-4.6, kimi-k2.5, qwen-max" autofocus />
+          </label>
+          <p class="help-text">É o identificador que o provider espera no campo <code>model</code> da API, não um apelido. Ele fica salvo em Providers → Modelos personalizados e passa a aparecer na lista normal de modelos.</p>
+          <label class="toggle-row switch-row">
+            <input type="checkbox" id="custom-model-dialog-images" ${dialog.supportsImages ? 'checked' : ''} />
+            <span class="switch" aria-hidden="true"></span>
+            <span>
+              <strong>Aceita imagens</strong>
+              <small>Ligue apenas se o endpoint aceitar entrada multimodal.</small>
+            </span>
+          </label>
+          ${dialog.error ? `<div class="message-error">${escapeHtml(dialog.error)}</div>` : ''}
+          <div class="button-row">
+            <button type="button" id="cancel-custom-model-dialog">Cancelar</button>
+            <button type="submit" class="primary" id="confirm-custom-model-dialog">Cadastrar e usar</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function openCustomModelDialog(providerId) {
+  state.customModelDialog = {
+    providerId,
+    // Snapshot taken before the select's other change listener rewrites the draft with the
+    // (still empty) custom model, so cancelling really does undo everything.
+    previousDraft: state.chatSettingsDraft ? { ...state.chatSettingsDraft } : null,
+    previousDirty: state.chatSettingsDirty,
+    modelId: '',
+    supportsImages: false,
+    error: '',
+  };
+  renderPreservingVisualState();
+}
+
+function closeCustomModelDialog() {
+  const dialog = state.customModelDialog;
+  state.customModelDialog = null;
+  if (dialog) {
+    state.chatSettingsDraft = dialog.previousDraft;
+    state.chatSettingsDirty = dialog.previousDirty;
+  }
+  renderPreservingVisualState();
+}
+
+async function confirmCustomModelDialog(event) {
+  event?.preventDefault();
+  const dialog = state.customModelDialog;
+  if (!dialog) return;
+  const modelId = document.querySelector('#custom-model-dialog-id')?.value.trim() || '';
+  const supportsImages = document.querySelector('#custom-model-dialog-images')?.checked === true;
+  if (!modelId) {
+    state.customModelDialog = { ...dialog, error: 'Informe o ID do modelo.', supportsImages };
+    renderPreservingVisualState();
+    return;
+  }
+  const providerId = dialog.providerId;
+  const customModels = {
+    ...(state.config.customModels || {}),
+    [providerId]: [...new Set([...(state.config.customModels?.[providerId] || []), modelId])],
+  };
+  const modelCapabilities = {
+    ...(state.config.modelCapabilities || {}),
+    [providerId]: {
+      ...(state.config.modelCapabilities?.[providerId] || {}),
+      [modelId]: { ...(state.config.modelCapabilities?.[providerId]?.[modelId] || {}), images: supportsImages },
+    },
+  };
+  state.customModelDialog = null;
+  await runAction('Cadastrando modelo personalizado...', async () => {
+    const data = await api('/api/config', { method: 'PUT', body: { customModels, modelCapabilities } });
+    state.config = data.config;
+    state.providers = data.providers || state.providers;
+    state.models = data.models || state.models;
+    if (state.settingsDraft) state.settingsDraft = buildSettingsDraft();
+  });
+  if (state.error || !state.activeChat) return;
+  // The model is a real option now, so point every rendered chat-model selector at it and save
+  // the chat right away -- that is what makes it usable on the next message without an extra step.
+  document.querySelectorAll('#chat-model-input, #mobile-chat-model-input').forEach((select) => {
+    select.value = modelId;
+  });
+  state.chatSettingsDirty = true;
+  await saveChatSettings(null);
+}
+
 function getAttachmentWarning(attachment) {
   if (attachment.kind === 'image') {
     const { provider, model } = getEffectiveChatRuntime();
@@ -5330,7 +5779,7 @@ function bindAppEvents() {
     button.addEventListener('click', () => loadChat(button.dataset.chatId));
   });
   document.querySelector('#composer').addEventListener('submit', sendMessage);
-  document.querySelector('#stop-agent')?.addEventListener('click', stopActiveAgent);
+  document.querySelector('#composer-action')?.addEventListener('click', handleComposerActionClick);
   document.querySelector('#composer textarea').addEventListener('keydown', handleComposerKeydown);
   document.querySelector('#composer textarea').addEventListener('input', handleComposerInput);
   document.querySelector('#mention-suggestions')?.addEventListener('mousedown', (event) => {
@@ -5376,11 +5825,14 @@ function bindAppEvents() {
   });
   document.querySelector('#skill-editor-form')?.addEventListener('submit', saveSkillEditor);
   document.querySelector('#close-skill-editor')?.addEventListener('click', closeSkillEditor);
+  document.querySelector('#custom-model-dialog-form')?.addEventListener('submit', confirmCustomModelDialog);
+  document.querySelector('#close-custom-model-dialog')?.addEventListener('click', closeCustomModelDialog);
+  document.querySelector('#cancel-custom-model-dialog')?.addEventListener('click', closeCustomModelDialog);
   document.querySelector('#cancel-skill-editor')?.addEventListener('click', closeSkillEditor);
   document.querySelector('#improve-skill-with-ai')?.addEventListener('click', improveSkillEditorWithAI);
   document.querySelector('#delete-skill-from-editor')?.addEventListener('click', (event) => removeSkill(event.currentTarget.dataset.skillId));
   document.querySelector('#chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
-  document.querySelector('#chat-model-input')?.addEventListener('change', () => toggleChatCustomModel());
+  document.querySelector('#chat-model-input')?.addEventListener('change', () => handleChatModelSelectChange());
   document.querySelector('#chat-title-input')?.addEventListener('input', markChatSettingsDirty);
   document.querySelector('#chat-provider-input')?.addEventListener('change', markChatSettingsDirty);
   document.querySelector('#chat-model-input')?.addEventListener('change', markChatSettingsDirty);
@@ -5498,6 +5950,7 @@ function bindAppEvents() {
     document.querySelector('#toggle-api-key')?.addEventListener('click', toggleApiKeyVisibility);
     document.querySelector('#add-api-key')?.addEventListener('click', addApiKeyRow);
     document.querySelector('#add-model-fallback')?.addEventListener('click', addModelFallbackRow);
+    document.querySelector('#add-custom-model')?.addEventListener('click', addCustomModelRow);
     document.querySelector('#add-provider-fallback')?.addEventListener('click', addProviderFallbackRow);
     document.querySelector('#create-profile')?.addEventListener('click', createProfileFromPrompt);
     document.querySelectorAll('.activate-profile').forEach((button) => {
@@ -5576,6 +6029,9 @@ function bindAppEvents() {
     document.querySelectorAll('.remove-model-fallback').forEach((button) => {
       button.addEventListener('click', () => removeModelFallbackRow(Number(button.dataset.modelFallbackIndex)));
     });
+    document.querySelectorAll('.remove-custom-model').forEach((button) => {
+      button.addEventListener('click', () => removeCustomModelRow(Number(button.dataset.customModelIndex)));
+    });
     document.querySelector('#export-data').addEventListener('click', exportData);
     document.querySelector('#import-data').addEventListener('change', importData);
     document.querySelector('#delete-all-chats')?.addEventListener('click', deleteAllChatsWithDoubleConfirm);
@@ -5603,7 +6059,7 @@ function bindAppEvents() {
   if (state.chatSettingsOpen) {
     document.querySelector('#mobile-chat-settings-form').addEventListener('submit', saveChatSettings);
     document.querySelector('#mobile-chat-provider-input')?.addEventListener('change', changeChatProviderDraft);
-    document.querySelector('#mobile-chat-model-input')?.addEventListener('change', () => toggleChatCustomModel('mobile-'));
+    document.querySelector('#mobile-chat-model-input')?.addEventListener('change', () => handleChatModelSelectChange('mobile-'));
     document.querySelector('#mobile-chat-settings-form').addEventListener('input', markChatSettingsDirty);
     document.querySelector('#mobile-chat-settings-form').addEventListener('change', markChatSettingsDirty);
     document.querySelector('#mobile-open-chat-context')?.addEventListener('click', openChatContext);
@@ -6661,6 +7117,19 @@ function toggleChatCustomModel(prefix = '') {
   imagesRow?.classList.toggle('hidden', select.value !== CUSTOM_MODEL_VALUE);
 }
 
+// Choosing "Modelo personalizado" in a chat opens the registration dialog instead of just
+// unhiding a text field: a blank field meant the chat could be sent with no model at all.
+function handleChatModelSelectChange(prefix = '') {
+  const select = document.querySelector(`#${prefix}chat-model-input`);
+  if (!select) return;
+  if (select.value !== CUSTOM_MODEL_VALUE) {
+    toggleChatCustomModel(prefix);
+    return;
+  }
+  const provider = state.chatSettingsDraft?.provider || state.activeChat?.provider || state.config.provider;
+  openCustomModelDialog(isOfflineMode(state.config) ? 'ollama' : provider);
+}
+
 function toggleSetupCustomModel() {
   const select = document.querySelector('#setup-model');
   const row = document.querySelector('#setup-custom-model-row');
@@ -6921,7 +7390,13 @@ function canLeaveActiveChatDraft() {
 
 async function sendMessage(event) {
   event.preventDefault();
-  if (state.busy) return;
+  if (state.busy) {
+    // Sending while this chat's agent is still working is a queued follow-up, not an error.
+    if (isAgentRunningForActiveChat() && !chatHasActiveToolApproval(state.activeChat)) {
+      await enqueueComposerMessage();
+    }
+    return;
+  }
   const textarea = event.currentTarget.elements.content;
   const content = textarea.value.trim();
   if (!content && !state.pendingAttachments.length) return;
@@ -6977,6 +7452,13 @@ async function sendMessageFromValues(textarea, content) {
     return;
   }
   const { provider: activeProvider, model: activeModel } = getEffectiveChatRuntime();
+  if (!String(activeModel || '').trim()) {
+    // Providers without a fixed catalog can sit with no model at all; sending would fire a
+    // request with an empty model id and come back as an opaque provider error.
+    state.error = 'Nenhum modelo configurado neste chat. Escolha um modelo ou cadastre um personalizado antes de enviar.';
+    renderPreservingVisualState();
+    return;
+  }
   const activeModelMetadata = getModelMetadata(activeProvider, activeModel);
   // Sending an image to a non-vision model is intentionally allowed: the model won't see it
   // visually, but it still gets the saved path/metadata as text and can act on it indirectly
@@ -7042,6 +7524,8 @@ async function sendMessageContent(content, options = {}) {
 
   state.activeAgentChatId = chatId;
   state.stopInFlight = false;
+  let consumedComplementIds = [];
+  startRunTimer(chatId);
   await runAction(
     `Enviando para ${providerLabel(getEffectiveChatRuntime().provider)}...`,
     async () => {
@@ -7062,6 +7546,7 @@ async function sendMessageContent(content, options = {}) {
       } finally {
         stopEventPolling();
       }
+      consumedComplementIds = data.queuedComplementIds || [];
       state.activeChat = data.chat;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
       const latestMessage = state.activeChat?.messages?.[Math.max(0, (state.activeChat?.messages?.length || 1) - 1)];
@@ -7082,6 +7567,7 @@ async function sendMessageContent(content, options = {}) {
   );
   if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
   state.stopInFlight = false;
+  stopRunTimer();
   if (!state.error && state.activeChat?.id === chatId) {
     scrollMessagesToBottom();
   }
@@ -7097,6 +7583,9 @@ async function sendMessageContent(content, options = {}) {
     renderPreservingVisualState();
   }
   await maybeAutoContinue(chatId, options);
+  // Anything the run did not pick up goes out now as a normal message -- this is both the
+  // whole of "sequential" mode and the fallback when the model finished before draining.
+  await flushQueuedMessages(chatId, consumedComplementIds);
   return { messageAccepted };
 }
 
@@ -7123,6 +7612,9 @@ async function maybeAutoContinue(chatId, options = {}) {
 async function stopActiveAgent() {
   const chatId = state.activeAgentChatId || state.activeChat?.id;
   if (!chatId || state.stopInFlight) return;
+  // Stopping cancels what is queued for this chat too -- the user asked for the whole thing to
+  // stop, not for the follow-ups to fire on their own once the run unwinds.
+  state.queuedMessages = state.queuedMessages.filter((item) => item.chatId !== chatId);
   state.stopInFlight = true;
   state.status = 'Interrompendo agente...';
   renderPreservingVisualState();
@@ -7156,10 +7648,14 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
   button?.closest('.tool-approval-actions')?.querySelectorAll('button').forEach((item) => {
     item.disabled = true;
   });
+  // Declared out here on purpose: the auto-continue and queue-flush calls after the finally
+  // block need it, and it used to be scoped to the try block (ReferenceError on every decision).
+  const chatId = state.activeChat?.id;
+  let consumedComplementIds = [];
   try {
-    const chatId = state.activeChat?.id;
     state.activeAgentChatId = chatId;
     state.stopInFlight = false;
+    startRunTimer(chatId);
     await runAction(decision === 'approve' ? 'Executando tool aprovada...' : 'Negando tool...', async () => {
       startEventPolling(chatId);
       let data;
@@ -7171,6 +7667,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
       } finally {
         stopEventPolling();
       }
+      consumedComplementIds = data.queuedComplementIds || [];
       state.activeChat = data.chat;
       state.chats = data.chats || state.chats;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
@@ -7189,10 +7686,12 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
     if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
     state.stopInFlight = false;
   } finally {
+    stopRunTimer();
     state.toolDecisionInFlight.delete(decisionKey);
   }
   // If approving the tool still left the run mid-task, honor Auto continue here too.
   await maybeAutoContinue(chatId, {});
+  await flushQueuedMessages(chatId, consumedComplementIds);
 }
 
 async function refreshChatAfterAcceptedMessage(chatId) {
@@ -7458,6 +7957,15 @@ function handleComposerInput() {
   saveComposerDraft();
   autoResizeComposer();
   updateMentionSuggestions();
+  updateComposerActionButton();
+}
+
+// One button, two meanings. The click listener runs before the form's submit, so the "stop"
+// mode simply cancels the submit instead of needing a separate button in the DOM.
+function handleComposerActionClick(event) {
+  if (event.currentTarget.dataset.actionMode !== 'stop') return;
+  event.preventDefault();
+  stopActiveAgent();
 }
 
 function getComposerDraft(chatId) {
@@ -7918,6 +8426,7 @@ async function saveChatSettings(event, options = {}) {
 async function saveGeneralSettings(event, options = {}) {
   event?.preventDefault();
   syncProviderApiDraft();
+  syncCustomModelRowsToDraft();
   const formElement = event?.currentTarget || document.querySelector('#general-settings-form');
   if (!formElement) return;
   const form = new FormData(formElement);
@@ -7925,6 +8434,8 @@ async function saveGeneralSettings(event, options = {}) {
   const offlineMode = form.get('offlineMode') === 'on';
   const provider = offlineMode ? 'ollama' : form.get('provider') || draftConfig.provider;
   const model = getModelValue('#default-model-input', '#default-custom-model-input', provider);
+  // draftConfig already carries the rows edited in Providers -> Modelos personalizados; this
+  // only adds the default model on top when it was typed as a one-off custom id.
   const customModels = withCustomModel(draftConfig.customModels, provider, model);
   const modelCapabilities = withCustomModelCapabilities(
     draftConfig.modelCapabilities,
@@ -7974,6 +8485,7 @@ async function saveGeneralSettings(event, options = {}) {
       browser: form.get('tool_browser') === 'on',
       browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
       autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
+      queueMode: form.get('queueMode') === 'sequential' ? 'sequential' : 'nextTool',
       skills: form.get('tool_skills') === 'on',
       secretDisclosure: form.get('tool_secretDisclosure') === 'on',
       maxToolRounds: Number(form.get('maxToolRounds') || 8),
@@ -7999,6 +8511,7 @@ async function saveGeneralSettings(event, options = {}) {
         appearance: {
           theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
           uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draftConfig.appearance?.uiLanguage),
+          showRunTimer: form.get('showRunTimer') === 'on',
         },
         tools,
         userMemory: {
@@ -8124,6 +8637,7 @@ function captureSettingsDraftFromForm() {
   const formElement = document.querySelector('#general-settings-form');
   if (!formElement) return;
   syncProviderApiDraft();
+  syncCustomModelRowsToDraft();
   const form = new FormData(formElement);
   const draftConfig = state.settingsDraft.config;
   const offlineMode = form.get('offlineMode') === 'on';
@@ -8143,6 +8657,7 @@ function captureSettingsDraftFromForm() {
     ...(draftConfig.appearance || {}),
     theme: form.get('theme') || draftConfig.appearance?.theme || 'light',
     uiLanguage: normalizeUiLanguage(form.get('uiLanguage') || draftConfig.appearance?.uiLanguage),
+    showRunTimer: form.get('showRunTimer') === 'on',
   };
   const rawSearchMode = form.get('searchEnabled') === 'on' ? form.get('searchMode') || getSearchMode(draftConfig.tools) : 'off';
   const searchMode = offlineMode && rawSearchMode === 'both' ? 'off' : rawSearchMode;
@@ -8173,6 +8688,7 @@ function captureSettingsDraftFromForm() {
     browser: form.get('tool_browser') === 'on',
     browserBinaryPath: String(form.get('tool_browserBinaryPath') || '').trim(),
     autoContinueOnError: form.get('tool_autoContinueOnError') === 'on',
+    queueMode: form.get('queueMode') === 'sequential' ? 'sequential' : 'nextTool',
     skills: form.get('tool_skills') === 'on',
     secretDisclosure: form.get('tool_secretDisclosure') === 'on',
     maxToolRounds: Number(form.get('maxToolRounds') || 8),

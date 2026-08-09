@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { panelDir } from './paths.js';
-import { compactChat, continueToolApproval, editContextSummary, improveSkillWithAI, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
+import { compactChat, continueToolApproval, editContextSummary, improveSkillWithAI, queueChatComplement, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
@@ -493,6 +493,16 @@ async function handleChatsApi(request, response, parts) {
       chat: await readChat(chatId),
       activeChatEvents: await readChatEvents(chatId),
     });
+    return;
+  }
+
+  // Queue a follow-up message onto a run that is already going, without interrupting it. It is
+  // a separate route from POST /messages on purpose: that request is the long-lived one that
+  // owns the whole agent loop, so it cannot also be the channel for talking to the loop midway.
+  if (method === 'POST' && chatId && parts[3] === 'queue') {
+    const body = await readBody(request);
+    const result = await queueChatComplement(chatId, { id: body.id || null, content: body.content || '' });
+    sendJson(response, 200, result);
     return;
   }
 

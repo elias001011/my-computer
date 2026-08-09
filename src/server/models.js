@@ -777,14 +777,14 @@ export const providerCatalog = Object.freeze([
     adapter: 'openai-compatible',
     baseUrl: '',
     requiresApiKey: true,
-    defaultModel: 'modelo-personalizado',
+    // No static model on purpose: this provider has no fixed catalog. Models come from
+    // /models discovery or from the user's own registered custom models. A placeholder
+    // entry here used to look like a real, already-configured model in the selector and
+    // was sent literally as the model id to the API.
+    defaultModel: '',
     catalogMode: 'dynamic',
     catalogSummary: 'Descobre modelos via /models no endpoint configurado; fallback manual sempre disponível.',
-    models: [
-      model('modelo-personalizado', 'Modelo personalizado', 'Endpoint próprio', null, {
-        description: 'Fallback manual para endpoints OpenAI-compatible.',
-      }),
-    ],
+    models: [],
   },
 ]);
 

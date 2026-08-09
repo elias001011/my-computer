@@ -34,6 +34,7 @@ export const defaultConfig = Object.freeze({
   appearance: {
     theme: 'light',
     uiLanguage: 'en-US',
+    showRunTimer: true,
   },
   tools: {
     terminal: true,
@@ -49,6 +50,7 @@ export const defaultConfig = Object.freeze({
     browser: false,
     browserBinaryPath: '',
     autoContinueOnError: false,
+    queueMode: 'nextTool',
     chatMemory: true,
     persistentMemory: true,
     autoCompact: true,
@@ -2672,6 +2674,10 @@ function normalizeTools(tools = {}, options = {}) {
     browser: tools.browser === true,
     browserBinaryPath: String(tools.browserBinaryPath || '').trim().slice(0, 500),
     autoContinueOnError: tools.autoContinueOnError === true,
+    // How a message typed while the model is still working gets delivered: 'nextTool' hands it
+    // to the model on its next provider call (no interruption), 'sequential' waits for the run
+    // to finish and then sends it as a normal message.
+    queueMode: tools.queueMode === 'sequential' ? 'sequential' : 'nextTool',
     chatMemory: tools.chatMemory !== false,
     persistentMemory: tools.persistentMemory !== false,
     autoCompact: tools.autoCompact !== false,
@@ -2845,6 +2851,7 @@ function normalizeAppearanceSettings(appearance = {}) {
   return {
     theme: ['light', 'dark', 'black', 'system'].includes(theme) ? theme : 'light',
     uiLanguage: ['en-US', 'pt-BR'].includes(uiLanguage) ? uiLanguage : 'en-US',
+    showRunTimer: appearance.showRunTimer !== false,
   };
 }
 
