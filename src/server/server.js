@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { panelDir } from './paths.js';
-import { compactChat, continueToolApproval, editContextSummary, improveSkillWithAI, queueChatComplement, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
+import { compactChat, continueToolApproval, editContextSummary, getActiveRunInfo, improveSkillWithAI, queueChatComplement, saveContextWindow, sendUserMessage, stopChatRun } from './assistant.js';
 import { getProviderModels, getProvidersForClient, refreshRuntimeModelCatalog } from './models.js';
 import { listOllamaInstalledModels } from './provider-client.js';
 import { runTerminalCommand } from './tools.js';
@@ -492,6 +492,17 @@ async function handleChatsApi(request, response, parts) {
       message,
       chat: await readChat(chatId),
       activeChatEvents: await readChatEvents(chatId),
+    });
+    return;
+  }
+
+  // The hot path while a run is going: the panel polls this a few times per second. It reads
+  // only the event tail and the run flag -- deliberately NOT the whole chat, which used to make
+  // every tick reparse hundreds of KB of messages plus the entire event log.
+  if (method === 'GET' && chatId && parts[3] === 'events') {
+    sendJson(response, 200, {
+      activeChatEvents: await readChatEvents(chatId),
+      run: getActiveRunInfo(chatId),
     });
     return;
   }

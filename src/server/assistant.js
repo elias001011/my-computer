@@ -122,6 +122,15 @@ export async function stopChatRun(chatId, options = {}) {
   };
 }
 
+// Whether this chat currently has a run in flight in THIS process. The panel polls it so it
+// can tell "the model is still working" apart from "the run is gone" -- a restarted or killed
+// server used to leave the UI waiting forever on a request that would never be answered.
+export function getActiveRunInfo(chatId) {
+  const activeRun = activeChatRuns.get(String(chatId || ''));
+  if (!activeRun) return { active: false };
+  return { active: true, operation: activeRun.operation, startedAt: activeRun.startedAt };
+}
+
 // Queue a follow-up message for a run that is already in flight. Deliberately does NOT abort
 // anything: the run keeps going and picks the text up on its next provider call. Returns
 // queued:false when there is nothing running, so the caller can just send it as a normal message.
@@ -325,7 +334,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           throwIfStopped(operationSignal);
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
-          appendToolResultForModel(workingMessages, toolCall, toolUse);
+          appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(effectiveConfig) });
           if (toolUseHasExecutionFailure(toolUse)) {
             const failedContent = cleanAssistantContent(assistantMessage.content || '');
             assistantOutcome = {
@@ -358,7 +367,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           throwIfStopped(operationSignal);
           toolUses.push(toolUse);
           executionTrace.push(createToolTraceEntry(toolUse));
-          appendToolResultForModel(workingMessages, toolCall, toolUse);
+          appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(effectiveConfig) });
           if (toolUseHasExecutionFailure(toolUse)) {
             const failedContent = cleanAssistantContent(assistantMessage.content || '');
             assistantOutcome = {
@@ -428,7 +437,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         throwIfStopped(operationSignal);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
-        appendToolResultForModel(workingMessages, toolCall, toolUse);
+        appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(effectiveConfig) });
         if (toolUseHasExecutionFailure(toolUse)) {
           const failedContent = cleanAssistantContent(assistantMessage.content || '');
           assistantOutcome = {
@@ -741,7 +750,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       throwIfStopped(operationSignal);
       toolUses.push(toolUse);
       executionTrace.push(createToolTraceEntry(toolUse));
-      appendToolResultForModel(workingMessages, toolCall, toolUse);
+      appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(selectedConfig) });
       if (toolUseHasExecutionFailure(toolUse)) {
         await finalizeApprovedToolMessage({
           durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
@@ -1157,7 +1166,7 @@ async function continueAssistantToolLoop({
         throwIfStopped(signal);
         toolUses.push(toolUse);
         executionTrace.push(createToolTraceEntry(toolUse));
-        appendToolResultForModel(workingMessages, toolCall, toolUse);
+        appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(effectiveConfig) });
         if (toolUseHasExecutionFailure(toolUse)) {
           return {
             outcome: buildToolFailureOutcome(toolUse, assistantMessage.finishReason, currentThinking),
@@ -1219,7 +1228,7 @@ async function continueAssistantToolLoop({
       throwIfStopped(signal);
       toolUses.push(toolUse);
       executionTrace.push(createToolTraceEntry(toolUse));
-      appendToolResultForModel(workingMessages, toolCall, toolUse);
+      appendToolResultForModel(workingMessages, toolCall, toolUse, { toolOutputBudgetChars: getToolOutputBudget(effectiveConfig) });
       if (toolUseHasExecutionFailure(toolUse)) {
         return {
           outcome: buildToolFailureOutcome(toolUse, assistantMessage.finishReason, currentThinking),
@@ -1955,14 +1964,7 @@ function buildSystemPrompt(
   // chat turns and scheduled-task runs (both are user-originated content, just one is typed
   // live and the other configured ahead of time), gated by config.context, default on.
   const currentDateTimeInstruction =
-    config.context?.includeCurrentDateTime !== false
-      ? (() => {
-          const now = new Date();
-          const timezone = getServerLocalTimezone();
-          const formatted = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: timezone }).format(now);
-          return `Current date and time right now: ${formatted} (${timezone}); ISO UTC: ${now.toISOString()}. Use this as ground truth for "today", "yesterday", "this year", any relative date, and whether an event is in the past or future -- never guess the current date from your training cutoff.`;
-        })()
-      : '';
+    config.context?.includeCurrentDateTime !== false ? buildCurrentDateTimeInstruction() : '';
 
   return [
     'You are My Computer, a self-hosted AI assistant integrated with this local app, not a generic chatbot.',
@@ -1990,7 +1992,9 @@ function buildSystemPrompt(
     // here would still teach the tool name and invite hallucinated calls.
     config.tools?.terminalSessions === true
       ? [
-          'Persistent terminal sessions are enabled via the terminal_session tool. Use run_terminal_command for one-shot commands; use terminal_session when shell state must survive between calls: interactive programs and REPLs, long tasks you need to supervise step by step, or multi-command work sharing cwd/env. Reach for terminal_session more often than a single one-shot command whenever the task is likely to need more than one related step -- installing something and then using it, running a script and reacting to its output, or anything where you cannot predict the one exact command that finishes the job.',
+          'Persistent terminal sessions are enabled via the terminal_session tool, and it is the DEFAULT for anything with more than one step -- not the exception. Decide like this, before your first command: will this task plausibly need more than one related command? If yes, open a terminal_session and work inside it. Only use run_terminal_command when the whole job really is a single self-contained command whose exact form you already know.',
+          'Concretely, terminal_session is the right tool for: exploring or auditing a repository or directory, installing something and then using it, running a script and reacting to its output, anything interactive or with a REPL, anything that needs a stable cwd or environment across steps, and any task you would naturally do by typing several commands in a row. Chaining commands with && inside one run_terminal_command to avoid opening a session is the wrong move: it wastes tokens re-establishing context on every call, hides where a failure happened, and re-runs work you already did.',
+          'Cost matters and favours the session: a session keeps cwd, environment and program state between calls, so each step is a short command instead of a long compound one carrying its own setup, and you re-read far less output. On a multi-step task terminal_session is the cheaper option in tokens, not just the more capable one.',
           'Session flow: open, then write text (Enter is pressed by default) with a waitSeconds that matches how slow the command is, and the visible screen returns. If the screen shows work still in progress, call read with a larger waitSeconds instead of typing again. Close sessions you no longer need.',
           'The user sees and types into these same sessions through the Terminal window in the panel. When a program asks for a password, sudo authentication, or any manual step you cannot perform, tell the user exactly what to do there (open the Terminal window, which session, what to type), wait for them to confirm in chat, then continue with read.',
         ].join('\n')
@@ -2071,7 +2075,7 @@ function buildSystemPrompt(
       ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
       : 'Automatic context compaction through tools is disabled by user settings.',
     config.tools?.chatTitle
-      ? 'If the chat title is generic, call rename_chat after the first user message with a short descriptive title. For rename_chat, normally set returnOutput false.'
+      ? 'CHAT TITLE, FIRST ACTION: if the chat title is still generic ("Novo chat"/"New chat"), your very first tool call of the turn must be rename_chat with a short descriptive title taken from what the user just asked -- before the terminal, before any reading, before answering. Do not postpone it to the end of the task and do not skip it because the task looks urgent; it costs one cheap call and it is what makes the chat findable later. Use returnOutput false for it, and then continue with the real work in the same turn.'
       : 'Chat title editing through tools is disabled by user settings.',
     config.tools?.sendEmail
       ? 'The send_email tool is available. It always sends to the single destination address configured by the user in Email settings -- there is no recipient parameter and you cannot choose or override the destination. Use it when the user or the task prompt asks for an emailed result.'
@@ -2170,6 +2174,29 @@ function renderSecretsPromptSection(secretsContext, config = {}) {
   }
   lines.push('</secrets>');
   return lines.join('\n');
+}
+
+// The clock is snapped to a coarse bucket on purpose. Every provider that does automatic
+// prompt caching (OpenAI, DeepSeek, Zhipu/GLM, Moonshot, Groq...) keys on an exact prefix
+// match, and this string sits near the top of the system prompt -- so an exact timestamp,
+// which is what this used to emit down to the millisecond, changed the prefix on every single
+// request and guaranteed a 0% cache hit rate for the whole prompt AND the whole history behind
+// it. Bucketing keeps the prefix byte-identical across an entire agent loop (and across bursts
+// of turns), which is exactly the window where caching pays off, while still being far more
+// accurate for relative dates than the model's training cutoff.
+const CLOCK_BUCKET_MINUTES = 10;
+
+function buildCurrentDateTimeInstruction() {
+  const bucketMs = CLOCK_BUCKET_MINUTES * 60 * 1000;
+  const bucketed = new Date(Math.floor(Date.now() / bucketMs) * bucketMs);
+  const timezone = getServerLocalTimezone();
+  const formatted = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: timezone }).format(bucketed);
+  return [
+    `Current date and time: ${formatted} (${timezone}); ISO UTC: ${bucketed.toISOString().replace(/\.\d{3}Z$/, 'Z')}.`,
+    `It is rounded down to the nearest ${CLOCK_BUCKET_MINUTES} minutes so the prompt stays cacheable, so treat the minutes as approximate.`,
+    'Use it as ground truth for "today", "yesterday", "this year", any relative date, and whether an event is in the past or future -- never guess the current date from your training cutoff.',
+    'If you need the exact second, read it from the machine with a terminal command instead of from this line.',
+  ].join(' ');
 }
 
 function buildTechnicalLevelInstruction(config) {
@@ -3381,7 +3408,7 @@ function shouldReturnToolOutput(toolCall) {
   return name !== 'rename_chat';
 }
 
-function appendToolResultForModel(messages, toolCall, toolUse) {
+function appendToolResultForModel(messages, toolCall, toolUse, options = {}) {
   const returnOutput = shouldReturnToolOutput(toolCall);
   // A browser screenshot carries the PNG transiently so we can hand it to a vision
   // model as a real image; strip it before it is stringified into the tool result or
@@ -3402,6 +3429,7 @@ function appendToolResultForModel(messages, toolCall, toolUse) {
     name: toolUse.name,
     content: truncate(JSON.stringify(result), outputLimit),
   });
+  enforceToolOutputBudget(messages, options.toolOutputBudgetChars);
   if (imageForModel?.dataBase64) {
     messages.push({
       role: 'user',
@@ -3412,6 +3440,37 @@ function appendToolResultForModel(messages, toolCall, toolUse) {
     });
   }
   return returnOutput;
+}
+
+const TOOL_ELISION_MARKER = '[output antigo elidido pelo My Computer';
+const TOOL_ELISION_KEEP_CHARS = 600;
+
+// Caps how much raw tool output the model carries inside a single turn. Each individual result
+// was already capped, but nothing capped the total: a deep investigation chaining 20+ terminal
+// calls stacked hundreds of thousands of characters into one request, which is how a run ends
+// up failing with finish_reason "length" over and over -- and it is the single largest line
+// item on the token bill. Older results are collapsed to a head plus a note first, so the most
+// recent evidence (what the model is actually reasoning about) always survives intact.
+function getToolOutputBudget(config = {}) {
+  return Number(config?.context?.toolOutputBudgetChars) || 0;
+}
+
+function enforceToolOutputBudget(messages, budgetChars) {
+  const budget = Number(budgetChars);
+  if (!Number.isFinite(budget) || budget <= 0) return;
+  const toolMessages = messages.filter((message) => message.role === 'tool');
+  let total = toolMessages.reduce((sum, message) => sum + (message.content?.length || 0), 0);
+  if (total <= budget) return;
+
+  for (const message of toolMessages) {
+    if (total <= budget) break;
+    const content = message.content || '';
+    if (content.includes(TOOL_ELISION_MARKER)) continue;
+    if (content.length <= TOOL_ELISION_KEEP_CHARS) continue;
+    const head = content.slice(0, TOOL_ELISION_KEEP_CHARS);
+    message.content = `${head}\n\n${TOOL_ELISION_MARKER} para caber no contexto: ${content.length} caracteres no total. Rode a tool de novo se precisar do resto.]`;
+    total -= content.length - message.content.length;
+  }
 }
 
 function renderToolFailureMessage(toolUse) {

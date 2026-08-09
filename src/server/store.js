@@ -22,7 +22,14 @@ let activeProfileId = 'default';
 let activeRootRuntimeHome = getRuntimeHome();
 let activePaths = buildProfilePaths(activeProfileId);
 
-export const defaultConfig = Object.freeze({
+export // Event-log sizing. The tail read is what the hot polling path uses; the trim keeps the file
+// from growing without bound across months of use.
+const EVENTS_READ_TAIL_BYTES = 1024 * 1024;
+const EVENTS_MAX_BYTES = 8 * 1024 * 1024;
+const EVENTS_KEEP_BYTES = 4 * 1024 * 1024;
+const EVENTS_SIZE_CHECK_EVERY = 200;
+
+const defaultConfig = Object.freeze({
   setupComplete: false,
   provider: 'groq',
   model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
@@ -88,6 +95,7 @@ export const defaultConfig = Object.freeze({
     autoCompactMinMessages: 12,
     historyBudgetEnabled: true,
     historyBudgetChars: 28000,
+    toolOutputBudgetChars: 60000,
   },
   email: {
     enabled: false,
@@ -1838,12 +1846,11 @@ export async function readEvents(options = {}) {
   const limit = typeof options === 'number' ? options : Number(options.limit || 80);
   const chatId = typeof options === 'object' ? options.chatId : null;
   await ensureRuntime();
-  let raw = '';
-  try {
-    raw = await fs.readFile(getActivePaths().eventsPath, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
+  // Only the tail is read. The panel polls this a few times per second while a run is going,
+  // and the log is append-only and shared by every chat -- parsing the whole file each tick
+  // allocated tens of megabytes per second on a busy runtime and was enough, on its own, to
+  // push the process past a PM2 max_memory_restart limit and kill a run mid-task.
+  const raw = await readFileTail(getActivePaths().eventsPath, EVENTS_READ_TAIL_BYTES);
 
   return raw
     .split('\n')
@@ -1871,7 +1878,49 @@ export async function appendEvent(event) {
     ...event,
   };
   await fs.appendFile(paths.eventsPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  await maybeTrimEventsLog(paths.eventsPath);
   return entry;
+}
+
+// Reads at most `maxBytes` from the end of a line-delimited file, dropping the first
+// (necessarily partial) line so every returned line is valid.
+async function readFileTail(filePath, maxBytes) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+  } catch (error) {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  }
+  try {
+    const { size } = await handle.stat();
+    if (size <= maxBytes) return handle.readFile('utf8');
+    const buffer = Buffer.alloc(maxBytes);
+    await handle.read(buffer, 0, maxBytes, size - maxBytes);
+    const text = buffer.toString('utf8');
+    const firstBreak = text.indexOf('\n');
+    return firstBreak === -1 ? '' : text.slice(firstBreak + 1);
+  } finally {
+    await handle.close();
+  }
+}
+
+// The event log is append-only and never expired, so a long-lived runtime grows it without
+// bound. Trimming keeps recent history (which is all the UI and the details view ever show)
+// and stops the file from becoming a liability for every reader.
+let eventAppendsSinceSizeCheck = 0;
+async function maybeTrimEventsLog(eventsPath) {
+  eventAppendsSinceSizeCheck += 1;
+  if (eventAppendsSinceSizeCheck < EVENTS_SIZE_CHECK_EVERY) return;
+  eventAppendsSinceSizeCheck = 0;
+  try {
+    const { size } = await fs.stat(eventsPath);
+    if (size <= EVENTS_MAX_BYTES) return;
+    const kept = await readFileTail(eventsPath, EVENTS_KEEP_BYTES);
+    await fs.writeFile(eventsPath, kept, { mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
 export async function getRuntimeInfo() {
@@ -2739,6 +2788,9 @@ function normalizeContextSettings(context = {}) {
     historyBudgetEnabled: context.historyBudgetEnabled !== false,
     historyBudgetChars: clampInteger(context.historyBudgetChars, 2000, 120000, 28000),
     includeCurrentDateTime: context.includeCurrentDateTime !== false,
+    // 0 disables the cap entirely (the old behaviour); the default keeps a deep investigation
+    // from stacking every terminal dump of the turn into one request.
+    toolOutputBudgetChars: clampInteger(context.toolOutputBudgetChars, 0, 400000, 60000),
   };
 }
 

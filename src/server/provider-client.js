@@ -895,7 +895,12 @@ async function callAnthropicChat({
   const body = {
     model,
     max_tokens: Number(modelSettings.maxTokens || maxTokens || 2048),
-    system,
+    // Anthropic is the one provider here that does NOT cache automatically: the prefix is only
+    // reused when the request marks where it ends. Two breakpoints, the most the pricing model
+    // rewards: the system prompt (large and stable across a whole agent loop) and the tool
+    // schemas. Everything before a marked block is billed at the cheaper cache-read rate on the
+    // next call within the cache window, which for a multi-round run is most of the request.
+    system: withAnthropicCacheControl(system),
     messages: anthropicMessages,
   };
   if (model !== 'claude-opus-4-7') {
@@ -908,10 +913,12 @@ async function callAnthropicChat({
   if (modelSettings.stop?.length) body.stop_sequences = modelSettings.stop;
 
   if (tools?.length) {
-    body.tools = tools.map((tool) => ({
+    body.tools = tools.map((tool, index) => ({
       name: tool.function.name,
       description: tool.function.description,
       input_schema: tool.function.parameters || { type: 'object', properties: {} },
+      // Marking only the last schema caches the whole tool block before it.
+      ...(index === tools.length - 1 ? { cache_control: { type: 'ephemeral' } } : {}),
     }));
   }
 
@@ -958,6 +965,17 @@ async function callAnthropicChat({
     finishReason: data.stop_reason || null,
     usage: data.usage || null,
   };
+}
+
+// Anthropic only accepts cache_control on structured content blocks, so a plain system string
+// has to become a one-block array first. Short prompts are left alone: they fall under the
+// minimum cacheable length and a marker on them is billed for nothing.
+const ANTHROPIC_MIN_CACHEABLE_CHARS = 2000;
+
+function withAnthropicCacheControl(system) {
+  const text = String(system || '');
+  if (text.length < ANTHROPIC_MIN_CACHEABLE_CHARS) return text;
+  return [{ type: 'text', text, cache_control: { type: 'ephemeral' } }];
 }
 
 function toAnthropicMessages(messages = []) {

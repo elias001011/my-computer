@@ -63,6 +63,8 @@ const state = {
   activeAgentChatId: null,
   stopInFlight: false,
   customModelDialog: null,
+  runAbortController: null,
+  runLivenessMisses: 0,
   runTimer: null,
   runTimerInterval: null,
   queuedMessages: [],
@@ -1810,6 +1812,11 @@ function renderSettingsModal() {
                   <input name="historyBudgetChars" id="history-budget-chars" type="number" min="2000" max="120000" step="1000" value="${escapeAttr(draftConfig.context?.historyBudgetChars || 28000)}" ${draftConfig.context?.historyBudgetEnabled === false ? 'disabled' : ''} />
                 </label>
                 <p class="help-text">Em caracteres, não tokens reais (o app não usa um tokenizer; ~4 caracteres ≈ 1 token é uma aproximação comum, mas varia por modelo). Mensagens mais antigas vão sendo descartadas primeiro até caber no limite; a mensagem atual nunca é cortada por esse limite.</p>
+                <label>
+                  Limite de saída de tools por mensagem
+                  <input name="toolOutputBudgetChars" id="tool-output-budget-chars" type="number" min="0" max="400000" step="5000" value="${escapeAttr(draftConfig.context?.toolOutputBudgetChars ?? 60000)}" />
+                </label>
+                <p class="help-text">Teto do total de saída de tools que a IA carrega dentro de <strong>uma mesma mensagem</strong> (o limite acima é do histórico entre mensagens; este é de dentro do turno). Numa investigação profunda com 20+ comandos de terminal, é fácil somar centenas de milhares de caracteres numa requisição só — é o maior gasto de token do app e a causa mais comum de resposta parando com <code>length</code>. Ao passar do limite, as saídas <em>mais antigas</em> do turno viram um resumo curto e as recentes ficam inteiras. 0 desliga o teto.</p>
               </div>
               <div class="toggle-list">
                 <label class="toggle-row switch-row">
@@ -7525,6 +7532,7 @@ async function sendMessageContent(content, options = {}) {
   state.activeAgentChatId = chatId;
   state.stopInFlight = false;
   let consumedComplementIds = [];
+  state.runAbortController = new AbortController();
   startRunTimer(chatId);
   await runAction(
     `Enviando para ${providerLabel(getEffectiveChatRuntime().provider)}...`,
@@ -7534,6 +7542,7 @@ async function sendMessageContent(content, options = {}) {
       try {
         data = await api(`/api/chats/${chatId}/messages`, {
           method: 'POST',
+          signal: state.runAbortController?.signal,
           body: {
             content,
             retryMessageId: options.retryMessageId,
@@ -7567,6 +7576,7 @@ async function sendMessageContent(content, options = {}) {
   );
   if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
   state.stopInFlight = false;
+  state.runAbortController = null;
   stopRunTimer();
   if (!state.error && state.activeChat?.id === chatId) {
     scrollMessagesToBottom();
@@ -7655,6 +7665,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
   try {
     state.activeAgentChatId = chatId;
     state.stopInFlight = false;
+    state.runAbortController = new AbortController();
     startRunTimer(chatId);
     await runAction(decision === 'approve' ? 'Executando tool aprovada...' : 'Negando tool...', async () => {
       startEventPolling(chatId);
@@ -7662,6 +7673,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
       try {
         data = await api(`/api/chats/${chatId}/tool-approvals/${messageId}`, {
           method: 'POST',
+          signal: state.runAbortController?.signal,
           body: { decision, toolCallId },
         });
       } finally {
@@ -7687,6 +7699,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
     state.stopInFlight = false;
   } finally {
     stopRunTimer();
+    state.runAbortController = null;
     state.toolDecisionInFlight.delete(decisionKey);
   }
   // If approving the tool still left the run mid-task, honor Auto continue here too.
@@ -7704,21 +7717,53 @@ async function refreshChatAfterAcceptedMessage(chatId) {
   });
 }
 
+// A few consecutive polls reporting "no run here" before we give up on the request. Wide
+// enough to cover the gap between the run ending server-side and its (possibly large)
+// response finishing its trip back.
+const RUN_LIVENESS_MISSES_BEFORE_ABORT = 6;
+
 function startEventPolling(chatId) {
   stopEventPolling();
+  state.runLivenessMisses = 0;
   const poll = async () => {
     try {
-      const data = await api(`/api/chats/${chatId}`);
-      if (state.activeChat?.id === chatId) {
-        state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
-        updateEventsUi();
-      }
+      // Deliberately the events-only endpoint: the full chat route reparses every message
+      // plus the whole event log, and this runs every 1.5s for the entire length of a run.
+      const data = await api(`/api/chats/${encodeURIComponent(chatId)}/events`);
+      if (state.activeChat?.id !== chatId) return;
+      state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
+      updateEventsUi();
+      trackRunLiveness(chatId, data.run);
     } catch {
       // Polling is best-effort; the main request still owns errors.
     }
   };
   poll();
   state.eventPollingTimer = window.setInterval(poll, 1500);
+}
+
+// The panel used to trust the long-lived POST and nothing else. If the server process died or
+// was restarted mid-run -- a PM2 max_memory_restart did exactly that -- the request was never
+// answered and the UI sat on "working" indefinitely. Now the poll also reports whether the run
+// still exists; once it clearly does not, we abort the request instead of waiting forever.
+function trackRunLiveness(chatId, run) {
+  if (!state.busy || state.activeAgentChatId !== chatId) return;
+  if (run?.active) {
+    state.runLivenessMisses = 0;
+    return;
+  }
+  state.runLivenessMisses += 1;
+  if (state.runLivenessMisses < RUN_LIVENESS_MISSES_BEFORE_ABORT) return;
+  state.runLivenessMisses = 0;
+  state.runAbortController?.abort(createRunVanishedError());
+}
+
+function createRunVanishedError() {
+  const error = new Error(
+    'A execução sumiu do servidor antes de responder (o processo do My Computer pode ter sido reiniciado). Use Continuar ou Tentar novamente.',
+  );
+  error.runVanished = true;
+  return error;
 }
 
 function updateEventsUi() {
@@ -8527,6 +8572,7 @@ async function saveGeneralSettings(event, options = {}) {
           autoCompactMinMessages: Number(form.get('autoCompactMinMessages')),
           historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
           historyBudgetChars: Number(form.get('historyBudgetChars')),
+          toolOutputBudgetChars: Number(form.get('toolOutputBudgetChars') ?? 60000),
           includeCurrentDateTime: form.get('includeCurrentDateTime') === 'on',
         },
         email: {
@@ -8707,6 +8753,7 @@ function captureSettingsDraftFromForm() {
     autoCompactMinMessages: Number(form.get('autoCompactMinMessages') || 12),
     historyBudgetEnabled: form.get('historyBudgetEnabled') === 'on',
     historyBudgetChars: Number(form.get('historyBudgetChars') || 28000),
+    toolOutputBudgetChars: Number(form.get('toolOutputBudgetChars') ?? 60000),
     includeCurrentDateTime: form.get('includeCurrentDateTime') === 'on',
   };
   draftConfig.email = {
@@ -9258,8 +9305,13 @@ async function api(path, options = {}) {
         ...(state.activeProfile?.id ? { 'X-Profile-Id': state.activeProfile.id } : {}),
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
     });
   } catch (error) {
+    // An abort we asked for carries its own explanation (see createRunVanishedError). Check the
+    // signal rather than error.name: fetch rejects with the abort *reason* when one is given,
+    // so the thrown value is our own Error and never carries the AbortError name.
+    if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : error;
     throw new Error(`Falha de rede ao falar com o servidor local. Verifique se o My Computer ainda está rodando e tente de novo. ${error.message || ''}`.trim());
   }
   const data = await response.json().catch(() => ({}));
