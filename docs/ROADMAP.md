@@ -50,6 +50,7 @@
 - Releases empacotadas/versionadas para o updater, se a distribuição por clone Git deixar de ser suficiente.
 - Skills, comandos personalizados e secrets no export/import (hoje não fazem parte do backup).
 - Confinamento de path para `edit_file` (hoje alcança o que o usuário do SO alcança, igual o terminal já alcançava).
+- Mensagem complementar sem interromper o modelo: o usuário envia uma mensagem enquanto o modelo ainda está rodando (gerando resposta ou executando tools), ela não interrompe o run atual, fica na fila e é enviada junto na próxima chamada ao modelo.
 
 ## Phase 2 - Extensibility
 
@@ -60,6 +61,7 @@
 - Skills com manifestos e permissões mais granulares (hoje skills já existem, sem esse controle extra).
 - Mais tools locais.
 - Memória prolongada entre chats.
+- Subagentes: o MC delega uma sub-tarefa a uma instância isolada de si mesmo, com tools e contexto próprios (reduzido, análogo ao que as tarefas agendadas já fazem), rodando em paralelo ou em série sem poluir o histórico do chat principal, e reportando o resultado de volta quando termina.
 
 ## Phase 3 - Advanced capabilities
 
