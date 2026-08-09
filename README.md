@@ -34,6 +34,8 @@ Use `./install.sh --fresh` to move the current runtime aside and show the initia
 - Define custom `/slash` commands: a fixed prompt with its own pre-approved tool allowlist, triggered live in the current chat.
 - Store secrets (API tokens, keys) as named environment variables. Only the name and description ever reach the model -- terminal commands can reference `$NAME` and get the real value injected directly into the process environment, without the model ever seeing it. A separate, always-approved tool exists for the rare case where the literal value is genuinely needed.
 - Optionally auto-continue a run that stopped mid-task on a recoverable error or limit, instead of waiting for you to click Continue.
+- Keep typing while the model works: a message sent during a run is queued instead of interrupting it, and is either handed to the model on its next call ("Complementos do usuário") or sent as a normal message once the run finishes -- your choice.
+- Watch a discreet chronometer while the AI works, with the elapsed time of every attempt kept in View details.
 - Edit a past message: the conversation forks from that point (the previous branch, with its replies, stays viewable), and it re-runs from the edited message.
 - Ask for approval before sensitive tool calls; an "always allow" override is available per section.
 - Keep persistent memory per chat and per isolated section.
@@ -137,6 +139,27 @@ Only the name and description are ever included in the system prompt -- the AI n
 ## Auto Continue
 
 Off by default (`General settings > Tools`). When a run stops mid-task on a recoverable error or a tool-round limit (the same situation that normally shows a "Continue" button), the app resumes it automatically instead of waiting for you to click it. It never fires while a tool is waiting on your approval, never after you explicitly stopped a run, and is capped at a bounded number of automatic continuations per turn so a repeatedly failing tool cannot loop forever.
+
+## Messages Sent While The Model Is Working
+
+The composer stays writable during a run. With text in it, the stop button becomes a send button, and what you send is queued rather than interrupting the work. Two modes (`General settings > Tools`):
+
+- **Na próxima tool** (default): the queue is handed to the model on its next call to the provider, in a "Complementos do usuário" block. Nothing is interrupted and nothing already done is lost -- useful to add context or change direction in the middle of a long task. Delivered complements are recorded in View details.
+- **Sequencial**: the queue waits for the model's final output and is then sent as a normal message.
+
+In both modes, anything the run never picked up is sent as a normal message right after it settles. Attachments are not queued: they stay in the tray for your next normal message.
+
+## Run Chronometer
+
+While the AI is working, a small counter sits above the send button. It measures machine time only -- the clock stops while a tool call waits for your approval. Every attempt stores its duration, shown in View details even if you turn the on-screen counter off (`General settings > Identity`).
+
+## Token Use And Prompt Caching
+
+Two settings and one built-in behaviour keep a long agentic run from getting needlessly expensive:
+
+- **Prompt caching is automatic on most providers** (OpenAI, DeepSeek, Zhipu/GLM, Moonshot, Groq and other OpenAI-compatible endpoints) as long as the beginning of the request does not change between calls. My Computer keeps that prefix stable: the clock injected into the system prompt is rounded to a 10-minute bucket instead of carrying an exact timestamp, so an entire agent loop reuses the same cached prefix. Anthropic does not cache automatically, so its requests carry explicit `cache_control` breakpoints on the system prompt and the tool schemas. Nothing to configure, and no provider is required to support it -- where it is unavailable, requests are simply billed as usual.
+- **Limite de saída de tools por mensagem** (`General settings > Context`) caps how much raw tool output the model carries inside a single message. Without it, an investigation chaining 20+ terminal calls stacks every dump into one request, which is both the largest item on the token bill and the usual reason a run ends on `length`. Over the cap, the oldest results of that turn collapse to a short note and the recent ones stay intact.
+- **Limite de histórico enviado** (same section) caps the message history carried between messages.
 
 ## Editing Messages
 

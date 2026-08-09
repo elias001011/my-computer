@@ -86,6 +86,9 @@ Quando uma resposta falha ou para no meio:
 - o painel mostra `Tentar novamente` e `Continuar`
 - o backend aceita apenas um envio/retry/continue em andamento por chat e bloqueia retry/continue em tentativa superseded
 - `/api/chats/:id/stop` aborta a execução ativa do chat; provider calls, terminal e compactação recebem o sinal quando possível, e a tentativa fica incompleta com `finishReason: stopped_by_user`
+- `/api/chats/:id/events` é a rota que o painel usa para acompanhar um run em andamento (polling ~1,5s). Devolve só a janela recente de eventos e `run: { active }` — de propósito **não** devolve o chat inteiro, porque a rota completa reparseia todas as mensagens mais o log de eventos a cada tick, o que num chat longo é lixo suficiente para levar o processo a um teto de memória e ser reiniciado no meio do run
+- o `run.active` dessa rota é o que permite ao painel distinguir "o modelo ainda está trabalhando" de "o run sumiu". Se algumas checagens seguidas disserem que não existe run, o painel aborta a requisição pendente e explica; antes disso ele confiava só no POST longo e ficava esperando para sempre quando o processo do servidor morria ou reiniciava por baixo
+- `/api/chats/:id/queue` enfileira uma mensagem escrita durante um run sem interrompê-lo. O loop drena a fila antes de cada chamada ao provider e a entrega como um turno de usuário ("Complementos do usuário"), registrando isso no `executionTrace` da tentativa; o que sobrar quando o run acabar volta para o cliente enviar como mensagem normal
 - o modal de detalhes usa `messages.json` e a janela de eventos recentes de `events.jsonl` para reconstruir o processo
 - falhas reais de tool, timeout e signal mantêm a tentativa como incompleta ou falha; exit code de terminal diferente de zero só interrompe automaticamente quando a IA não pediu `returnOutput: true`
 
@@ -233,6 +236,15 @@ Pontos importantes do design:
 - `context-window.md` é a janela atual usada para explicar o estado do chat.
 - `metadata.json` guarda provider, modelo e `modelSettings` do chat.
 - O histórico bruto de mensagens enviado a cada chamada é limitado por `config.context.historyBudgetChars` (aproximação por caracteres, não um tokenizer real) e pode ser desligado por completo via `config.context.historyBudgetEnabled` — desligado, só a mensagem atual e as memórias acima são enviadas, sem nenhuma mensagem anterior do chat.
+- O total de saída de tools carregado **dentro de um mesmo turno** é limitado por `config.context.toolOutputBudgetChars` (0 desliga). Cada resultado já tinha teto individual, mas nada limitava a soma: um turno com 20+ comandos de terminal empilhava centenas de milhares de caracteres numa requisição só — o maior gasto de token do app e a causa recorrente de tentativa terminando em `finish_reason: length`. Ao passar do teto, os resultados mais antigos do turno viram um head curto mais uma nota; os recentes ficam inteiros.
+
+## Cache de prompt
+
+Providers OpenAI-compatible (OpenAI, DeepSeek, Zhipu/GLM, Moonshot, Groq...) fazem cache de prefixo automaticamente, e a única exigência é que o começo da requisição não mude entre chamadas. Por isso o relógio injetado no system prompt é arredondado para um bucket de 10 minutos (`CLOCK_BUCKET_MINUTES` em `assistant.js`) em vez de carregar timestamp exato: com precisão de milissegundo, o prefixo mudava em **toda** requisição e o cache nunca acertava — nem o do prompt, nem o do histórico atrás dele.
+
+Anthropic não faz cache automático: a requisição precisa marcar onde o prefixo termina. O adapter marca dois breakpoints (`cache_control: ephemeral`), no bloco de system e no último schema de tool, que é o que a precificação recompensa. Prompts de sistema curtos não são marcados, porque ficam abaixo do mínimo cacheável e a marcação seria cobrada à toa.
+
+Nada disso exige configuração do usuário nem suporte do provider: onde o cache não existe, a requisição é cobrada normalmente.
 
 ## Rede local
 

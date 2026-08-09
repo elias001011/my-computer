@@ -37,6 +37,11 @@
 - `@` no composer: sugestão de tools e citação de caminho de arquivo/diretório.
 - Drag-and-drop de arquivos no composer (além do seletor de arquivo), múltiplos arquivos por mensagem.
 - Layout mobile com histórico de chats em drawer flutuante em vez de tarja fixa.
+- Modelos personalizados gerenciáveis por provider na própria página de Providers, e cadastro por janela ao escolher "Modelo personalizado" no seletor do chat (o modelo passa a valer na mensagem seguinte, sem envio com modelo vazio).
+- Mensagem enviada durante o trabalho do modelo entra numa fila em vez de interromper: modo "na próxima tool" (entregue junto da próxima chamada à API como "Complementos do usuário") ou "sequencial" (enviada como mensagem normal depois da saída final).
+- Cronômetro discreto durante o trabalho da IA, com o tempo de cada tentativa salvo em Ver detalhes.
+- Detecção de execução morta: o painel checa se o run ainda existe no servidor e desiste com explicação, em vez de esperar indefinidamente por uma resposta que não vem (foi o que acontecia quando o processo era reiniciado no meio de um run).
+- Economia de tokens: prefixo de prompt estável para aproveitar o cache automático dos providers, `cache_control` explícito no Anthropic, e teto configurável de saída de tools por mensagem.
 
 ## Phase 1 - Safety and polish
 
@@ -50,7 +55,9 @@
 - Releases empacotadas/versionadas para o updater, se a distribuição por clone Git deixar de ser suficiente.
 - Skills, comandos personalizados e secrets no export/import (hoje não fazem parte do backup).
 - Confinamento de path para `edit_file` (hoje alcança o que o usuário do SO alcança, igual o terminal já alcançava).
-- Mensagem complementar sem interromper o modelo: o usuário envia uma mensagem enquanto o modelo ainda está rodando (gerando resposta ou executando tools), ela não interrompe o run atual, fica na fila e é enviada junto na próxima chamada ao modelo.
+- Streaming de resposta do modelo (hoje a resposta só aparece quando o turno termina; o painel mostra eventos de tool ao vivo, mas não o texto sendo gerado).
+- Contagem de tokens de verdade: hoje todos os orçamentos (histórico, saída de tools, compactação automática) são medidos em caracteres, com ~4 caracteres ≈ 1 token como aproximação. Um tokenizer real por família de modelo tornaria os limites previsíveis e permitiria mostrar custo estimado por mensagem.
+- Painel de uso/custo por provider e modelo, aproveitando o `usage` que a maioria dos providers já devolve (incluindo tokens lidos de cache, que hoje são recebidos e descartados).
 
 ## Phase 2 - Extensibility
 
@@ -62,6 +69,7 @@
 - Mais tools locais.
 - Memória prolongada entre chats.
 - Subagentes: o MC delega uma sub-tarefa a uma instância isolada de si mesmo, com tools e contexto próprios (reduzido, análogo ao que as tarefas agendadas já fazem), rodando em paralelo ou em série sem poluir o histórico do chat principal, e reportando o resultado de volta quando termina.
+- **Trabalho em background dirigido pelo usuário** (independente de subagentes, e mais simples que eles): hoje um run é preso à requisição HTTP que o iniciou e a um lock por chat, então o usuário fica esperando de janela aberta e só consegue tocar uma tarefa por vez. A ideia é inverter isso: enviar uma mensagem cria um *job* com id próprio, a requisição devolve esse id na hora, e o run continua no servidor -- o painel acompanha por polling (a rota de eventos com liveness de run, criada na Fase 0, já é metade dessa infraestrutura). Consequências: fechar a aba, trocar de chat ou perder a conexão deixa de matar o acompanhamento; o usuário dispara tarefas simultâneas em chats diferentes de propósito, em vez de esperar em série; e uma tarefa demorada pode notificar no fim (a mesma saída de email/Telegram já existente). O que precisa ser desenhado com cuidado antes de implementar: (1) o lock por chat continua valendo por chat, mas o limite global de jobs simultâneos passa a ser explícito, porque cada job em voo custa memória e chamadas de provider ao mesmo tempo; (2) aprovação de tool num job em background precisa de uma fila de pendências visível fora do chat, senão um job trava esperando uma decisão que o usuário não vê; (3) reinício do processo mata os jobs em voo -- ou eles são persistidos e retomáveis, ou o estado precisa dizer "morreu, use Continuar" sem ambiguidade (o detector de run morto da Fase 0 é a base disso); (4) precisa de uma visão de "tarefas rodando agora" no painel, senão o usuário perde de vista o que disparou.
 
 ## Phase 3 - Advanced capabilities
 
