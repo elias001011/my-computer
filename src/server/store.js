@@ -1877,8 +1877,12 @@ export async function appendEvent(event) {
     profileId: getScopedProfileId(),
     ...event,
   };
-  await fs.appendFile(paths.eventsPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
-  await maybeTrimEventsLog(paths.eventsPath);
+  // Serialized with the trim below through the same lock: the trim truncates and rewrites the
+  // whole file, so an append landing in the middle of it would corrupt lines.
+  await withFileLock(paths.eventsPath, async () => {
+    await fs.appendFile(paths.eventsPath, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+    await maybeTrimEventsLog(paths.eventsPath);
+  });
   return entry;
 }
 

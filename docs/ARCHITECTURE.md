@@ -246,6 +246,14 @@ Anthropic não faz cache automático: a requisição precisa marcar onde o prefi
 
 Nada disso exige configuração do usuário nem suporte do provider: onde o cache não existe, a requisição é cobrada normalmente.
 
+O `usage` devolvido pelo provider é normalizado em `normalizeProviderUsage` (assistant.js) para uma forma só e acumulado por tentativa. Atenção ao total: o `prompt_tokens` da OpenAI **já inclui** a parte cacheada (`cached_tokens` é um subconjunto dele), enquanto o `input_tokens` do Anthropic **exclui** `cache_read_input_tokens`/`cache_creation_input_tokens` — somar cache nos dois casos contaria duas vezes num deles. O valor acumulado é publicado no run ativo (`getActiveRunInfo`) para o painel mostrar os tokens subindo durante a execução, e salvo na mensagem da tentativa para o Ver detalhes.
+
+## Limite de rodadas e resposta completa
+
+Quando o orçamento de rodadas de tools acaba, o app faz uma última chamada sem tools para o modelo fechar a resposta. O resultado dessa chamada é classificado pelo que ela própria reportou: com texto e `finish_reason` não-truncado, a tentativa é `sent` (completa); vazia ou truncada, é `incomplete`. Em ambos os casos a mensagem recebe `toolRoundLimitReached: true`, o painel mostra o aviso e o Continuar continua disponível.
+
+Isso já foi `incomplete` incondicional, e era caro: a resposta estava pronta e correta, mas a tentativa parecia quebrada, então o Auto continue disparava em cima dela e pagava uma execução inteira de uma tarefa que já tinha terminado.
+
 ## Rede local
 
 Por padrão, o painel fica em `127.0.0.1`.

@@ -65,6 +65,7 @@ const state = {
   customModelDialog: null,
   runAbortController: null,
   runLivenessMisses: 0,
+  runUsage: null,
   runTimer: null,
   runTimerInterval: null,
   queuedMessages: [],
@@ -1132,10 +1133,10 @@ function renderApp() {
               ${renderProfileOptions()}
             </select>
           </label>
-          <button type="button" class="icon-button small-icon" id="quick-create-profile" title="Criar seção" aria-label="Criar seção">+</button>
+          <button type="button" class="icon-button small-icon" id="quick-create-profile" title="Criar seção" aria-label="Criar seção" ${state.busy ? 'disabled' : ''}>+</button>
         </div>
         <div class="sidebar-actions">
-          <button class="primary" id="new-chat">Novo chat</button>
+          <button class="primary" id="new-chat" ${state.busy ? 'disabled' : ''}>Novo chat</button>
           <button id="open-settings">Configurações gerais</button>
         </div>
         <label class="chat-search">
@@ -1172,9 +1173,9 @@ function renderApp() {
           <div class="attachment-tray" id="attachment-tray">
             ${state.pendingAttachments.length ? state.pendingAttachments.map((attachment) => renderAttachmentCard(attachment, { pending: true })).join('') : ''}
           </div>
+          ${renderComposerOverlay(agentRunning)}
           <div class="composer-main">
             <div class="mention-suggestions" id="mention-suggestions" hidden></div>
-            ${renderComposerOverlay(agentRunning)}
             <label class="attach-button icon-button" title="Anexar arquivo" aria-label="Anexar arquivo">
               <span aria-hidden="true">+</span>
               <input id="file-input" type="file" multiple accept="${escapeAttr(getSupportedUploadAccept())}" ${composerDisabled ? 'disabled' : ''} />
@@ -1228,8 +1229,8 @@ function renderApp() {
             </div>
             <div class="button-row">
               ${state.chatSettingsDirty ? '<span class="dirty-note">Alterações não salvas</span>' : ''}
-              <button id="save-chat-settings" class="${state.chatSettingsDirty ? 'dirty-save' : ''}" ${!chat ? 'disabled' : ''}>Salvar configurações</button>
-              <button id="delete-chat" class="danger-button" ${!chat ? 'disabled' : ''}>Apagar chat</button>
+              <button id="save-chat-settings" class="${state.chatSettingsDirty ? 'dirty-save' : ''}" ${!chat || state.busy ? 'disabled' : ''}>Salvar configurações</button>
+              <button id="delete-chat" class="danger-button" ${!chat || state.busy ? 'disabled' : ''}>Apagar chat</button>
             </div>
           </div>
         </section>
@@ -1271,23 +1272,61 @@ function renderApp() {
   syncRunTimerToState();
 }
 
-// Small chips that sit just above the send button: the run chronometer and the queued
-// follow-up counter. Kept out of the normal flow (absolute) so showing/hiding them never
-// nudges the composer layout, and painted on a solid background so they stay readable over
-// the message list on mobile.
+// A discreet right-aligned strip at the top of the composer: queued follow-ups, tokens spent
+// in this chat, and the run chronometer. It lives in the composer's own flow rather than
+// floating above it -- overlaying the message list needed a solid dark pill to stay readable,
+// and that pill was the ugly part. Inside the band it can just be muted text.
 function renderComposerOverlay(agentRunning) {
-  const timerEnabled = state.config?.appearance?.showRunTimer !== false;
+  const meterEnabled = state.config?.appearance?.showRunTimer !== false;
+  if (!meterEnabled) return '';
   const activeChatId = state.activeChat?.id;
   const queuedCount = state.queuedMessages.filter((item) => item.chatId === activeChatId).length;
   const chips = [];
   if (queuedCount) {
     chips.push(`<span class="composer-chip queue-chip" id="queue-chip">${escapeHtml(String(queuedCount))} na fila · ${escapeHtml(describeQueueMode())}</span>`);
   }
-  if (timerEnabled && agentRunning) {
-    chips.push(`<span class="composer-chip run-timer-chip" id="run-timer" title="Tempo desta tarefa">${escapeHtml(formatRunTimerValue(getRunTimerElapsedMs()))}</span>`);
+  const sessionTokens = getSessionTokenTotal();
+  if (sessionTokens > 0) {
+    chips.push(
+      `<span class="composer-chip token-chip" id="session-tokens" title="Tokens somados de todas as respostas deste chat (entrada + saída), reportados pelo provider. O detalhe por tentativa fica em Ver detalhes.">${escapeHtml(formatTokenCount(sessionTokens))} tokens</span>`,
+    );
+  }
+  if (agentRunning) {
+    chips.push(`<span class="composer-chip run-timer-chip" id="run-timer" title="Tempo de trabalho desta tarefa">${escapeHtml(formatRunTimerValue(getRunTimerElapsedMs()))}</span>`);
   }
   if (!chips.length) return '';
   return `<div class="composer-overlay">${chips.join('')}</div>`;
+}
+
+// Tokens spent in the current chat: everything already recorded on past attempts, plus what the
+// run in flight has burned so far (the poll keeps that fresh, so the number moves during a run
+// instead of only jumping at the end).
+function getSessionTokenTotal() {
+  const messages = state.activeChat?.messages || [];
+  const recorded = messages.reduce((sum, message) => sum + (Number(message.usage?.totalTokens) || 0), 0);
+  const inFlight = isAgentRunningForActiveChat() ? Number(state.runUsage?.totalTokens) || 0 : 0;
+  return recorded + inFlight;
+}
+
+function formatTokenCount(value) {
+  const number = Number(value) || 0;
+  if (number < 1000) return String(number);
+  if (number < 1000000) return `${(number / 1000).toFixed(number < 10000 ? 1 : 0).replace('.', ',')}k`;
+  return `${(number / 1000000).toFixed(1).replace('.', ',')}M`;
+}
+
+// Full breakdown for the details view. Cached input is called out separately because it is the
+// part billed at the cheaper rate, and it is the direct payoff of keeping the prompt prefix stable.
+function formatUsageBreakdown(usage) {
+  if (!usage) return '';
+  const parts = [
+    `${formatTokenCount(usage.totalTokens)} tokens no total`,
+    `${formatTokenCount(usage.inputTokens)} entrada`,
+    `${formatTokenCount(usage.outputTokens)} saída`,
+  ];
+  if (usage.cachedInputTokens > 0) parts.push(`${formatTokenCount(usage.cachedInputTokens)} de cache`);
+  if (usage.calls > 1) parts.push(`${usage.calls} chamadas`);
+  return parts.join(' · ');
 }
 
 function renderSettingsModal() {
@@ -1387,8 +1426,8 @@ function renderSettingsModal() {
                 <input type="checkbox" name="showRunTimer" ${draftConfig.appearance?.showRunTimer !== false ? 'checked' : ''} />
                 <span class="switch" aria-hidden="true"></span>
                 <span>
-                  <strong>Cronômetro durante o trabalho da IA</strong>
-                  <small>Mostra um contador discreto acima do botão de enviar enquanto o modelo trabalha. O tempo de cada tentativa fica salvo em Ver detalhes mesmo com isso desligado.</small>
+                  <strong>Cronômetro e tokens na interface</strong>
+                  <small>Mostra, no topo da caixa de mensagem, o tempo desta tarefa e os tokens gastos no chat. É só exibição: o tempo e os tokens de cada tentativa continuam sendo registrados e aparecem em Ver detalhes mesmo com isso desligado.</small>
                 </span>
               </label>
               <label class="${isKnownModel(defaultProvider, defaultModel) ? 'hidden' : ''}" id="default-custom-model-row">
@@ -1992,7 +2031,8 @@ function renderSettingsModal() {
             ${state.error ? `<p class="error modal-error">${escapeHtml(state.error)}</p>` : ''}
             ${dirtyText}
             <button type="button" id="cancel-settings">Cancelar</button>
-            <button class="primary ${state.settingsDirty ? 'dirty-save' : ''}" type="submit">Salvar configurações</button>
+            ${state.busy ? '<span class="dirty-note">Salvar fica disponível quando a resposta atual terminar</span>' : ''}
+            <button class="primary ${state.settingsDirty ? 'dirty-save' : ''}" type="submit" ${state.busy ? 'disabled' : ''}>Salvar configurações</button>
           </footer>
         </form>
       </section>
@@ -2778,7 +2818,7 @@ function renderChatSettingsModal() {
             ${state.chatSettingsDirty ? '<span class="dirty-note">Alterações não salvas</span>' : ''}
             <button type="button" id="cancel-chat-settings-mobile">Cancelar</button>
             <button type="button" id="mobile-delete-chat" class="danger-button" ${!chat ? 'disabled' : ''}>Apagar chat</button>
-            <button class="primary ${state.chatSettingsDirty ? 'dirty-save' : ''}" type="submit" ${!chat ? 'disabled' : ''}>Salvar</button>
+            <button class="primary ${state.chatSettingsDirty ? 'dirty-save' : ''}" type="submit" ${!chat || state.busy ? 'disabled' : ''}>Salvar</button>
           </footer>
         </form>
       </section>
@@ -2828,7 +2868,7 @@ function renderChatContextModal() {
           <footer class="modal-footer">
             ${state.chatContextDirty ? '<span class="dirty-note">Alterações não salvas</span>' : ''}
             <button type="button" id="cancel-chat-context">Cancelar</button>
-            <button class="primary ${state.chatContextDirty ? 'dirty-save' : ''}" type="submit">Salvar</button>
+            <button class="primary ${state.chatContextDirty ? 'dirty-save' : ''}" type="submit" ${state.busy ? 'disabled' : ''}>Salvar</button>
           </footer>
         </form>
       </section>
@@ -2857,7 +2897,7 @@ function renderContextEditorModal() {
           </div>
           <footer class="modal-footer">
             <button type="button" id="cancel-context-editor">Cancelar</button>
-            <button class="primary" type="submit">Salvar contexto</button>
+            <button class="primary" type="submit" ${state.busy ? 'disabled' : ''}>Salvar contexto</button>
           </footer>
         </form>
       </section>
@@ -3211,7 +3251,7 @@ function renderModelSettingsModal() {
             ${state.modelSettingsDirty ? '<span class="dirty-note">Alterações não salvas</span>' : ''}
             <button type="button" id="clear-model-settings">Limpar ajustes</button>
             <button type="button" id="cancel-model-settings">Cancelar</button>
-            <button class="primary ${state.modelSettingsDirty ? 'dirty-save' : ''}" type="submit">Salvar</button>
+            <button class="primary ${state.modelSettingsDirty ? 'dirty-save' : ''}" type="submit" ${state.busy ? 'disabled' : ''}>Salvar</button>
           </footer>
         </form>
       </section>
@@ -3597,7 +3637,7 @@ function updateChatSearch(event) {
 function renderChatItem(chat) {
   const active = state.activeChat?.id === chat.id ? 'active' : '';
   return `
-    <button class="chat-item ${active}" data-chat-id="${escapeAttr(chat.id)}">
+    <button class="chat-item ${active}" data-chat-id="${escapeAttr(chat.id)}" ${state.busy ? 'disabled' : ''} ${state.busy ? 'title="Aguarde a resposta atual terminar para trocar de chat."' : ''}>
       <strong>${escapeHtml(displayChatTitle(chat.title))}</strong>
       <span class="meta">${escapeHtml(providerLabel(chat.provider || state.config.provider))} · ${escapeHtml(chat.model || state.config.model)} · ${new Date(chat.updatedAt).toLocaleString()}</span>
     </button>
@@ -3678,7 +3718,8 @@ function formatAttemptTraceSummary(message = {}) {
   const modelSteps = trace.filter((entry) => entry.type === 'assistant_output').length;
   const toolCount = toolUses.length || trace.filter((entry) => entry.type === 'tool_result').length;
   const duration = formatDurationLabel(message.durationMs);
-  return [`${modelSteps} saída(s)`, `${toolCount} tool(s)`, duration].filter(Boolean).join(' · ');
+  const tokens = message.usage?.totalTokens ? `${formatTokenCount(message.usage.totalTokens)} tok` : '';
+  return [`${modelSteps} saída(s)`, `${toolCount} tool(s)`, duration, tokens].filter(Boolean).join(' · ');
 }
 
 function isLatestAssistantAttempt(message) {
@@ -4702,12 +4743,15 @@ function renderMessageDetailsModal() {
                 <span class="message-status ${escapeAttr(selectedAttempt.status || '')}">${escapeHtml(selectedStatus)}</span>
                 ${selectedAttempt.finishReason ? `<span class="message-status">${escapeHtml(selectedAttempt.finishReason)}</span>` : ''}
                 ${formatDurationLabel(selectedAttempt.durationMs) ? `<span class="message-status attempt-duration" title="Tempo de trabalho da IA nesta tentativa (não conta o tempo parado esperando você aprovar uma tool)">⏱ ${escapeHtml(formatDurationLabel(selectedAttempt.durationMs))}</span>` : ''}
+                ${selectedAttempt.usage ? `<span class="message-status attempt-usage" title="${escapeAttr(formatUsageBreakdown(selectedAttempt.usage))}">${escapeHtml(formatTokenCount(selectedAttempt.usage.totalTokens))} tokens</span>` : ''}
+                ${selectedAttempt.toolRoundLimitReached ? '<span class="message-status" title="A IA atingiu o limite de rodadas de tools desta mensagem e foi obrigada a responder. Se a resposta ficou curta demais, suba o limite em Configurações > Tools ou use Continuar.">limite de rodadas atingido</span>' : ''}
               </div>
               ${renderThinkingBlock(getMessageThinking(selectedAttempt))}
               <div class="bubble assistant details-selected-output ${escapeAttr(selectedAttempt.status || '')}">
                 ${renderMessageSources(selectedSources)}
                 ${formatContent(getVisibleMessageContent(selectedAttempt, { stripSources: selectedSources.length > 0 }), 'assistant')}
               </div>
+              ${selectedAttempt.usage ? `<p class="help-text">Tokens desta tentativa: ${escapeHtml(formatUsageBreakdown(selectedAttempt.usage))}. Números reportados pelo provider; nem todos informam a parte servida de cache.</p>` : ''}
               ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
               ${renderExecutionHistory(selectedAttempt, { forceOpen: true, title: 'Linha do tempo da tentativa' })}
             </article>
@@ -5387,7 +5431,13 @@ async function flushQueuedMessages(chatId, consumedIds = []) {
   if (chatHasActiveToolApproval(state.activeChat)) return;
   state.queuedMessages = state.queuedMessages.filter((item) => item.chatId !== chatId);
   renderQueueChip();
-  await sendMessageContent(pending.map((item) => item.content).join('\n\n'), {});
+  const result = await sendMessageContent(pending.map((item) => item.content).join('\n\n'), {});
+  if (!result?.messageAccepted && state.activeChat?.id === chatId) {
+    // The send never landed (another run grabbed the chat, transport error, ...). Put the text
+    // back in the queue instead of dropping what the user wrote on the floor.
+    state.queuedMessages = [...pending, ...state.queuedMessages];
+    renderQueueChip();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7577,6 +7627,7 @@ async function sendMessageContent(content, options = {}) {
   if (state.activeAgentChatId === chatId) state.activeAgentChatId = null;
   state.stopInFlight = false;
   state.runAbortController = null;
+  state.runUsage = null;
   stopRunTimer();
   if (!state.error && state.activeChat?.id === chatId) {
     scrollMessagesToBottom();
@@ -7733,6 +7784,10 @@ function startEventPolling(chatId) {
       if (state.activeChat?.id !== chatId) return;
       state.activeChatEvents = data.activeChatEvents || state.activeChatEvents;
       updateEventsUi();
+      if (data.run?.usage) {
+        state.runUsage = data.run.usage;
+        renderQueueChip();
+      }
       trackRunLiveness(chatId, data.run);
     } catch {
       // Polling is best-effort; the main request still owns errors.
@@ -9252,10 +9307,14 @@ function captureAttachmentViewerDraft() {
 }
 
 function captureVisualState() {
+  const messages = document.querySelector('#messages');
   return {
     settingsScrollTop: document.querySelector('.settings-layout')?.scrollTop || 0,
     modalScrollTop: document.querySelector('.modal-body')?.scrollTop || 0,
-    messagesScrollTop: document.querySelector('#messages')?.scrollTop || 0,
+    messagesScrollTop: messages?.scrollTop || 0,
+    // Whether the user was reading the newest content. Restoring a pixel offset after the list
+    // grew leaves them stranded above the new message, which reads as the view jumping upward.
+    messagesAtBottom: messages ? messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80 : true,
     chatListScrollTop: document.querySelector('.chat-list')?.scrollTop || 0,
     inspectorScrollTop: document.querySelector('.inspector')?.scrollTop || 0,
     activeElementId: document.activeElement?.id || '',
@@ -9271,7 +9330,9 @@ function restoreVisualState(snapshot) {
   const modalBody = document.querySelector('.modal-body');
   if (modalBody) modalBody.scrollTop = snapshot.modalScrollTop || 0;
   const messages = document.querySelector('#messages');
-  if (messages) messages.scrollTop = snapshot.messagesScrollTop || 0;
+  if (messages) {
+    messages.scrollTop = snapshot.messagesAtBottom ? messages.scrollHeight : snapshot.messagesScrollTop || 0;
+  }
   const chatList = document.querySelector('.chat-list');
   if (chatList) chatList.scrollTop = snapshot.chatListScrollTop || 0;
   const inspector = document.querySelector('.inspector');

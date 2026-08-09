@@ -71,11 +71,32 @@ modos:
   em Ver detalhes.
 - **Sequencial**: espera a saída final e envia como mensagem normal.
 
-## Cronômetro
+## Cronômetro e contador de tokens
 
-Contador discreto acima do botão de enviar enquanto a IA trabalha (desligável em Identidade). Só
-conta tempo de máquina — o relógio para enquanto uma tool espera sua aprovação. O tempo de cada
-tentativa fica salvo em Ver detalhes mesmo com o contador desligado.
+Faixa discreta no topo da caixa de mensagem com o tempo da tarefa atual e os tokens gastos no
+chat, atualizando enquanto o modelo trabalha. O relógio conta só tempo de máquina — para
+enquanto uma tool espera sua aprovação.
+
+Os números de token vêm do `usage` que o próprio provider devolve, normalizado entre as três
+formas que existem (OpenAI, Anthropic, Gemini). Em Ver detalhes cada tentativa mostra entrada,
+saída e a parte servida de cache, ao lado da duração. A faixa é só exibição: desligar em
+Identidade não para nenhum registro.
+
+## Resposta completa deixa de ser marcada como incompleta
+
+Quando o orçamento de rodadas de tools acabava, o app fazia uma última chamada sem tools para o
+modelo fechar a resposta — e então marcava a tentativa como **incompleta de qualquer jeito**,
+mesmo com o modelo tendo respondido e reportado `finish_reason: stop`. Com Auto continue ligado
+o resultado era pagar uma execução inteira de uma tarefa que já tinha terminado.
+
+Agora a classificação segue o que a chamada de fato reportou: com texto e sem truncamento, é
+resposta completa. Truncada ou vazia, continua incompleta. Nos dois casos o limite de rodadas
+fica registrado na tentativa, aparece como aviso no Ver detalhes e o Continuar segue disponível.
+
+Vale a resposta direta pra pergunta que originou isso: **não existe uma tag de "output final"**
+que o modelo emita. O que existe é o campo `finish_reason` na resposta da API (`stop`, `length`,
+`tool_calls`...) e o MC sempre leu esse campo corretamente — o bug era um caminho do próprio app
+que sobrescrevia esse veredito.
 
 ## Modelos personalizados
 
@@ -87,6 +108,19 @@ tentativa fica salvo em Ver detalhes mesmo com o contador desligado.
 - Escolher "Modelo personalizado" no seletor do chat abre uma janela que cadastra o modelo e já
   o seleciona, em vez de revelar um campo fácil de deixar vazio (o que gerava envio sem modelo
   nenhum). Cliente e servidor agora também recusam explicitamente um envio com modelo vazio.
+
+## Interface
+
+- A faixa do cronômetro saiu de cima da lista de mensagens e passou a viver dentro da própria
+  faixa do composer — com isso a pílula preta (que existia só pra ficar legível sobre o chat)
+  deixou de ser necessária e virou texto discreto.
+- Botões que não funcionam durante uma execução agora aparecem desabilitados em vez de
+  clicáveis-mas-inertes: trocar de chat, novo chat, criar seção, apagar chat e os botões de
+  salvar das configurações. Abrir as configurações durante um run continua liberado (só salvar
+  fica bloqueado, com o motivo escrito na tela).
+- Corrigido o chat "pulando pra cima" quando a resposta atualizava: o painel restaurava a
+  posição de rolagem antiga depois da lista crescer. Agora, se você estava lendo o final da
+  conversa, continua no final.
 
 ## Roadmap
 

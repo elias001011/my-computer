@@ -2667,39 +2667,39 @@ pre {
   }
 }
 
-/* Chips above the send button: run chronometer and queued follow-up counter. Absolutely
-   positioned so showing/hiding them never nudges the composer, and painted on a solid dark
-   background so they stay readable over the message list (transparent chips disappeared on
-   mobile, where the composer sits right on top of the conversation). */
+/* A discreet right-aligned strip at the top of the composer: queued follow-ups, session
+   tokens and the run chronometer. It sits inside the composer's own band rather than floating
+   over the message list, so it needs no pill of its own -- muted text on the composer
+   background reads cleanly in every theme. */
 .composer-overlay {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
   display: flex;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 10px;
   align-items: center;
+  min-height: 14px;
+  margin-bottom: -4px;
   pointer-events: none;
-  z-index: 4;
 }
 
 .composer-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: #000;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--muted);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  opacity: 0.82;
 }
 
-.queue-chip {
-  opacity: 0.9;
+.composer-chip + .composer-chip::before {
+  content: '·';
+  margin-right: 10px;
+  opacity: 0.6;
+}
+
+.run-timer-chip {
+  font-weight: 600;
 }
 
 .custom-model-list {
@@ -2738,7 +2738,6 @@ pre {
   }
 
   .composer-overlay {
-    right: 0;
-    bottom: calc(100% + 4px);
+    gap: 8px;
   }
 }

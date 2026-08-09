@@ -149,9 +149,11 @@ The composer stays writable during a run. With text in it, the stop button becom
 
 In both modes, anything the run never picked up is sent as a normal message right after it settles. Attachments are not queued: they stay in the tray for your next normal message.
 
-## Run Chronometer
+## Chronometer And Token Counter
 
-While the AI is working, a small counter sits above the send button. It measures machine time only -- the clock stops while a tool call waits for your approval. Every attempt stores its duration, shown in View details even if you turn the on-screen counter off (`General settings > Identity`).
+A discreet strip at the top of the composer shows the elapsed time of the current task and the tokens spent in this chat, updating while the model works. The clock measures machine time only -- it stops while a tool call waits for your approval.
+
+Token numbers come from the provider's own `usage` report, normalized across the three shapes providers use (OpenAI-style, Anthropic, Gemini). View details breaks each attempt down into input, output and the part served from cache, next to that attempt's duration. The strip is display-only: turning it off in `General settings > Identity` does not stop anything from being recorded.
 
 ## Token Use And Prompt Caching
 

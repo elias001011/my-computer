@@ -127,3 +127,49 @@ test('deepInvestigation doubles whatever maxToolRounds is configured', async () 
     global.fetch = originalFetch;
   }
 });
+
+test('hitting the round limit but wrapping up cleanly is a complete answer, not an incomplete one', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-tool-rounds-wrapup-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  let round = 0;
+  global.fetch = async (url, options) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch in test: ${url}`);
+    round += 1;
+    // The forced no-tools call (the one made after the budget runs out) has no tools in the
+    // request; that is the call where the model gets to write its final answer.
+    const body = JSON.parse(options.body);
+    if (!body.tools?.length) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: 'Terminei a análise: o arquivo está correto.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+        }),
+      };
+    }
+    return toolCallResponse(round);
+  };
+
+  try {
+    const token = `${Date.now()}-tool-rounds-wrapup`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    await baseConfig(store, { maxToolRounds: 2 });
+    const chat = await store.createChat('Wrap up', { provider: 'openai-compatible', model: 'gpt-5.5' });
+
+    const result = await assistant.sendUserMessage(chat.id, 'Analise o arquivo.');
+
+    // The model said "stop" and produced a real answer -- that is a finished turn. Marking it
+    // incomplete made Auto continue pay for a whole extra run of an already-answered task.
+    assert.equal(result.assistantMessage.status, 'sent');
+    assert.match(result.assistantMessage.content, /Terminei a análise/);
+    assert.equal(result.assistantMessage.error, null);
+    // The round limit still gets recorded, so the UI can say it happened.
+    assert.equal(result.assistantMessage.toolRoundLimitReached, true);
+    assert.equal(result.assistantMessage.usage.totalTokens, 120);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

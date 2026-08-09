@@ -122,13 +122,62 @@ export async function stopChatRun(chatId, options = {}) {
   };
 }
 
+// Providers report token usage in three different shapes (OpenAI-style, Anthropic, Gemini).
+// Normalizing on the way in keeps everything downstream -- the composer chip, the details view,
+// the per-attempt record -- speaking one vocabulary. `cachedInputTokens` is the part of the
+// prompt that was served from the provider's cache, which is exactly what the prompt-prefix
+// work is meant to move, so it is worth surfacing separately rather than folding into input.
+function normalizeProviderUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const input = Number(usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount ?? 0) || 0;
+  const output = Number(usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount ?? 0) || 0;
+  const cached =
+    Number(
+      usage.prompt_tokens_details?.cached_tokens ??
+        usage.cache_read_input_tokens ??
+        usage.cachedContentTokenCount ??
+        0,
+    ) || 0;
+  // Careful with the total: OpenAI's prompt_tokens already includes the cached part (cached_tokens
+  // is a subset of it), while Anthropic reports input_tokens EXCLUDING cache reads/writes. So the
+  // cache figures may only be added when the provider did not give us a total of its own and the
+  // payload is the Anthropic shape -- adding them to an OpenAI payload would double count.
+  const anthropicCacheExtra =
+    usage.input_tokens !== undefined
+      ? (Number(usage.cache_read_input_tokens) || 0) + (Number(usage.cache_creation_input_tokens) || 0)
+      : 0;
+  const total = Number(usage.total_tokens ?? usage.totalTokenCount ?? 0) || input + output + anthropicCacheExtra;
+  if (!input && !output && !total) return null;
+  return { inputTokens: input, outputTokens: output, cachedInputTokens: cached, totalTokens: total, calls: 1 };
+}
+
+function addUsage(accumulator, usage) {
+  const next = normalizeProviderUsage(usage);
+  if (!next) return accumulator;
+  if (!accumulator) return next;
+  return {
+    inputTokens: accumulator.inputTokens + next.inputTokens,
+    outputTokens: accumulator.outputTokens + next.outputTokens,
+    cachedInputTokens: accumulator.cachedInputTokens + next.cachedInputTokens,
+    totalTokens: accumulator.totalTokens + next.totalTokens,
+    calls: (accumulator.calls || 0) + 1,
+  };
+}
+
+// Publishes the running total onto the active run so the panel's poll can show tokens ticking
+// up live, instead of only learning the cost once the whole turn is over.
+function publishRunUsage(chatId, usage) {
+  const activeRun = activeChatRuns.get(String(chatId || ''));
+  if (activeRun) activeRun.usage = usage;
+}
+
 // Whether this chat currently has a run in flight in THIS process. The panel polls it so it
 // can tell "the model is still working" apart from "the run is gone" -- a restarted or killed
 // server used to leave the UI waiting forever on a request that would never be answered.
 export function getActiveRunInfo(chatId) {
   const activeRun = activeChatRuns.get(String(chatId || ''));
   if (!activeRun) return { active: false };
-  return { active: true, operation: activeRun.operation, startedAt: activeRun.startedAt };
+  return { active: true, operation: activeRun.operation, startedAt: activeRun.startedAt, usage: activeRun.usage || null };
 }
 
 // Queue a follow-up message for a run that is already in flight. Deliberately does NOT abort
@@ -202,6 +251,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
   const operationSignal = options.signal;
   const runStartedAtMs = Date.now();
   const consumedComplementIds = [];
+  let usageTotals = null;
   const scheduledTaskContext = options.scheduledTaskContext || null;
   const config = await loadConfig();
   throwIfStopped(operationSignal);
@@ -291,6 +341,8 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
         signal: operationSignal,
       });
       throwIfStopped(operationSignal);
+      usageTotals = addUsage(usageTotals, assistantMessage.usage);
+      publishRunUsage(chatId, usageTotals);
       providerUsed = assistantMessage.providerUsed || providerUsed;
       modelUsed = assistantMessage.modelUsed || modelUsed;
       const selectedConfig = withSelectedProviderConfig(effectiveConfig, providerUsed, modelUsed);
@@ -400,6 +452,7 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           retryOfMessageId,
           continuedFromMessageId,
           durationMs: Date.now() - runStartedAtMs,
+          usage: usageTotals,
         });
         await appendMessages(chatId, [pendingAssistantMessage]);
         await updateMessage(chatId, userMessage.id, {
@@ -472,23 +525,34 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
           signal: operationSignal,
         });
         throwIfStopped(operationSignal);
+        usageTotals = addUsage(usageTotals, assistantMessage.usage);
+        publishRunUsage(chatId, usageTotals);
         providerUsed = assistantMessage.providerUsed || providerUsed;
         modelUsed = assistantMessage.modelUsed || modelUsed;
         executionTrace.push(createAssistantTraceEntry(assistantMessage, [], executionTrace.length + 1, 'final'));
         const finalContent = cleanAssistantContent(assistantMessage.content || '');
-        // Reaching this branch means the round budget ran out while the model kept asking
-        // for more tool calls (the normal "model stopped on its own" paths above always set
-        // assistantOutcome and never fall through to here) -- always surface that as
-        // incomplete/error, even though this forced no-tools call still got some text, so the
-        // scheduler's failure check and the chat UI's Continue action both see it instead of
-        // it silently looking like a clean "sent" answer.
+        // Reaching this branch means the round budget ran out while the model kept asking for
+        // more tool calls (the normal "model stopped on its own" paths above always set
+        // assistantOutcome and never fall through to here). This forced no-tools call is the
+        // model's chance to wrap up, and it usually takes it.
+        //
+        // This used to be marked incomplete unconditionally, which was wrong in the common
+        // case and expensive: the answer was right there and finished, but the attempt looked
+        // broken, so Auto continue fired on it and paid for a whole extra run of a task that
+        // was already done. Trust what the call actually reported instead -- only truncated or
+        // empty output is genuinely incomplete. Either way the round limit is recorded on the
+        // attempt so the UI can say it happened and still offer Continue.
+        const wrappedUpCleanly = Boolean(finalContent.content) && !isIncompleteFinishReason(assistantMessage.finishReason);
         assistantOutcome = {
-          status: 'incomplete',
-          content: finalContent.content || 'A IA atingiu o limite de rodadas de tools antes de concluir. Use Continuar para retomar do último estado útil.',
+          status: wrappedUpCleanly ? 'sent' : 'incomplete',
+          content:
+            finalContent.content ||
+            'A IA atingiu o limite de rodadas de tools antes de concluir. Use Continuar para retomar do último estado útil.',
           thinking: finalContent.thinking,
           finishReason: assistantMessage.finishReason || null,
           continuationAvailable: true,
-          error: 'Limite de rodadas de tools atingido.',
+          toolRoundLimitReached: true,
+          error: wrappedUpCleanly ? null : 'Limite de rodadas de tools atingido.',
         };
       } catch (error) {
         if (isUserStopError(error)) {
@@ -545,12 +609,14 @@ async function sendUserMessageLocked(chatId, content, options = {}) {
     error: assistantOutcome.error,
     thinking: assistantOutcome.thinking,
     continuationAvailable: assistantOutcome.continuationAvailable,
+    toolRoundLimitReached: assistantOutcome.toolRoundLimitReached === true,
     continuationReason,
     continuationGroupId,
     attemptIndex,
     retryOfMessageId,
     continuedFromMessageId,
     durationMs: Date.now() - runStartedAtMs,
+    usage: usageTotals,
   });
   await appendMessages(chatId, [savedAssistantMessage]);
   await appendEvent({
@@ -611,6 +677,9 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const operationSignal = options.signal;
   const runStartedAtMs = Date.now();
   const consumedComplementIds = [];
+  // Usage carries over from the attempt that paused for approval, so the finished message
+  // reports the whole cost of the turn instead of only the part after the human decision.
+  const usageBox = { totals: null };
   throwIfStopped(operationSignal);
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
@@ -706,6 +775,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const currentChat = await readChat(chatId);
   const runtimeInfo = await getRuntimeInfo();
   const effectiveConfig = buildEffectiveConfig(config, currentChat, runtimeInfo, { modelSettings: currentChat.modelSettings || {} });
+  usageBox.totals = pendingMessage.usage || null;
   const workingMessages = pendingState.providerMessages || [];
   const toolCalls = pendingState.toolCalls || approvalToolCalls;
   const toolUses = [...(pendingState.preapprovedToolUses || [])];
@@ -754,6 +824,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       if (toolUseHasExecutionFailure(toolUse)) {
         await finalizeApprovedToolMessage({
           durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
+          usage: usageBox.totals,
           chatId,
           messageId,
           effectiveConfig: selectedConfig,
@@ -780,6 +851,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       throwIfStopped(operationSignal);
       await finalizeApprovedToolMessage({
         durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
+        usage: usageBox.totals,
         chatId,
         messageId,
         effectiveConfig: selectedConfig,
@@ -825,11 +897,13 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
       baseThinking: pendingMessage.thinking,
       signal: operationSignal,
       consumedComplementIds,
+      usageBox,
     });
     if (followup.awaitingApproval) return { chat: await readChat(chatId) };
     throwIfStopped(operationSignal);
     await finalizeApprovedToolMessage({
       durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
+      usage: usageBox.totals,
       chatId,
       messageId,
       effectiveConfig: selectedConfig,
@@ -866,6 +940,7 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
           };
     await finalizeApprovedToolMessage({
       durationMs: Number(pendingMessage.durationMs || 0) + (Date.now() - runStartedAtMs),
+      usage: usageBox.totals,
       chatId,
       messageId,
       effectiveConfig: selectedConfig,
@@ -899,6 +974,7 @@ async function finalizeApprovedToolMessage({
   failedToolUse = null,
   skippedFollowup = false,
   durationMs = null,
+  usage = null,
 }) {
   const status = outcome.status || 'sent';
   const finalTimestamp = new Date().toISOString();
@@ -912,6 +988,7 @@ async function finalizeApprovedToolMessage({
     modelUsed: modelUsed || effectiveConfig.model,
     providerUsed: providerUsed || effectiveConfig.provider,
     durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined,
+    usage: usage || undefined,
     finishReason: outcome.finishReason || null,
     continuationAvailable: Boolean(outcome.continuationAvailable),
     error: outcome.error || null,
@@ -1046,6 +1123,7 @@ function createToolApprovalMessage(assistantMessage, toolCalls, providerMessages
       // Machine time only: the clock stops while the message sits waiting for a human decision
       // and the continuation adds its own elapsed time on top when it finalizes the attempt.
       durationMs: Number.isFinite(options.durationMs) ? Math.max(0, Math.round(options.durationMs)) : null,
+      usage: options.usage || null,
       pendingToolApproval: {
         toolCalls,
         approvalToolCalls,
@@ -1095,6 +1173,7 @@ async function continueAssistantToolLoop({
   baseThinking = '',
   signal = null,
   consumedComplementIds = [],
+  usageBox = null,
 }) {
   const enabledTools = buildEnabledToolDefinitions(effectiveConfig.tools);
   let currentProviderUsed = providerUsed || effectiveConfig.provider;
@@ -1117,6 +1196,10 @@ async function continueAssistantToolLoop({
       signal,
     });
     throwIfStopped(signal);
+    if (usageBox) {
+      usageBox.totals = addUsage(usageBox.totals, assistantMessage.usage);
+      publishRunUsage(chatId, usageBox.totals);
+    }
     currentProviderUsed = assistantMessage.providerUsed || currentProviderUsed;
     currentModelUsed = assistantMessage.modelUsed || currentModelUsed;
     const selectedConfig = { ...withSelectedProviderConfig(effectiveConfig, currentProviderUsed, currentModelUsed), signal };
@@ -1647,6 +1730,7 @@ function buildAssistantAttemptMessage({
   error = null,
   thinking = '',
   continuationAvailable = false,
+  toolRoundLimitReached = false,
   continuationReason = 'initial',
   continuationGroupId = null,
   attemptIndex = 1,
@@ -1654,6 +1738,7 @@ function buildAssistantAttemptMessage({
   continuedFromMessageId = null,
   pendingToolApproval = null,
   durationMs = null,
+  usage = null,
 }) {
   const cleanedContent = cleanAssistantContent(content || '');
   const safeContent = cleanedContent.content;
@@ -1668,6 +1753,7 @@ function buildAssistantAttemptMessage({
     attemptIndex,
     continuationReason,
     continuationAvailable: Boolean(continuationAvailable),
+    toolRoundLimitReached: toolRoundLimitReached === true ? true : undefined,
     retryOfMessageId: retryOfMessageId || null,
     continuedFromMessageId: continuedFromMessageId || null,
     providerUsed: providerUsed || null,
@@ -1678,6 +1764,7 @@ function buildAssistantAttemptMessage({
     pendingToolApproval,
     finishReason: finishReason || null,
     durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : null,
+    usage: usage || null,
     error: error ? String(error) : null,
     completedAt: completed ? timestamp : undefined,
     failedAt: status === 'failed' ? timestamp : undefined,
