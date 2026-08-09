@@ -327,14 +327,14 @@ API keys are stored in the local runtime config. Multiple keys per provider are 
 
 ## Web Search
 
-Search modes:
+Two methods, set in `General settings > Tools`:
 
-- `Off`: no web search tool.
-- `Native`: provider-side search when supported.
-- `Terminal`: local terminal-backed DuckDuckGo search.
-- `Both`: try native search first, then terminal fallback if native search fails or returns empty.
+- **Native** (provider-side): the provider runs the search itself. Available for OpenAI, Gemini, Anthropic, Groq and OpenRouter. This is the reliable one.
+- **Terminal**: scrapes DuckDuckGo's public page through `python3`, no key needed.
 
-Terminal search is still a local tool. If tool approval is required, the UI asks before running it.
+A word of warning about the terminal method, measured in August 2026: DuckDuckGo answers **403** to any self-identifying client, so it is submitted the way their own page does (POST with browser headers), which does return relevant results. But it is rate-limited per IP and starts serving an anti-bot CAPTCHA after a handful of consecutive searches. Treat it as best-effort. When it is blocked the tool says so explicitly and instructs the model not to invent sources -- it will tell you the search failed rather than making up citations.
+
+If your provider has no native search (this includes `openai-compatible`, which is how GLM, Kimi and Qwen are used here), web search is effectively unavailable beyond that best-effort path. A configurable, key-based search backend is on the roadmap.
 
 ## Persistent Memory
 

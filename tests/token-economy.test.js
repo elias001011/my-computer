@@ -314,3 +314,68 @@ test('anthropic requests carry explicit cache breakpoints (it does not cache on 
     global.fetch = originalFetch;
   }
 });
+
+test('resuming an approved tool does not count the pre-approval tokens twice', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-approval-usage-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const token = `${Date.now()}-approval-usage`;
+  const store = await import(`../src/server/store.js?test=${token}-store`);
+  const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+
+  let publishedDuringResume = null;
+  let round = 0;
+  global.fetch = async (url) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch: ${url}`);
+    round += 1;
+    if (round === 1) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'run_terminal_command', arguments: JSON.stringify({ command: 'echo oi', reason: 'x', returnOutput: true }) } }] }, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 1000, completion_tokens: 0, total_tokens: 1000 },
+        }),
+      };
+    }
+    publishedDuringResume = assistant.getActiveRunInfo(chatId).usage;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'Pronto.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 500, completion_tokens: 20, total_tokens: 520 },
+      }),
+    };
+  };
+
+  let chatId = null;
+  try {
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'openai-compatible',
+      model: 'gpt-5.5',
+      // alwaysAllow off: this is what makes the run pause for a human decision.
+      tools: { terminal: true, searchMode: 'off', webSearch: false, alwaysAllow: false },
+      providerSettings: { 'openai-compatible': { baseUrl: 'https://example.test/v1', apiKeys: [{ value: 'k' }] } },
+    });
+    const chat = await store.createChat('Aprovacao', { provider: 'openai-compatible', model: 'gpt-5.5' });
+    chatId = chat.id;
+
+    const paused = await assistant.sendUserMessage(chat.id, 'Rode o comando.');
+    assert.equal(paused.awaitingApproval, true);
+    assert.equal(paused.assistantMessage.usage.totalTokens, 1000);
+
+    await assistant.continueToolApproval(chat.id, paused.assistantMessage.id, 'approve');
+
+    // The panel adds this to the usage already saved on the message. Publishing the carried-over
+    // total (1000 + 520) here would have made the UI report 2520 instead of 1520.
+    assert.equal(publishedDuringResume, null, 'nothing from before the pause is republished');
+
+    const finished = (await store.readChat(chat.id)).messages.find((m) => m.id === paused.assistantMessage.id);
+    assert.equal(finished.usage.totalTokens, 1520, 'the saved message still carries the whole turn');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

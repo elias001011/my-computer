@@ -1295,11 +1295,34 @@ function renderComposerOverlay(agentRunning) {
   }
   if (totals.tokens > 0) {
     chips.push(
-      `<span class="composer-chip token-chip" id="session-tokens" title="Tokens desta tarefa (entrada + saída), somando todas as tentativas, conforme reportado pelo provider. O detalhe por tentativa fica em Ver detalhes.">${escapeHtml(formatTokenCount(totals.tokens))} tokens</span>`,
+      `<span class="composer-chip token-chip" id="session-tokens" title="${escapeAttr(describeTaskTokens(totals))}">${escapeHtml(formatTaskTokenLabel(totals))}</span>`,
     );
   }
   if (!chips.length) return '';
   return `<div class="composer-overlay">${chips.join('')}</div>`;
+}
+
+// A big total is normal and not a sign of waste: an agent turn makes one provider call per tool
+// round, and every one of them re-sends the conversation, so the figure is a SUM over calls, not
+// the size of one request. What actually decides the bill is how much of that was served from
+// cache, so the share rides along with the number instead of hiding in a tooltip.
+function formatTaskTokenLabel(totals) {
+  const base = `${formatTokenCount(totals.tokens)} tokens`;
+  return totals.cacheShare >= 5 ? `${base} · ${totals.cacheShare}% cache` : base;
+}
+
+function describeTaskTokens(totals) {
+  const lines = [
+    `Tokens desta tarefa: ${formatTokenCount(totals.tokens)} (entrada + saída), somando todas as tentativas.`,
+    'É a soma de todas as chamadas ao provider da tarefa, não o tamanho de uma requisição: cada rodada de tool reenvia a conversa inteira, então o total cresce a cada rodada mesmo sem nada de novo ser escrito.',
+  ];
+  if (totals.cached > 0) {
+    lines.push(`Desses, ${formatTokenCount(totals.cached)} (${totals.cacheShare}%) vieram do cache do provider e custam bem menos que tokens novos.`);
+  } else {
+    lines.push('Nenhuma parte veio de cache nesta tarefa — ou o provider não informa isso, ou o prefixo do prompt mudou entre as chamadas.');
+  }
+  lines.push('O detalhe por tentativa fica em Ver detalhes.');
+  return lines.join(' ');
 }
 
 function formatTokenCount(value) {
@@ -5313,17 +5336,20 @@ function getCurrentTaskTotals() {
   const messages = state.activeChat?.messages || [];
   let durationMs = 0;
   let tokens = 0;
+  let cached = 0;
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
     if (groupId && getMessageContinuationGroupId(message) !== groupId) continue;
     durationMs += Number(message.durationMs) || 0;
     tokens += Number(message.usage?.totalTokens) || 0;
+    cached += Number(message.usage?.cachedInputTokens) || 0;
   }
   if (isAgentRunningForActiveChat()) {
     durationMs += getRunTimerElapsedMs();
     tokens += Number(state.runUsage?.totalTokens) || 0;
+    cached += Number(state.runUsage?.cachedInputTokens) || 0;
   }
-  return { durationMs, tokens };
+  return { durationMs, tokens, cached, cacheShare: tokens > 0 ? Math.round((cached / tokens) * 100) : 0 };
 }
 
 function formatRunTimerValue(ms) {

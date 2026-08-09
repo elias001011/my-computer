@@ -763,10 +763,18 @@ export async function runWebSearch(query, options = {}) {
 import base64, html, json, re, sys, urllib.parse, urllib.request
 query = base64.b64decode('${queryBase64}').decode('utf-8')
 max_results = ${maxResults}
+# A self-identifying User-Agent is what DuckDuckGo now answers with 403 (verified: both the
+# lite and html GET endpoints refuse it outright). The POST form is the one their own pages
+# submit, and it still answers normally, so that is what is tried first.
 headers = {
-    'User-Agent': 'Mozilla/5.0 MyComputer/0.1',
-    'Accept': 'text/html,application/xhtml+xml',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9,pt-BR;q=0.8',
 }
+post_headers = dict(headers)
+post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+post_headers['Origin'] = 'https://duckduckgo.com'
+post_headers['Referer'] = 'https://duckduckgo.com/'
 query_variants = [query]
 dequoted_query = re.sub(r'["“”]+', '', query).strip()
 if dequoted_query and dequoted_query != query:
@@ -775,9 +783,10 @@ if dequoted_query and dequoted_query != query:
 def search_endpoints(active_query):
     encoded_query = urllib.parse.quote(active_query)
     return [
-        ('https://lite.duckduckgo.com/lite/?q=' + encoded_query, 'terminal-duckduckgo-lite', 'lite'),
-        ('https://duckduckgo.com/lite/?q=' + encoded_query, 'terminal-duckduckgo-lite', 'lite'),
-        ('https://html.duckduckgo.com/html/?q=' + encoded_query, 'terminal-duckduckgo-html', 'html'),
+        ('https://html.duckduckgo.com/html/', 'terminal-duckduckgo-html', 'html', active_query),
+        ('https://lite.duckduckgo.com/lite/', 'terminal-duckduckgo-lite', 'lite', active_query),
+        ('https://lite.duckduckgo.com/lite/?q=' + encoded_query, 'terminal-duckduckgo-lite', 'lite', None),
+        ('https://html.duckduckgo.com/html/?q=' + encoded_query, 'terminal-duckduckgo-html', 'html', None),
     ]
 
 def clean_text(value):
@@ -866,9 +875,17 @@ def page_looks_blocked(status, page):
 
 attempts = []
 for active_query in query_variants:
-    for url, method, parser in search_endpoints(active_query):
+    for url, method, parser, post_query in search_endpoints(active_query):
         try:
-            request = urllib.request.Request(url, headers=headers)
+            if post_query is None:
+                request = urllib.request.Request(url, headers=headers)
+            else:
+                request = urllib.request.Request(
+                    url,
+                    data=urllib.parse.urlencode({'q': post_query}).encode('utf-8'),
+                    headers=post_headers,
+                    method='POST',
+                )
             with urllib.request.urlopen(request, timeout=20) as response:
                 status = getattr(response, 'status', response.getcode())
                 page = response.read().decode('utf-8', 'replace')
@@ -901,7 +918,17 @@ print(json.dumps({
     'attempts': attempts,
     'blocked': blocked,
     'rateLimited': blocked,
-    'error': 'DuckDuckGo bloqueou ou limitou temporariamente a busca web terminal.' if blocked else 'DuckDuckGo nao retornou resultados publicos pela busca web terminal.',
+    'error': (
+        'DuckDuckGo respondeu com um desafio anti-bot (CAPTCHA) em vez de resultados. A busca por '
+        'terminal raspa a pagina publica do DuckDuckGo, entao ela e limitada por IP e passa a ser '
+        'desafiada depois de poucas buscas seguidas. NAO invente resultados: diga ao usuario que a '
+        'busca web nao esta disponivel agora e sugira usar um provider com busca nativa (OpenAI, '
+        'Gemini, Anthropic, Groq ou OpenRouter) na secao Pesquisa web das configuracoes.'
+        if blocked else
+        'A busca por terminal nao retornou nenhum resultado. NAO invente resultados nem cite fontes '
+        'que voce nao recebeu: diga ao usuario que a busca falhou e sugira reformular a consulta ou '
+        'usar um provider com busca nativa.'
+    ),
 }, ensure_ascii=False))
 PY`;
 

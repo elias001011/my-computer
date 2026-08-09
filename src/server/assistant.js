@@ -677,9 +677,12 @@ async function continueToolApprovalLocked(chatId, messageId, decision = 'approve
   const operationSignal = options.signal;
   const runStartedAtMs = Date.now();
   const consumedComplementIds = [];
-  // Usage carries over from the attempt that paused for approval, so the finished message
-  // reports the whole cost of the turn instead of only the part after the human decision.
-  const usageBox = { totals: null };
+  // Two figures, and they are not the same one. `totals` carries over from the attempt that
+  // paused for approval so the finished message reports the whole cost of the turn. `delta` is
+  // only what this continuation spends, and it is what gets published to the panel -- the panel
+  // adds the in-flight figure on top of the usage already saved on the messages, so publishing
+  // the carried-over total there counted the pre-approval part twice.
+  const usageBox = { totals: null, delta: null };
   throwIfStopped(operationSignal);
   const chat = await readChat(chatId);
   const pendingMessage = chat.messages.find((message) => message.id === messageId && message.role === 'assistant');
@@ -1198,7 +1201,8 @@ async function continueAssistantToolLoop({
     throwIfStopped(signal);
     if (usageBox) {
       usageBox.totals = addUsage(usageBox.totals, assistantMessage.usage);
-      publishRunUsage(chatId, usageBox.totals);
+      usageBox.delta = addUsage(usageBox.delta, assistantMessage.usage);
+      publishRunUsage(chatId, usageBox.delta);
     }
     currentProviderUsed = assistantMessage.providerUsed || currentProviderUsed;
     currentModelUsed = assistantMessage.modelUsed || currentModelUsed;
@@ -2161,9 +2165,11 @@ function buildSystemPrompt(
     config.tools?.autoCompact
       ? 'When the current conversation is getting long or important context should be preserved, use compact_context to update the durable compacted context.'
       : 'Automatic context compaction through tools is disabled by user settings.',
-    config.tools?.chatTitle
-      ? 'CHAT TITLE, FIRST ACTION: if the chat title is still generic ("Novo chat"/"New chat"), your very first tool call of the turn must be rename_chat with a short descriptive title taken from what the user just asked -- before the terminal, before any reading, before answering. Do not postpone it to the end of the task and do not skip it because the task looks urgent; it costs one cheap call and it is what makes the chat findable later. Use returnOutput false for it, and then continue with the real work in the same turn.'
-      : 'Chat title editing through tools is disabled by user settings.',
+    // The "rename first" push has to be gated here, not left as a condition inside the sentence.
+    // Phrased as an imperative with an "if the title is still generic" clause, models followed
+    // the imperative and ignored the clause -- renaming the chat on every single message, which
+    // is a wasted tool round and a wasted provider call every turn.
+    buildChatTitleInstruction(config, chat),
     config.tools?.sendEmail
       ? 'The send_email tool is available. It always sends to the single destination address configured by the user in Email settings -- there is no recipient parameter and you cannot choose or override the destination. Use it when the user or the task prompt asks for an emailed result.'
       : 'Sending email is disabled or not configured by the user.',
@@ -2284,6 +2290,14 @@ function buildCurrentDateTimeInstruction() {
     'Use it as ground truth for "today", "yesterday", "this year", any relative date, and whether an event is in the past or future -- never guess the current date from your training cutoff.',
     'If you need the exact second, read it from the machine with a terminal command instead of from this line.',
   ].join(' ');
+}
+
+function buildChatTitleInstruction(config, chat = {}) {
+  if (!config.tools?.chatTitle) return 'Chat title editing through tools is disabled by user settings.';
+  if (!isGenericChatTitle(chat.title)) {
+    return `This chat is already titled "${chat.title}". Do not call rename_chat: only rename when the user explicitly asks for a different title.`;
+  }
+  return 'CHAT TITLE, FIRST ACTION: this chat still has a placeholder title. Your very first tool call of this turn must be rename_chat with a short descriptive title taken from what the user just asked -- before the terminal, before any reading, before answering. Use returnOutput false for it, then continue with the real work in the same turn. Once it has a real title, never rename it again on your own.';
 }
 
 function buildTechnicalLevelInstruction(config) {

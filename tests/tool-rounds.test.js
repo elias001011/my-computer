@@ -173,3 +173,39 @@ test('hitting the round limit but wrapping up cleanly is a complete answer, not 
     global.fetch = originalFetch;
   }
 });
+
+test('the rename push only appears while the chat title is still a placeholder', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-rename-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const prompts = [];
+  global.fetch = async (url, options) => {
+    if (!String(url).includes('/chat/completions')) throw new Error(`Unexpected fetch in test: ${url}`);
+    prompts.push(JSON.parse(options.body).messages.find((message) => message.role === 'system').content);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: {} }),
+    };
+  };
+
+  try {
+    const token = `${Date.now()}-rename`;
+    const store = await import(`../src/server/store.js?test=${token}-store`);
+    const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+    await baseConfig(store, { chatTitle: true });
+
+    const fresh = await store.createChat('Novo chat', { provider: 'openai-compatible', model: 'gpt-5.5' });
+    await assistant.sendUserMessage(fresh.id, 'Primeira mensagem.');
+    assert.match(prompts[0], /CHAT TITLE, FIRST ACTION/, 'a placeholder title gets the push');
+
+    // Second turn: the app already titled the chat from the first message, so the model must be
+    // told to leave it alone. Left as a soft "if the title is generic" clause inside an
+    // imperative, models renamed the chat on every single message.
+    await assistant.sendUserMessage(fresh.id, 'Segunda mensagem.');
+    assert.doesNotMatch(prompts[1], /CHAT TITLE, FIRST ACTION/, 'a titled chat gets no rename push');
+    assert.match(prompts[1], /Do not call rename_chat/);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

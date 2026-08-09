@@ -1,4 +1,4 @@
-# v0.4.1 — o agente para de morrer em silêncio
+# v0.4.2 — o agente para de morrer em silêncio
 
 Esta versão tem um tema só: **um agente precisa funcionar antes de ser bonito.** A maior parte
 do trabalho aqui saiu da investigação de um run real que morreu no meio de uma tarefa longa e
@@ -132,6 +132,53 @@ que sobrescrevia esse veredito.
 - Corrigido o chat "pulando pra cima" quando a resposta atualizava: o painel restaurava a
   posição de rolagem antiga depois da lista crescer. Agora, se você estava lendo o final da
   conversa, continua no final.
+
+## rename_chat parou de renomear o chat toda mensagem
+
+A instrução que eu tinha escrito era imperativa ("sua primeira tool call **tem que** ser
+rename_chat") com a condição "se o título ainda for genérico" dentro da frase. Modelos seguem o
+imperativo e ignoram a condição — resultado: renomeavam o chat em toda mensagem, gastando uma
+rodada de tool e uma chamada ao provider por turno, à toa.
+
+Agora a decisão é do servidor, não do modelo: com o título ainda genérico entra a instrução
+forte; com o chat já nomeado entra o oposto ("não chame rename_chat, só renomeie se o usuário
+pedir"). Tem teste cobrindo os dois turnos.
+
+## Contagem de tokens: um erro real e uma exibição incompleta
+
+- **Erro:** ao retomar depois de aprovar uma tool, o total de antes da pausa era republicado como
+  se fosse gasto em voo — e o painel soma o que está em voo em cima do que já está salvo nas
+  mensagens. A parte anterior à aprovação era contada duas vezes.
+- **Exibição:** o número não era mentiroso, mas contava só metade da história. Um total alto é
+  normal e não é desperdício: um turno de agente faz uma chamada ao provider por rodada de tool, e
+  cada uma reenvia a conversa inteira — então o valor é uma **soma de chamadas**, não o tamanho de
+  uma requisição. O que decide a conta é quanto disso veio de cache, então a faixa agora mostra
+  `100k tokens · 85% cache` e o tooltip explica de onde vem o número.
+
+## Busca web: auditoria
+
+Testei as tools de busca contra a internet de verdade, e a busca por terminal estava **retornando
+zero resultado em 100% das consultas**. Causa: o DuckDuckGo passou a responder **403 Forbidden**
+nos endpoints GET (`lite` e `html`) para qualquer User-Agent que se identifique.
+
+Corrigido enviando o formulário do jeito que a própria página deles envia (POST com cabeçalhos de
+navegador), o que voltou a trazer resultados relevantes — conferido em consultas técnicas e em
+português. Mas com um limite honesto: é limitado por IP e passa a servir CAPTCHA depois de poucas
+buscas seguidas (~20 requisições bastaram para virar "Select all squares containing a duck").
+
+Quando isso acontece, a tool agora diz exatamente o que houve e **instrui o modelo a não inventar
+fontes** — antes ela devolvia um erro genérico e o modelo tendia a preencher o vazio.
+
+Também medi e descartei alternativas: Bing RSS responde, mas devolve resultados de outro assunto
+em consultas técnicas (`PM2 max_memory_restart documentation` retornou um condomínio no Alabama —
+errado com cara de certo é pior que vazio); Mojeek e Ecosia dão 403, Brave dá 429, e instâncias
+públicas de SearXNG dão 403/429 ou HTML no lugar de JSON.
+
+**Conclusão que ficou no roadmap:** raspagem não é base para essa feature. O caminho é o backend
+de busca ser configurável com chave do usuário (Brave/Tavily/Serper têm plano grátis),
+reaproveitando a tela de keys que já existe — continua zero-dependência, é só `fetch`. E vale
+saber: hoje busca nativa existe só para OpenAI, Gemini, Anthropic, Groq e OpenRouter. Quem usa
+`openai-compatible` (GLM, Kimi, Qwen) depende inteiramente do caminho best-effort acima.
 
 ## Roadmap
 
