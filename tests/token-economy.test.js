@@ -264,3 +264,53 @@ test('usage totals are right for each provider shape, without double counting ca
     global.fetch = originalFetch;
   }
 });
+
+test('anthropic requests carry explicit cache breakpoints (it does not cache on its own)', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'my-computer-anthropic-cache-'));
+  process.env.MY_COMPUTER_HOME = tempDir;
+  const originalFetch = global.fetch;
+  const token = `${Date.now()}-anthropic-cache`;
+  const store = await import(`../src/server/store.js?test=${token}-store`);
+  const assistant = await import(`../src/server/assistant.js?test=${token}-assistant`);
+
+  let sentBody = null;
+  global.fetch = async (url, options) => {
+    if (!String(url).includes('/messages')) throw new Error(`Unexpected fetch: ${url}`);
+    sentBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [{ type: 'text', text: 'Pronto.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 120, output_tokens: 40, cache_read_input_tokens: 900 },
+      }),
+    };
+  };
+
+  try {
+    await store.ensureRuntime();
+    await store.saveConfig({
+      setupComplete: true,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      tools: { terminal: true, searchMode: 'off', webSearch: false, alwaysAllow: true },
+      providerSettings: { anthropic: { baseUrl: 'https://api.anthropic.test/v1', apiKeys: [{ value: 'k' }] } },
+    });
+    const chat = await store.createChat('Anthropic', { provider: 'anthropic', model: 'claude-sonnet-4-6' });
+    const result = await assistant.sendUserMessage(chat.id, 'Oi.');
+
+    // The system prompt has to become a content block for cache_control to be attachable at all.
+    assert.ok(Array.isArray(sentBody.system), 'system was sent as blocks');
+    assert.deepEqual(sentBody.system[0].cache_control, { type: 'ephemeral' });
+    // Only the last tool schema is marked -- that caches the whole tool block before it.
+    assert.ok(sentBody.tools.length > 1, 'the run really did send several tool schemas');
+    assert.equal(sentBody.tools[0].cache_control, undefined);
+    assert.deepEqual(sentBody.tools[sentBody.tools.length - 1].cache_control, { type: 'ephemeral' });
+    // Anthropic's input_tokens excludes the cached read, so the total has to add it back.
+    assert.equal(result.assistantMessage.usage.totalTokens, 1060);
+    assert.equal(result.assistantMessage.usage.cachedInputTokens, 900);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

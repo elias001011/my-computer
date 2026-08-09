@@ -151,7 +151,9 @@ In both modes, anything the run never picked up is sent as a normal message righ
 
 ## Chronometer And Token Counter
 
-A discreet strip at the top of the composer shows the elapsed time of the current task and the tokens spent in this chat, updating while the model works. The clock measures machine time only -- it stops while a tool call waits for your approval.
+A discreet strip at the top of the composer shows the elapsed time and the tokens spent on the **current task** -- one thing you asked for -- updating while the model works and staying on screen after it finishes.
+
+A task routinely spans several executions: every auto-continue and every resumed tool approval starts a new run. The strip counts the whole task, not the last leg. Both figures are rebuilt from what is stored on each attempt, so they survive a reload, always agree with View details, and include an attempt you retried (you paid for it). The clock measures machine time only -- it stops while a tool call waits for your approval.
 
 Token numbers come from the provider's own `usage` report, normalized across the three shapes providers use (OpenAI-style, Anthropic, Gemini). View details breaks each attempt down into input, output and the part served from cache, next to that attempt's duration. The strip is display-only: turning it off in `General settings > Identity` does not stop anything from being recorded.
 

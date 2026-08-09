@@ -248,6 +248,8 @@ Nada disso exige configuração do usuário nem suporte do provider: onde o cach
 
 O `usage` devolvido pelo provider é normalizado em `normalizeProviderUsage` (assistant.js) para uma forma só e acumulado por tentativa. Atenção ao total: o `prompt_tokens` da OpenAI **já inclui** a parte cacheada (`cached_tokens` é um subconjunto dele), enquanto o `input_tokens` do Anthropic **exclui** `cache_read_input_tokens`/`cache_creation_input_tokens` — somar cache nos dois casos contaria duas vezes num deles. O valor acumulado é publicado no run ativo (`getActiveRunInfo`) para o painel mostrar os tokens subindo durante a execução, e salvo na mensagem da tentativa para o Ver detalhes.
 
+A unidade que a interface mostra é a **tarefa**, não a execução. Uma tarefa costuma abranger várias execuções (cada auto-continue e cada retomada depois de aprovar tool é um run novo), então o painel soma `durationMs` e `usage` de todas as tentativas que compartilham o mesmo `continuationGroupId`, mais o que o run em voo já gastou. Reconstruir a partir do que está persistido — em vez de manter um contador em memória — faz o número sobreviver a um reload e bater sempre com o Ver detalhes.
+
 ## Limite de rodadas e resposta completa
 
 Quando o orçamento de rodadas de tools acaba, o app faz uma última chamada sem tools para o modelo fechar a resposta. O resultado dessa chamada é classificado pelo que ela própria reportou: com texto e `finish_reason` não-truncado, a tentativa é `sent` (completa); vazia ou truncada, é `incomplete`. Em ambos os casos a mensagem recebe `toolRoundLimitReached: true`, o painel mostra o aviso e o Continuar continua disponível.

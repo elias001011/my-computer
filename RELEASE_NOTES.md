@@ -1,4 +1,4 @@
-# v0.4.0 — o agente para de morrer em silêncio
+# v0.4.1 — o agente para de morrer em silêncio
 
 Esta versão tem um tema só: **um agente precisa funcionar antes de ser bonito.** A maior parte
 do trabalho aqui saiu da investigação de um run real que morreu no meio de uma tarefa longa e
@@ -71,15 +71,24 @@ modos:
   em Ver detalhes.
 - **Sequencial**: espera a saída final e envia como mensagem normal.
 
-## Cronômetro e contador de tokens
+## Cronômetro e contador de tokens (por tarefa)
 
-Faixa discreta no topo da caixa de mensagem com o tempo da tarefa atual e os tokens gastos no
-chat, atualizando enquanto o modelo trabalha. O relógio conta só tempo de máquina — para
-enquanto uma tool espera sua aprovação.
+Faixa discreta no topo da caixa de mensagem com o tempo e os tokens da **tarefa atual** — uma
+coisa que você pediu —, atualizando enquanto o modelo trabalha e continuando na tela depois que
+ele termina.
+
+A unidade é a tarefa, não a execução. Uma tarefa costuma passar por várias execuções: cada auto
+continue e cada retomada depois de aprovar uma tool é um run novo, e a primeira versão disso
+reiniciava o relógio em cada uma delas — mostrando a última perna em vez do trabalho inteiro.
+Agora os dois números são reconstruídos do que já está salvo em cada tentativa, então sobrevivem
+a um reload, batem sempre com o Ver detalhes e contam uma tentativa refeita por retry (você
+pagou por ela).
 
 Os números de token vêm do `usage` que o próprio provider devolve, normalizado entre as três
-formas que existem (OpenAI, Anthropic, Gemini). Em Ver detalhes cada tentativa mostra entrada,
-saída e a parte servida de cache, ao lado da duração. A faixa é só exibição: desligar em
+formas que existem (OpenAI, Anthropic, Gemini) — com o cuidado de que o `prompt_tokens` da OpenAI
+já inclui a parte cacheada e o `input_tokens` do Anthropic não, o que faria um dos dois contar em
+dobro se tratados igual. Em Ver detalhes cada tentativa mostra entrada, saída e cache, e uma
+tarefa com mais de uma tentativa ganha uma linha de total. A faixa é só exibição: desligar em
 Identidade não para nenhum registro.
 
 ## Resposta completa deixa de ser marcada como incompleta
@@ -113,7 +122,9 @@ que sobrescrevia esse veredito.
 
 - A faixa do cronômetro saiu de cima da lista de mensagens e passou a viver dentro da própria
   faixa do composer — com isso a pílula preta (que existia só pra ficar legível sobre o chat)
-  deixou de ser necessária e virou texto discreto.
+  deixou de ser necessária e virou texto discreto. A bandeja de anexos vazia continuava ocupando
+  uma linha do grid do composer e empurrava a faixa pra baixo; agora ela some quando não há anexo,
+  e a faixa fica no topo do composer, alinhada ao botão de enviar.
 - Botões que não funcionam durante uma execução agora aparecem desabilitados em vez de
   clicáveis-mas-inertes: trocar de chat, novo chat, criar seção, apagar chat e os botões de
   salvar das configurações. Abrir as configurações durante um run continua liberado (só salvar

@@ -1170,7 +1170,7 @@ function renderApp() {
           ${state.busy ? renderPending() : ''}
         </section>
         <form class="composer" id="composer">
-          <div class="attachment-tray" id="attachment-tray">
+          <div class="attachment-tray ${state.pendingAttachments.length ? '' : 'is-empty'}" id="attachment-tray">
             ${state.pendingAttachments.length ? state.pendingAttachments.map((attachment) => renderAttachmentCard(attachment, { pending: true })).join('') : ''}
           </div>
           ${renderComposerOverlay(agentRunning)}
@@ -1281,31 +1281,25 @@ function renderComposerOverlay(agentRunning) {
   if (!meterEnabled) return '';
   const activeChatId = state.activeChat?.id;
   const queuedCount = state.queuedMessages.filter((item) => item.chatId === activeChatId).length;
+  const totals = getCurrentTaskTotals();
   const chips = [];
   if (queuedCount) {
     chips.push(`<span class="composer-chip queue-chip" id="queue-chip">${escapeHtml(String(queuedCount))} na fila · ${escapeHtml(describeQueueMode())}</span>`);
   }
-  const sessionTokens = getSessionTokenTotal();
-  if (sessionTokens > 0) {
+  // Both numbers stay on screen after the task ends -- knowing what the thing that just ran cost
+  // is the point, and it disappearing the moment it finishes would be the least useful moment.
+  if (totals.durationMs > 0 || agentRunning) {
     chips.push(
-      `<span class="composer-chip token-chip" id="session-tokens" title="Tokens somados de todas as respostas deste chat (entrada + saída), reportados pelo provider. O detalhe por tentativa fica em Ver detalhes.">${escapeHtml(formatTokenCount(sessionTokens))} tokens</span>`,
+      `<span class="composer-chip run-timer-chip" id="run-timer" title="Tempo de trabalho desta tarefa, somando todas as tentativas (continuações automáticas, retomadas depois de aprovar tool). Não conta o tempo parado esperando você.">${escapeHtml(formatRunTimerValue(totals.durationMs))}</span>`,
     );
   }
-  if (agentRunning) {
-    chips.push(`<span class="composer-chip run-timer-chip" id="run-timer" title="Tempo de trabalho desta tarefa">${escapeHtml(formatRunTimerValue(getRunTimerElapsedMs()))}</span>`);
+  if (totals.tokens > 0) {
+    chips.push(
+      `<span class="composer-chip token-chip" id="session-tokens" title="Tokens desta tarefa (entrada + saída), somando todas as tentativas, conforme reportado pelo provider. O detalhe por tentativa fica em Ver detalhes.">${escapeHtml(formatTokenCount(totals.tokens))} tokens</span>`,
+    );
   }
   if (!chips.length) return '';
   return `<div class="composer-overlay">${chips.join('')}</div>`;
-}
-
-// Tokens spent in the current chat: everything already recorded on past attempts, plus what the
-// run in flight has burned so far (the poll keeps that fresh, so the number moves during a run
-// instead of only jumping at the end).
-function getSessionTokenTotal() {
-  const messages = state.activeChat?.messages || [];
-  const recorded = messages.reduce((sum, message) => sum + (Number(message.usage?.totalTokens) || 0), 0);
-  const inFlight = isAgentRunningForActiveChat() ? Number(state.runUsage?.totalTokens) || 0 : 0;
-  return recorded + inFlight;
 }
 
 function formatTokenCount(value) {
@@ -4752,6 +4746,7 @@ function renderMessageDetailsModal() {
                 ${formatContent(getVisibleMessageContent(selectedAttempt, { stripSources: selectedSources.length > 0 }), 'assistant')}
               </div>
               ${selectedAttempt.usage ? `<p class="help-text">Tokens desta tentativa: ${escapeHtml(formatUsageBreakdown(selectedAttempt.usage))}. Números reportados pelo provider; nem todos informam a parte servida de cache.</p>` : ''}
+              ${renderTaskTotalsLine(attempts)}
               ${selectedAttempt.error ? `<div class="message-error">${escapeHtml(selectedAttempt.error)}</div>` : ''}
               ${renderExecutionHistory(selectedAttempt, { forceOpen: true, title: 'Linha do tempo da tentativa' })}
             </article>
@@ -4769,6 +4764,22 @@ function renderMessageDetailsModal() {
       </section>
     </div>
   `;
+}
+
+// The per-attempt numbers above answer "what did this leg cost"; this answers "what did the
+// whole thing cost", which is the question the composer strip shows live and the one that
+// matters when a task took several attempts to land.
+function renderTaskTotalsLine(attempts = []) {
+  if (attempts.length < 2) return '';
+  const durationMs = attempts.reduce((sum, attempt) => sum + (Number(attempt.durationMs) || 0), 0);
+  const tokens = attempts.reduce((sum, attempt) => sum + (Number(attempt.usage?.totalTokens) || 0), 0);
+  if (!durationMs && !tokens) return '';
+  const parts = [
+    `${attempts.length} tentativas`,
+    durationMs ? formatDurationLabel(durationMs) : '',
+    tokens ? `${formatTokenCount(tokens)} tokens` : '',
+  ].filter(Boolean);
+  return `<p class="help-text"><strong>Total da tarefa:</strong> ${escapeHtml(parts.join(' · '))}. Inclui tentativas substituídas por retry — você pagou por elas.</p>`;
 }
 
 function renderUpdateStatus() {
@@ -5282,6 +5293,39 @@ function getRunTimerElapsedMs() {
   return Math.max(0, Date.now() - state.runTimer.startedAt);
 }
 
+// The unit the user cares about is the task -- one thing they asked for -- not the individual
+// execution. A task routinely spans several executions: every auto-continue and every resumed
+// tool approval is a new run, and restarting the clock on each of them made the counter reset
+// mid-task and report the last leg instead of the whole job.
+//
+// Totals are rebuilt from what is already persisted (each attempt stores its own durationMs and
+// usage, all sharing the task's continuationGroupId) plus whatever the run in flight has spent
+// so far. That means the numbers survive a reload, always agree with View details, and count a
+// retried leg honestly -- you did pay for it.
+function getCurrentTaskGroupId() {
+  const messages = state.activeChat?.messages || [];
+  const last = messages[messages.length - 1];
+  return last ? getMessageContinuationGroupId(last) : null;
+}
+
+function getCurrentTaskTotals() {
+  const groupId = getCurrentTaskGroupId();
+  const messages = state.activeChat?.messages || [];
+  let durationMs = 0;
+  let tokens = 0;
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    if (groupId && getMessageContinuationGroupId(message) !== groupId) continue;
+    durationMs += Number(message.durationMs) || 0;
+    tokens += Number(message.usage?.totalTokens) || 0;
+  }
+  if (isAgentRunningForActiveChat()) {
+    durationMs += getRunTimerElapsedMs();
+    tokens += Number(state.runUsage?.totalTokens) || 0;
+  }
+  return { durationMs, tokens };
+}
+
 function formatRunTimerValue(ms) {
   const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -5313,6 +5357,8 @@ function stopRunTimer() {
 // during a run would rebuild the composer under the user's cursor.
 function syncRunTimerToState() {
   const shouldTick = Boolean(state.runTimer) && state.config?.appearance?.showRunTimer !== false;
+  // Note: the chip itself stays rendered after the run ends (frozen on the task total); only the
+  // per-second refresh stops here.
   if (shouldTick && !state.runTimerInterval) {
     state.runTimerInterval = window.setInterval(updateRunTimerUi, 1000);
   }
@@ -5325,8 +5371,11 @@ function syncRunTimerToState() {
 
 function updateRunTimerUi() {
   const chip = document.querySelector('#run-timer');
-  if (!chip) return;
-  chip.textContent = formatRunTimerValue(getRunTimerElapsedMs());
+  const tokenChip = document.querySelector('#session-tokens');
+  if (!chip && !tokenChip) return;
+  const totals = getCurrentTaskTotals();
+  if (chip) chip.textContent = formatRunTimerValue(totals.durationMs);
+  if (tokenChip) tokenChip.textContent = `${formatTokenCount(totals.tokens)} tokens`;
 }
 
 // ---------------------------------------------------------------------------
@@ -7583,6 +7632,7 @@ async function sendMessageContent(content, options = {}) {
   state.stopInFlight = false;
   let consumedComplementIds = [];
   state.runAbortController = new AbortController();
+  state.runUsage = null;
   startRunTimer(chatId);
   await runAction(
     `Enviando para ${providerLabel(getEffectiveChatRuntime().provider)}...`,
@@ -7717,6 +7767,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
     state.activeAgentChatId = chatId;
     state.stopInFlight = false;
     state.runAbortController = new AbortController();
+    state.runUsage = null;
     startRunTimer(chatId);
     await runAction(decision === 'approve' ? 'Executando tool aprovada...' : 'Negando tool...', async () => {
       startEventPolling(chatId);
@@ -7751,6 +7802,7 @@ async function decideToolApproval(messageId, decision, toolCallId = null, button
   } finally {
     stopRunTimer();
     state.runAbortController = null;
+    state.runUsage = null;
     state.toolDecisionInFlight.delete(decisionKey);
   }
   // If approving the tool still left the run mid-task, honor Auto continue here too.
